@@ -1,0 +1,12 @@
+wireguard:
+  private_key: "CHANGE_ME_BASE64_PRIVATE_KEY"
+  listen_port: 51820
+  address: "10.100.0.1/24"
+  mtu: 1420
+  dns: "1.1.1.1"
+  peers:
+    - public_key: "CHANGE_ME_BASE64_PUBLIC_KEY"
+      allowed_ips: "10.100.0.2/32"
+
+outline:
+  transport: "ss://CHANGE_ME"
