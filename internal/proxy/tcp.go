@@ -80,12 +80,14 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 
 	go func() {
 		defer wg.Done()
-		io.Copy(outConn, clientConn)
+		n, err := io.Copy(outConn, clientConn)
+		p.logger.Debug("tcp: client -> outline done", "src", srcAddr, "dest", dest, "bytes", n, "err", err)
 	}()
 
 	go func() {
 		defer wg.Done()
-		io.Copy(clientConn, outConn)
+		n, err := io.Copy(clientConn, outConn)
+		p.logger.Debug("tcp: outline -> client done", "src", srcAddr, "dest", dest, "bytes", n, "err", err)
 	}()
 
 	wg.Wait()

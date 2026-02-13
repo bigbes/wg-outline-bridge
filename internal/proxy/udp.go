@@ -81,9 +81,14 @@ func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest str
 			clientConn.SetReadDeadline(time.Now().Add(udpSessionTimeout))
 			n, err := clientConn.Read(buf)
 			if err != nil {
+				p.logger.Debug("udp: client read done", "src", srcAddr, "dest", dest, "err", err)
 				break
 			}
-			outConn.Write(buf[:n])
+			if _, err := outConn.Write(buf[:n]); err != nil {
+				p.logger.Error("udp: write to outline failed", "src", srcAddr, "dest", dest, "size", n, "err", err)
+				break
+			}
+			p.logger.Debug("udp: client -> outline", "src", srcAddr, "dest", dest, "bytes", n)
 		}
 		done <- struct{}{}
 	}()
@@ -94,9 +99,14 @@ func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest str
 			outConn.SetReadDeadline(time.Now().Add(udpSessionTimeout))
 			n, err := outConn.Read(buf)
 			if err != nil {
+				p.logger.Debug("udp: outline read done", "src", srcAddr, "dest", dest, "err", err)
 				break
 			}
-			clientConn.Write(buf[:n])
+			if _, err := clientConn.Write(buf[:n]); err != nil {
+				p.logger.Error("udp: write to client failed", "src", srcAddr, "dest", dest, "size", n, "err", err)
+				break
+			}
+			p.logger.Debug("udp: outline -> client", "src", srcAddr, "dest", dest, "bytes", n)
 		}
 		done <- struct{}{}
 	}()

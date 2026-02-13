@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"os"
 	"strings"
@@ -12,6 +13,7 @@ import (
 )
 
 type Config struct {
+	LogLevel  string          `yaml:"log_level"`
 	WireGuard WireGuardConfig `yaml:"wireguard"`
 	Outline   OutlineConfig   `yaml:"outline"`
 }
@@ -32,7 +34,14 @@ type PeerConfig struct {
 }
 
 type OutlineConfig struct {
-	Transport string `yaml:"transport"`
+	Transport   string            `yaml:"transport"`
+	HealthCheck HealthCheckConfig `yaml:"health_check"`
+}
+
+type HealthCheckConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Interval int    `yaml:"interval"`
+	Target   string `yaml:"target"`
 }
 
 func Load(path string) (*Config, error) {
@@ -52,8 +61,88 @@ func Load(path string) (*Config, error) {
 	if cfg.WireGuard.DNS == "" {
 		cfg.WireGuard.DNS = "1.1.1.1"
 	}
+	if cfg.LogLevel == "" {
+		cfg.LogLevel = "info"
+	}
+	if cfg.Outline.HealthCheck.Interval == 0 {
+		cfg.Outline.HealthCheck.Interval = 30
+	}
+	if cfg.Outline.HealthCheck.Target == "" {
+		cfg.Outline.HealthCheck.Target = "1.1.1.1:80"
+	}
 
 	return &cfg, nil
+}
+
+func (c *Config) Save(path string) error {
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func Migrate(path string) (*Config, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false, fmt.Errorf("reading config file: %w", err)
+	}
+
+	var raw map[string]any
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil, false, fmt.Errorf("parsing config file: %w", err)
+	}
+
+	modified := false
+
+	if _, ok := raw["outline"]; !ok {
+		raw["outline"] = map[string]any{}
+	}
+	outline, ok := raw["outline"].(map[string]any)
+	if !ok {
+		outline = map[string]any{}
+		raw["outline"] = outline
+	}
+
+	if _, ok := outline["health_check"]; !ok {
+		outline["health_check"] = map[string]any{
+			"enabled":  false,
+			"interval": 30,
+			"target":   "1.1.1.1:80",
+		}
+		modified = true
+	}
+
+	if modified {
+		newData, err := yaml.Marshal(raw)
+		if err != nil {
+			return nil, false, fmt.Errorf("marshaling migrated config: %w", err)
+		}
+		if err := os.WriteFile(path, newData, 0644); err != nil {
+			return nil, false, fmt.Errorf("writing migrated config: %w", err)
+		}
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		return nil, false, err
+	}
+	return cfg, modified, nil
+}
+
+func (c *Config) ParseLogLevel() slog.Level {
+	switch strings.ToLower(c.LogLevel) {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
 
 func (c *WireGuardConfig) ParseAddress() (netip.Addr, int, error) {

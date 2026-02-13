@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	if len(os.Args) < 2 {
 		printUsage()
@@ -19,6 +19,8 @@ func main() {
 	switch os.Args[1] {
 	case "run":
 		commands.RunBridge(os.Args[2:], logger)
+	case "watch":
+		commands.Watch(os.Args[2:], logger)
 	case "genkeys":
 		commands.GenKeys(os.Args[2:], logger)
 	case "init":
@@ -35,6 +37,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Commands:")
 	fmt.Fprintln(os.Stderr, "  run       Start the WireGuard-Outline bridge")
+	fmt.Fprintln(os.Stderr, "  watch     Run with auto-restart on binary update (wrapper)")
 	fmt.Fprintln(os.Stderr, "  genkeys   Generate a new peer keypair and add to config")
 	fmt.Fprintln(os.Stderr, "  init      Generate a new server config with fresh keys")
 }

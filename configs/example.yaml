@@ -1,3 +1,5 @@
+log_level: "info"
+
 wireguard:
   private_key: "CHANGE_ME_BASE64_PRIVATE_KEY"
   listen_port: 51820

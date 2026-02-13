@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
 	"github.com/blikh/wireguard-outline-bridge/internal/outline"
@@ -20,11 +21,11 @@ type Bridge struct {
 	configPath string
 	logger     *slog.Logger
 
-	mu             sync.Mutex
-	cfg            *config.Config
-	wgDev          *device.Device
-	outlineClient  *outline.SwappableClient
-	tracker        *proxy.ConnTracker
+	mu            sync.Mutex
+	cfg           *config.Config
+	wgDev         *device.Device
+	outlineClient *outline.SwappableClient
+	tracker       *proxy.ConnTracker
 }
 
 func New(configPath string, cfg *config.Config, logger *slog.Logger) *Bridge {
@@ -48,7 +49,16 @@ func (b *Bridge) Run(ctx context.Context) error {
 	b.outlineClient = outline.NewSwappableClient(client)
 	b.logger.Info("outline client created", "transport", b.cfg.Outline.Transport)
 
-	tunDev, err := wg.CreateNetTUNWithStack([]netip.Addr{addr}, b.cfg.WireGuard.MTU)
+	if b.cfg.Outline.HealthCheck.Enabled {
+		go b.startHealthChecker(ctx,
+			time.Duration(b.cfg.Outline.HealthCheck.Interval)*time.Second,
+			b.cfg.Outline.HealthCheck.Target)
+		b.logger.Info("outline health checker started",
+			"interval", b.cfg.Outline.HealthCheck.Interval,
+			"target", b.cfg.Outline.HealthCheck.Target)
+	}
+
+	tunDev, err := wg.CreateNetTUNWithStack([]netip.Addr{addr}, b.cfg.WireGuard.MTU, b.logger)
 	if err != nil {
 		return fmt.Errorf("creating netstack tun: %w", err)
 	}
@@ -67,6 +77,10 @@ func (b *Bridge) Run(ctx context.Context) error {
 	wgLogger := device.NewLogger(device.LogLevelVerbose, "wireguard: ")
 	b.wgDev = device.NewDevice(tunDev, conn.NewDefaultBind(), wgLogger)
 	defer b.wgDev.Close()
+
+	for _, peer := range b.cfg.WireGuard.Peers {
+		b.logger.Info("configuring peer", "public_key", peer.PublicKey, "allowed_ips", peer.AllowedIPs)
+	}
 
 	uapi, err := b.cfg.WireGuard.ToUAPI()
 	if err != nil {
@@ -172,4 +186,33 @@ func peerAllowedIPs(peer config.PeerConfig) []netip.Addr {
 		}
 	}
 	return addrs
+}
+
+func (b *Bridge) startHealthChecker(ctx context.Context, interval time.Duration, target string) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	check := func() {
+		checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+
+		conn, err := b.outlineClient.DialStream(checkCtx, target)
+		if err != nil {
+			b.logger.Warn("outline health check failed", "target", target, "err", err)
+			return
+		}
+		conn.Close()
+		b.logger.Debug("outline health check passed", "target", target)
+	}
+
+	check()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			check()
+		}
+	}
 }
