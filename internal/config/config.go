@@ -15,16 +15,18 @@ import (
 type Config struct {
 	LogLevel  string          `yaml:"log_level"`
 	WireGuard WireGuardConfig `yaml:"wireguard"`
-	Outline   OutlineConfig   `yaml:"outline"`
+	Outlines  []OutlineConfig `yaml:"outlines"`
+	Routing   RoutingConfig   `yaml:"routing"`
 }
 
 type WireGuardConfig struct {
-	PrivateKey string       `yaml:"private_key"`
-	ListenPort int          `yaml:"listen_port"`
-	Address    string       `yaml:"address"`
-	MTU        int          `yaml:"mtu"`
-	DNS        string       `yaml:"dns"`
-	Peers      []PeerConfig `yaml:"peers"`
+	PrivateKey    string       `yaml:"private_key"`
+	ListenPort    int          `yaml:"listen_port"`
+	Address       string       `yaml:"address"`
+	PublicAddress string       `yaml:"public_address"`
+	MTU           int          `yaml:"mtu"`
+	DNS           string       `yaml:"dns"`
+	Peers         []PeerConfig `yaml:"peers"`
 }
 
 type PeerConfig struct {
@@ -33,8 +35,36 @@ type PeerConfig struct {
 	PresharedKey string `yaml:"preshared_key"`
 }
 
+type RoutingConfig struct {
+	ExcludeCIDRs []string        `yaml:"exclude_cidrs"`
+	IPRules      []IPRuleConfig  `yaml:"ip_rules"`
+	SNIRules     []SNIRuleConfig `yaml:"sni_rules"`
+}
+
+type IPRuleConfig struct {
+	Name    string         `yaml:"name"`
+	Action  string         `yaml:"action"`
+	Outline string         `yaml:"outline"`
+	CIDRs   []string       `yaml:"cidrs"`
+	Lists   []IPListConfig `yaml:"lists"`
+}
+
+type IPListConfig struct {
+	URL     string `yaml:"url"`
+	Refresh int    `yaml:"refresh"`
+}
+
+type SNIRuleConfig struct {
+	Name    string   `yaml:"name"`
+	Action  string   `yaml:"action"`
+	Outline string   `yaml:"outline"`
+	Domains []string `yaml:"domains"`
+}
+
 type OutlineConfig struct {
+	Name        string            `yaml:"name"`
 	Transport   string            `yaml:"transport"`
+	Default     bool              `yaml:"default"`
 	HealthCheck HealthCheckConfig `yaml:"health_check"`
 }
 
@@ -64,11 +94,40 @@ func Load(path string) (*Config, error) {
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
 	}
-	if cfg.Outline.HealthCheck.Interval == 0 {
-		cfg.Outline.HealthCheck.Interval = 30
+	if len(cfg.Outlines) == 0 {
+		return nil, fmt.Errorf("at least one outline entry is required")
 	}
-	if cfg.Outline.HealthCheck.Target == "" {
-		cfg.Outline.HealthCheck.Target = "1.1.1.1:80"
+	hasDefault := false
+	for i := range cfg.Outlines {
+		if cfg.Outlines[i].Name == "" {
+			return nil, fmt.Errorf("outline entry %d: name is required", i)
+		}
+		if cfg.Outlines[i].Transport == "" {
+			return nil, fmt.Errorf("outline %q: transport is required", cfg.Outlines[i].Name)
+		}
+		if cfg.Outlines[i].Default {
+			if hasDefault {
+				return nil, fmt.Errorf("outline %q: only one outline can be default", cfg.Outlines[i].Name)
+			}
+			hasDefault = true
+		}
+		if cfg.Outlines[i].HealthCheck.Interval == 0 {
+			cfg.Outlines[i].HealthCheck.Interval = 30
+		}
+		if cfg.Outlines[i].HealthCheck.Target == "" {
+			cfg.Outlines[i].HealthCheck.Target = "1.1.1.1:80"
+		}
+	}
+	if !hasDefault {
+		return nil, fmt.Errorf("no default outline configured: set default: true on one outline entry")
+	}
+
+	for i := range cfg.Routing.IPRules {
+		for j := range cfg.Routing.IPRules[i].Lists {
+			if cfg.Routing.IPRules[i].Lists[j].Refresh == 0 {
+				cfg.Routing.IPRules[i].Lists[j].Refresh = 86400
+			}
+		}
 	}
 
 	return &cfg, nil
@@ -95,22 +154,26 @@ func Migrate(path string) (*Config, bool, error) {
 
 	modified := false
 
-	if _, ok := raw["outline"]; !ok {
-		raw["outline"] = map[string]any{}
-	}
-	outline, ok := raw["outline"].(map[string]any)
-	if !ok {
-		outline = map[string]any{}
-		raw["outline"] = outline
-	}
-
-	if _, ok := outline["health_check"]; !ok {
-		outline["health_check"] = map[string]any{
-			"enabled":  false,
-			"interval": 30,
-			"target":   "1.1.1.1:80",
+	// Migrate old "outline:" (single object) to "outlines:" (array)
+	if oldOutline, ok := raw["outline"]; ok {
+		if _, hasNew := raw["outlines"]; !hasNew {
+			outlineMap, _ := oldOutline.(map[string]any)
+			if outlineMap == nil {
+				outlineMap = map[string]any{}
+			}
+			transport, _ := outlineMap["transport"].(string)
+			entry := map[string]any{
+				"name":      "default",
+				"transport": transport,
+				"default":   true,
+			}
+			if hc, ok := outlineMap["health_check"]; ok {
+				entry["health_check"] = hc
+			}
+			raw["outlines"] = []any{entry}
+			delete(raw, "outline")
+			modified = true
 		}
-		modified = true
 	}
 
 	if modified {
@@ -128,6 +191,15 @@ func Migrate(path string) (*Config, bool, error) {
 		return nil, false, err
 	}
 	return cfg, modified, nil
+}
+
+func (c *Config) DefaultOutline() *OutlineConfig {
+	for i := range c.Outlines {
+		if c.Outlines[i].Default {
+			return &c.Outlines[i]
+		}
+	}
+	return nil
 }
 
 func (c *Config) ParseLogLevel() slog.Level {

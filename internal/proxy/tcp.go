@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -8,11 +9,14 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/waiter"
+
+	"github.com/blikh/wireguard-outline-bridge/internal/routing"
 )
 
 type StreamDialer interface {
@@ -20,13 +24,14 @@ type StreamDialer interface {
 }
 
 type TCPProxy struct {
-	dialer  StreamDialer
+	router  *routing.Router
+	dialers *DialerSet
 	logger  *slog.Logger
 	tracker *ConnTracker
 }
 
-func NewTCPProxy(dialer StreamDialer, tracker *ConnTracker, logger *slog.Logger) *TCPProxy {
-	return &TCPProxy{dialer: dialer, tracker: tracker, logger: logger}
+func NewTCPProxy(router *routing.Router, dialers *DialerSet, tracker *ConnTracker, logger *slog.Logger) *TCPProxy {
+	return &TCPProxy{router: router, dialers: dialers, tracker: tracker, logger: logger}
 }
 
 func (p *TCPProxy) SetupForwarder(s *stack.Stack) {
@@ -37,7 +42,9 @@ func (p *TCPProxy) SetupForwarder(s *stack.Stack) {
 func (p *TCPProxy) handleRequest(r *tcp.ForwarderRequest) {
 	id := r.ID()
 	src := id.RemoteAddress.String()
-	dest := net.JoinHostPort(id.LocalAddress.String(), itoa(id.LocalPort))
+	destIP, _ := netip.AddrFromSlice(id.LocalAddress.AsSlice())
+	destPort := id.LocalPort
+	dest := net.JoinHostPort(id.LocalAddress.String(), itoa(destPort))
 
 	var wq waiter.Queue
 	ep, tcpipErr := r.CreateEndpoint(&wq)
@@ -55,10 +62,10 @@ func (p *TCPProxy) handleRequest(r *tcp.ForwarderRequest) {
 		p.tracker.Track(srcAddr, conn)
 	}
 
-	go p.proxy(conn, srcAddr, dest)
+	go p.proxy(conn, srcAddr, dest, destIP, destPort)
 }
 
-func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest string) {
+func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest string, destIP netip.Addr, destPort uint16) {
 	defer func() {
 		clientConn.Close()
 		if srcAddr.IsValid() {
@@ -66,11 +73,37 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 		}
 	}()
 
-	p.logger.Info("tcp: new connection", "src", srcAddr, "dest", dest)
+	req := routing.Request{DestIP: destIP, DestPort: destPort}
 
-	outConn, err := p.dialer.DialStream(context.Background(), dest)
+	dec, matched := p.router.RouteIP(req)
+
+	var clientReader io.Reader = clientConn
+	if !matched && destPort == 443 {
+		br := bufio.NewReaderSize(clientConn, 32*1024)
+		clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		sni := PeekSNI(br)
+		clientConn.SetReadDeadline(time.Time{})
+		if sni != "" {
+			req.SNI = sni
+			if sniDec, ok := p.router.RouteSNI(req); ok {
+				dec = sniDec
+				matched = true
+			}
+		}
+		clientReader = br
+	}
+
+	dialer := p.dialers.StreamDialerFor(dec)
+	routeDesc := "default"
+	if matched {
+		routeDesc = fmt.Sprintf("%s(%s)", dec.Action, dec.RuleName)
+	}
+
+	p.logger.Info("tcp: new connection", "src", srcAddr, "dest", dest, "route", routeDesc, "sni", req.SNI)
+
+	outConn, err := dialer.DialStream(context.Background(), dest)
 	if err != nil {
-		p.logger.Error("tcp: failed to dial outline", "dest", dest, "err", err)
+		p.logger.Error("tcp: failed to dial", "dest", dest, "route", routeDesc, "err", err)
 		return
 	}
 	defer outConn.Close()
@@ -80,14 +113,14 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 
 	go func() {
 		defer wg.Done()
-		n, err := io.Copy(outConn, clientConn)
-		p.logger.Debug("tcp: client -> outline done", "src", srcAddr, "dest", dest, "bytes", n, "err", err)
+		n, err := io.Copy(outConn, clientReader)
+		p.logger.Debug("tcp: client -> upstream done", "src", srcAddr, "dest", dest, "bytes", n, "err", err)
 	}()
 
 	go func() {
 		defer wg.Done()
 		n, err := io.Copy(clientConn, outConn)
-		p.logger.Debug("tcp: outline -> client done", "src", srcAddr, "dest", dest, "bytes", n, "err", err)
+		p.logger.Debug("tcp: upstream -> client done", "src", srcAddr, "dest", dest, "bytes", n, "err", err)
 	}()
 
 	wg.Wait()

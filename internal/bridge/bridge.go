@@ -12,6 +12,7 @@ import (
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
 	"github.com/blikh/wireguard-outline-bridge/internal/outline"
 	"github.com/blikh/wireguard-outline-bridge/internal/proxy"
+	"github.com/blikh/wireguard-outline-bridge/internal/routing"
 	wg "github.com/blikh/wireguard-outline-bridge/internal/wireguard"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
@@ -42,20 +43,43 @@ func (b *Bridge) Run(ctx context.Context) error {
 		return fmt.Errorf("parsing wireguard address: %w", err)
 	}
 
-	client, err := outline.NewClient(b.cfg.Outline.Transport)
+	defaultCfg := b.cfg.DefaultOutline()
+	defaultClient, err := outline.NewClient(defaultCfg.Transport)
 	if err != nil {
-		return fmt.Errorf("creating outline client: %w", err)
+		return fmt.Errorf("creating default outline client: %w", err)
 	}
-	b.outlineClient = outline.NewSwappableClient(client)
-	b.logger.Info("outline client created", "transport", b.cfg.Outline.Transport)
+	b.outlineClient = outline.NewSwappableClient(defaultClient)
+	b.logger.Info("default outline client created", "name", defaultCfg.Name, "transport", defaultCfg.Transport)
 
-	if b.cfg.Outline.HealthCheck.Enabled {
-		go b.startHealthChecker(ctx,
-			time.Duration(b.cfg.Outline.HealthCheck.Interval)*time.Second,
-			b.cfg.Outline.HealthCheck.Target)
-		b.logger.Info("outline health checker started",
-			"interval", b.cfg.Outline.HealthCheck.Interval,
-			"target", b.cfg.Outline.HealthCheck.Target)
+	dialers := proxy.NewDialerSet(b.outlineClient)
+	for _, o := range b.cfg.Outlines {
+		if o.Default {
+			continue
+		}
+		c, err := outline.NewClient(o.Transport)
+		if err != nil {
+			return fmt.Errorf("creating outline client %q: %w", o.Name, err)
+		}
+		dialers.Outlines[o.Name] = c
+		b.logger.Info("outline client created", "name", o.Name)
+	}
+
+	for _, o := range b.cfg.Outlines {
+		if o.HealthCheck.Enabled {
+			dialer := b.outlineClient
+			if !o.Default {
+				if d, ok := dialers.Outlines[o.Name]; ok {
+					dialer = outline.NewSwappableClient(d.(*outline.Client))
+				}
+			}
+			go b.startHealthChecker(ctx, o.Name, dialer,
+				time.Duration(o.HealthCheck.Interval)*time.Second,
+				o.HealthCheck.Target)
+			b.logger.Info("outline health checker started",
+				"name", o.Name,
+				"interval", o.HealthCheck.Interval,
+				"target", o.HealthCheck.Target)
+		}
 	}
 
 	tunDev, err := wg.CreateNetTUNWithStack([]netip.Addr{addr}, b.cfg.WireGuard.MTU, b.logger)
@@ -66,10 +90,15 @@ func (b *Bridge) Run(ctx context.Context) error {
 
 	b.tracker = proxy.NewConnTracker()
 
-	tcpProxy := proxy.NewTCPProxy(b.outlineClient, b.tracker, b.logger)
+	router := routing.NewRouter(b.cfg.Routing, b.logger)
+
+	downloader := routing.NewDownloader(b.outlineClient, router, b.cfg.Routing, b.logger)
+	downloader.Start(ctx)
+
+	tcpProxy := proxy.NewTCPProxy(router, dialers, b.tracker, b.logger)
 	tcpProxy.SetupForwarder(tunDev.Stack)
 
-	udpProxy := proxy.NewUDPProxy(b.outlineClient, b.tracker, b.logger)
+	udpProxy := proxy.NewUDPProxy(router, dialers, b.tracker, b.logger)
 	udpProxy.SetupForwarder(tunDev.Stack)
 
 	b.logger.Info("proxies configured on gVisor stack")
@@ -115,17 +144,19 @@ func (b *Bridge) Reload() error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	if newCfg.Outline.Transport != b.cfg.Outline.Transport {
-		b.logger.Info("outline transport changed, reconnecting",
-			"old", b.cfg.Outline.Transport,
-			"new", newCfg.Outline.Transport,
+	newDefault := newCfg.DefaultOutline()
+	oldDefault := b.cfg.DefaultOutline()
+	if newDefault.Transport != oldDefault.Transport {
+		b.logger.Info("default outline transport changed, reconnecting",
+			"old", oldDefault.Transport,
+			"new", newDefault.Transport,
 		)
-		newClient, err := outline.NewClient(newCfg.Outline.Transport)
+		newClient, err := outline.NewClient(newDefault.Transport)
 		if err != nil {
-			return fmt.Errorf("creating new outline client: %w", err)
+			return fmt.Errorf("creating new default outline client: %w", err)
 		}
 		b.outlineClient.Swap(newClient)
-		b.logger.Info("outline client swapped")
+		b.logger.Info("default outline client swapped")
 	}
 
 	diff := config.DiffPeers(b.cfg.WireGuard.Peers, newCfg.WireGuard.Peers)
@@ -188,7 +219,7 @@ func peerAllowedIPs(peer config.PeerConfig) []netip.Addr {
 	return addrs
 }
 
-func (b *Bridge) startHealthChecker(ctx context.Context, interval time.Duration, target string) {
+func (b *Bridge) startHealthChecker(ctx context.Context, name string, dialer *outline.SwappableClient, interval time.Duration, target string) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -196,13 +227,13 @@ func (b *Bridge) startHealthChecker(ctx context.Context, interval time.Duration,
 		checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 
-		conn, err := b.outlineClient.DialStream(checkCtx, target)
+		conn, err := dialer.DialStream(checkCtx, target)
 		if err != nil {
-			b.logger.Warn("outline health check failed", "target", target, "err", err)
+			b.logger.Warn("outline health check failed", "name", name, "target", target, "err", err)
 			return
 		}
 		conn.Close()
-		b.logger.Debug("outline health check passed", "target", target)
+		b.logger.Debug("outline health check passed", "name", name, "target", target)
 	}
 
 	check()

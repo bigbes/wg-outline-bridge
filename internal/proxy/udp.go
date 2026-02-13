@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -11,6 +12,8 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
+
+	"github.com/blikh/wireguard-outline-bridge/internal/routing"
 )
 
 const udpSessionTimeout = 60 * time.Second
@@ -20,13 +23,14 @@ type PacketDialer interface {
 }
 
 type UDPProxy struct {
-	dialer  PacketDialer
+	router  *routing.Router
+	dialers *DialerSet
 	logger  *slog.Logger
 	tracker *ConnTracker
 }
 
-func NewUDPProxy(dialer PacketDialer, tracker *ConnTracker, logger *slog.Logger) *UDPProxy {
-	return &UDPProxy{dialer: dialer, tracker: tracker, logger: logger}
+func NewUDPProxy(router *routing.Router, dialers *DialerSet, tracker *ConnTracker, logger *slog.Logger) *UDPProxy {
+	return &UDPProxy{router: router, dialers: dialers, tracker: tracker, logger: logger}
 }
 
 func (p *UDPProxy) SetupForwarder(s *stack.Stack) {
@@ -37,7 +41,9 @@ func (p *UDPProxy) SetupForwarder(s *stack.Stack) {
 func (p *UDPProxy) handleRequest(r *udp.ForwarderRequest) {
 	id := r.ID()
 	src := id.RemoteAddress.String()
-	dest := net.JoinHostPort(id.LocalAddress.String(), itoa(id.LocalPort))
+	destIP, _ := netip.AddrFromSlice(id.LocalAddress.AsSlice())
+	destPort := id.LocalPort
+	dest := net.JoinHostPort(id.LocalAddress.String(), itoa(destPort))
 
 	var wq waiter.Queue
 	ep, tcpipErr := r.CreateEndpoint(&wq)
@@ -53,10 +59,10 @@ func (p *UDPProxy) handleRequest(r *udp.ForwarderRequest) {
 		p.tracker.Track(srcAddr, conn)
 	}
 
-	go p.relay(conn, srcAddr, dest)
+	go p.relay(conn, srcAddr, dest, destIP, destPort)
 }
 
-func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest string) {
+func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest string, destIP netip.Addr, destPort uint16) {
 	defer func() {
 		clientConn.Close()
 		if srcAddr.IsValid() {
@@ -64,9 +70,16 @@ func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest str
 		}
 	}()
 
-	p.logger.Info("udp: new session", "src", srcAddr, "dest", dest)
+	req := routing.Request{DestIP: destIP, DestPort: destPort}
+	dec, matched := p.router.RouteIP(req)
+	dialer := p.dialers.PacketDialerFor(dec)
+	routeDesc := "default"
+	if matched {
+		routeDesc = fmt.Sprintf("%s(%s)", dec.Action, dec.RuleName)
+	}
+	p.logger.Info("udp: new session", "src", srcAddr, "dest", dest, "route", routeDesc)
 
-	outConn, err := p.dialer.DialPacket(context.Background(), dest)
+	outConn, err := dialer.DialPacket(context.Background(), dest)
 	if err != nil {
 		p.logger.Error("udp: failed to dial outline", "dest", dest, "err", err)
 		return

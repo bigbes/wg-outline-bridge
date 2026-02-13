@@ -36,8 +36,10 @@ func Init(args []string, logger *slog.Logger) {
   dns: "1.1.1.1"
   peers: []
 
-outline:
-  transport: "%s"
+outlines:
+  - name: "default"
+    transport: "%s"
+    default: true
 `, privateKey, *listenPort, *address, *transport)
 
 	dir := filepath.Dir(*configPath)

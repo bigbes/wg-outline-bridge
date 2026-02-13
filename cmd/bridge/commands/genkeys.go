@@ -57,6 +57,42 @@ func GenKeys(args []string, logger *slog.Logger) {
 	fmt.Printf("Client IP:   %s\n", clientIP)
 	fmt.Printf("Public Key:  %s\n", publicKey)
 	fmt.Println()
+	endpoint := fmt.Sprintf("<SERVER_IP>:%d", cfg.WireGuard.ListenPort)
+	if cfg.WireGuard.PublicAddress != "" {
+		endpoint = fmt.Sprintf("%s:%d", cfg.WireGuard.PublicAddress, cfg.WireGuard.ListenPort)
+	}
+
+	allowedIPs := "0.0.0.0/0"
+	excludes := cfg.Routing.ExcludeCIDRs
+	if cfg.WireGuard.PublicAddress != "" {
+		if addr, err := netip.ParseAddr(cfg.WireGuard.PublicAddress); err == nil {
+			bits := 32
+			if addr.Is6() {
+				bits = 128
+			}
+			excludes = append(excludes, netip.PrefixFrom(addr, bits).String())
+		}
+	}
+	if len(excludes) > 0 {
+		var exPrefixes []netip.Prefix
+		for _, cidr := range excludes {
+			if p, err := netip.ParsePrefix(cidr); err == nil {
+				exPrefixes = append(exPrefixes, p)
+			} else {
+				logger.Warn("invalid exclude CIDR, skipping", "cidr", cidr, "err", err)
+			}
+		}
+		if len(exPrefixes) > 0 {
+			base := []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}
+			remaining := config.ExcludePrefixes(base, exPrefixes)
+			parts := make([]string, len(remaining))
+			for i, p := range remaining {
+				parts[i] = p.String()
+			}
+			allowedIPs = strings.Join(parts, ", ")
+		}
+	}
+
 	fmt.Println("=== Client WireGuard config ===")
 	fmt.Println()
 	fmt.Println("[Interface]")
@@ -70,8 +106,8 @@ func GenKeys(args []string, logger *slog.Logger) {
 	} else {
 		fmt.Println("PublicKey = <failed to derive, check server private key>")
 	}
-	fmt.Printf("Endpoint = <SERVER_IP>:%d\n", cfg.WireGuard.ListenPort)
-	fmt.Println("AllowedIPs = 0.0.0.0/0")
+	fmt.Printf("Endpoint = %s\n", endpoint)
+	fmt.Printf("AllowedIPs = %s\n", allowedIPs)
 	fmt.Println("PersistentKeepalive = 25")
 }
 
