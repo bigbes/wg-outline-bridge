@@ -46,6 +46,7 @@ type IPRuleConfig struct {
 	Action  string         `yaml:"action"`
 	Outline string         `yaml:"outline"`
 	CIDRs   []string       `yaml:"cidrs"`
+	ASNs    []int          `yaml:"asns"`
 	Lists   []IPListConfig `yaml:"lists"`
 }
 

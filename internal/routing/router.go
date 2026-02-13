@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"fmt"
 	"log/slog"
 	"net/netip"
 	"sync"
@@ -32,7 +33,7 @@ type ipRule struct {
 	name     string
 	action   Decision
 	prefixes []netip.Prefix
-	listURLs []string
+	listKeys []string // URL keys and "asn:<number>" keys into urlPrefixes
 }
 
 type sniRule struct {
@@ -70,7 +71,10 @@ func NewRouter(cfg config.RoutingConfig, logger *slog.Logger) *Router {
 			ir.prefixes = append(ir.prefixes, prefix)
 		}
 		for _, list := range rule.Lists {
-			ir.listURLs = append(ir.listURLs, list.URL)
+			ir.listKeys = append(ir.listKeys, list.URL)
+		}
+		for _, asn := range rule.ASNs {
+			ir.listKeys = append(ir.listKeys, ASNKey(asn))
 		}
 		r.ipRules = append(r.ipRules, ir)
 	}
@@ -134,8 +138,8 @@ func (r *Router) RouteIP(req Request) (Decision, bool) {
 				return rule.action, true
 			}
 		}
-		for _, url := range rule.listURLs {
-			for _, prefix := range r.urlPrefixes[url] {
+		for _, key := range rule.listKeys {
+			for _, prefix := range r.urlPrefixes[key] {
 				if prefix.Contains(req.DestIP) {
 					return rule.action, true
 				}
@@ -157,8 +161,13 @@ func (r *Router) RouteSNI(req Request) (Decision, bool) {
 	return Decision{}, false
 }
 
-func (r *Router) UpdateIPList(url string, prefixes []netip.Prefix) {
+func (r *Router) UpdateIPList(key string, prefixes []netip.Prefix) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.urlPrefixes[url] = prefixes
+	r.urlPrefixes[key] = prefixes
+}
+
+// ASNKey returns the lookup key used for an ASN in the prefix map.
+func ASNKey(asn int) string {
+	return fmt.Sprintf("asn:%d", asn)
 }

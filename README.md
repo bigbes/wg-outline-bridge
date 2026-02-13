@@ -122,7 +122,7 @@ routing:
 
 ### IP Rules
 
-Match destination IP against inline CIDRs or downloaded lists. Lists are fetched through the default Outline proxy and refreshed periodically.
+Match destination IP against inline CIDRs, downloaded lists, or ASN prefixes. Lists and ASN data are fetched through the default Outline proxy and refreshed periodically.
 
 ```yaml
 routing:
@@ -139,9 +139,17 @@ routing:
       lists:
         - url: "https://example.com/country-cidrs.txt"
           refresh: 86400   # seconds (default: 24h)
+
+    - name: "cloudflare-direct"
+      action: direct
+      asns:
+        - 13335            # Cloudflare
+        - 32934            # Facebook
 ```
 
 IP list format: one CIDR per line, `#` comments and blank lines are ignored.
+
+ASN prefixes are resolved via the [RIPE Stat API](https://stat.ripe.net/) and refreshed every 24 hours. A single rule can combine `cidrs`, `lists`, and `asns` — a match on any source triggers the rule.
 
 ### SNI Rules
 

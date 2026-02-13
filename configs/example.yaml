@@ -37,6 +37,11 @@ outlines:
 #         - url: "https://raw.githubusercontent.com/nickvdyck/geoip-country-lists/main/list/cidr/RU.cidr"
 #           refresh: 86400
 #
+#     - name: "cloudflare-direct"
+#       action: direct
+#       asns:
+#         - 13335              # Cloudflare
+#
 #   sni_rules:
 #     - name: "video-via-alt"
 #       action: outline
