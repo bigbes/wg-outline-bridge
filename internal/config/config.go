@@ -17,6 +17,7 @@ type Config struct {
 	WireGuard WireGuardConfig `yaml:"wireguard"`
 	Outlines  []OutlineConfig `yaml:"outlines"`
 	Routing   RoutingConfig   `yaml:"routing"`
+	GeoIP     []GeoIPConfig   `yaml:"geoip"`
 }
 
 type WireGuardConfig struct {
@@ -75,6 +76,12 @@ type HealthCheckConfig struct {
 	Target   string `yaml:"target"`
 }
 
+type GeoIPConfig struct {
+	Name    string `yaml:"name"`
+	Path    string `yaml:"path"`    // local file path or URL
+	Refresh int    `yaml:"refresh"` // seconds
+}
+
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -128,6 +135,18 @@ func Load(path string) (*Config, error) {
 			if cfg.Routing.IPRules[i].Lists[j].Refresh == 0 {
 				cfg.Routing.IPRules[i].Lists[j].Refresh = 86400
 			}
+		}
+	}
+
+	for i := range cfg.GeoIP {
+		if cfg.GeoIP[i].Name == "" {
+			cfg.GeoIP[i].Name = fmt.Sprintf("geoip-%d", i)
+		}
+		if cfg.GeoIP[i].Path == "" {
+			return nil, fmt.Errorf("geoip entry %q: path is required", cfg.GeoIP[i].Name)
+		}
+		if cfg.GeoIP[i].Refresh == 0 {
+			cfg.GeoIP[i].Refresh = 86400
 		}
 	}
 

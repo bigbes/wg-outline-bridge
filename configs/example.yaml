@@ -19,6 +19,14 @@ outlines:
 #  - name: "alt"
 #    transport: "ss://CHANGE_ME_ALT"
 
+# geoip:                     # GeoIP MMDB databases for country-based routing
+#   - name: "country"         # name used in geoip: references (optional)
+#     path: "/path/to/GeoLite2-Country.mmdb"  # local path or URL
+#     refresh: 86400          # reload interval in seconds (default: 86400)
+#   - name: "alt"
+#     path: "https://example.com/GeoIP2-Country.mmdb"
+#     refresh: 604800
+
 # routing:
 #   exclude_cidrs:          # CIDRs excluded from client WireGuard AllowedIPs
 #     - "192.168.0.0/16"    # (traffic goes direct, never enters WG tunnel)
@@ -32,6 +40,13 @@ outlines:
 #         - "192.168.0.0/16"
 #
 #     - name: "country-bypass"
+#       action: direct
+#       cidrs:
+#         - "geoip:RU"            # match by country using first (default) DB
+#         - "geoip:BY"
+#         - "geoip:alt:UA"        # match using a specific named DB
+#
+#     - name: "country-bypass-list"
 #       action: direct
 #       lists:
 #         - url: "https://raw.githubusercontent.com/nickvdyck/geoip-country-lists/main/list/cidr/RU.cidr"

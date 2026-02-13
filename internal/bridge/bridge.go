@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
+	"github.com/blikh/wireguard-outline-bridge/internal/geoip"
 	"github.com/blikh/wireguard-outline-bridge/internal/outline"
 	"github.com/blikh/wireguard-outline-bridge/internal/proxy"
 	"github.com/blikh/wireguard-outline-bridge/internal/routing"
@@ -90,7 +91,22 @@ func (b *Bridge) Run(ctx context.Context) error {
 
 	b.tracker = proxy.NewConnTracker()
 
-	router := routing.NewRouter(b.cfg.Routing, b.logger)
+	var geoMgr *geoip.Manager
+	if len(b.cfg.GeoIP) > 0 {
+		entries := make([]geoip.GeoIPEntry, len(b.cfg.GeoIP))
+		for i, g := range b.cfg.GeoIP {
+			entries[i] = geoip.GeoIPEntry{Name: g.Name, Path: g.Path, Refresh: g.Refresh}
+		}
+		var err error
+		geoMgr, err = geoip.NewManager(entries, b.outlineClient, b.logger)
+		if err != nil {
+			return fmt.Errorf("loading geoip databases: %w", err)
+		}
+		defer geoMgr.Close()
+		geoMgr.StartRefresh(ctx)
+	}
+
+	router := routing.NewRouter(b.cfg.Routing, geoMgr, b.logger)
 
 	downloader := routing.NewDownloader(b.outlineClient, router, b.cfg.Routing, b.logger)
 	downloader.Start(ctx)

@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"strings"
 	"sync"
 
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
+	"github.com/blikh/wireguard-outline-bridge/internal/geoip"
 )
 
 type ActionType string
@@ -29,11 +31,17 @@ type Request struct {
 	SNI      string
 }
 
+type geoipMatch struct {
+	dbName  string // empty means default (first) database
+	country string // ISO country code
+}
+
 type ipRule struct {
-	name     string
-	action   Decision
-	prefixes []netip.Prefix
-	listKeys []string // URL keys and "asn:<number>" keys into urlPrefixes
+	name         string
+	action       Decision
+	prefixes     []netip.Prefix
+	listKeys     []string // URL keys and "asn:<number>" keys into urlPrefixes
+	geoipMatches []geoipMatch
 }
 
 type sniRule struct {
@@ -46,14 +54,16 @@ type Router struct {
 	ipRules  []ipRule
 	sniRules []sniRule
 	logger   *slog.Logger
+	geoMgr   *geoip.Manager
 
 	mu          sync.RWMutex
 	urlPrefixes map[string][]netip.Prefix
 }
 
-func NewRouter(cfg config.RoutingConfig, logger *slog.Logger) *Router {
+func NewRouter(cfg config.RoutingConfig, geoMgr *geoip.Manager, logger *slog.Logger) *Router {
 	r := &Router{
 		logger:      logger,
+		geoMgr:      geoMgr,
 		urlPrefixes: make(map[string][]netip.Prefix),
 	}
 
@@ -63,6 +73,10 @@ func NewRouter(cfg config.RoutingConfig, logger *slog.Logger) *Router {
 			action: parseAction(ipRuleAdapter(rule)),
 		}
 		for _, cidr := range rule.CIDRs {
+			if rest, ok := strings.CutPrefix(cidr, "geoip:"); ok {
+				ir.geoipMatches = append(ir.geoipMatches, parseGeoIPMatch(rest))
+				continue
+			}
 			prefix, err := netip.ParsePrefix(cidr)
 			if err != nil {
 				logger.Warn("routing: invalid CIDR in rule", "rule", rule.Name, "cidr", cidr, "err", err)
@@ -145,6 +159,12 @@ func (r *Router) RouteIP(req Request) (Decision, bool) {
 				}
 			}
 		}
+		for _, gm := range rule.geoipMatches {
+			cc := r.geoMgr.LookupCountry(gm.dbName, req.DestIP)
+			if cc == gm.country {
+				return rule.action, true
+			}
+		}
 	}
 	return Decision{}, false
 }
@@ -170,4 +190,12 @@ func (r *Router) UpdateIPList(key string, prefixes []netip.Prefix) {
 // ASNKey returns the lookup key used for an ASN in the prefix map.
 func ASNKey(asn int) string {
 	return fmt.Sprintf("asn:%d", asn)
+}
+
+// parseGeoIPMatch parses "CC" or "dbname:CC" into a geoipMatch.
+func parseGeoIPMatch(s string) geoipMatch {
+	if dbName, cc, ok := strings.Cut(s, ":"); ok {
+		return geoipMatch{dbName: dbName, country: strings.ToUpper(cc)}
+	}
+	return geoipMatch{country: strings.ToUpper(s)}
 }

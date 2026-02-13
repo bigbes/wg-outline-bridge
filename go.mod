@@ -14,9 +14,10 @@ require (
 require (
 	github.com/google/btree v1.1.2 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/oschwald/maxminddb-golang/v2 v2.1.1 // indirect
 	github.com/shadowsocks/go-shadowsocks2 v0.1.5 // indirect
 	golang.org/x/net v0.44.0 // indirect
-	golang.org/x/sys v0.36.0 // indirect
+	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 )
