@@ -1,0 +1,211 @@
+# WireGuard-Outline Bridge
+
+A userspace WireGuard server that proxies all client traffic through [Outline](https://getoutline.org/) (Shadowsocks) servers. Built with [gVisor netstack](https://gvisor.dev/) for in-process TCP/UDP handling — no TUN device or root access required on the host.
+
+## How It Works
+
+```
+WireGuard Client ──► WireGuard (userspace) ──► gVisor netstack ──► Outline proxy ──► Internet
+                         UDP                    TCP/UDP forwarders     Shadowsocks
+```
+
+1. Clients connect via standard WireGuard protocol
+2. Decrypted packets are injected into a gVisor network stack
+3. TCP and UDP flows are intercepted by transport-layer forwarders
+4. Each flow is routed through an Outline (Shadowsocks) proxy — or sent directly — based on configurable IP and SNI rules
+
+## Quick Start
+
+### Build
+
+```bash
+go build ./cmd/bridge/main.go
+# or
+make build
+```
+
+### Initialize Config
+
+```bash
+./main init -transport "ss://..." -config configs/bridge.yaml
+```
+
+This generates a server keypair and writes a config file. The output shows the server public key to share with clients.
+
+### Add a Peer
+
+```bash
+./main genkeys -name alice -config configs/bridge.yaml
+```
+
+This generates a client keypair, assigns the next available IP, adds the peer to the config, and prints a ready-to-use WireGuard client config.
+
+### Run
+
+```bash
+./main run -config configs/bridge.yaml
+```
+
+The bridge listens on the configured WireGuard UDP port and proxies traffic through Outline.
+
+### Run with Auto-Restart
+
+```bash
+./main watch -config configs/bridge.yaml -log output.log
+```
+
+The `watch` command runs the bridge as a subprocess and automatically restarts it when the binary is updated. Useful for deployments where you `scp` a new binary to the server.
+
+## Configuration
+
+```yaml
+log_level: "info"  # debug, info, warn, error
+
+wireguard:
+  private_key: "base64-encoded-key"
+  listen_port: 51820
+  address: "10.100.0.1/24"
+  public_address: "203.0.113.1"   # server's public IP (for client config generation)
+  mtu: 1420
+  dns: "1.1.1.1"
+  peers:
+    - public_key: "base64-encoded-key"
+      allowed_ips: "10.100.0.2/32"
+
+outlines:
+  - name: "default"
+    transport: "ss://..."
+    default: true                  # exactly one must be default
+    health_check:
+      enabled: true
+      interval: 30
+      target: "1.1.1.1:80"
+  - name: "alt"
+    transport: "ss://..."
+```
+
+### Outline Entries
+
+All Outline (Shadowsocks) endpoints are defined in a single `outlines` array. Each entry has:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | yes | Identifier used in routing rules |
+| `transport` | yes | Shadowsocks URI (`ss://...`) |
+| `default` | no | Set `true` on exactly one entry — used when no routing rule matches |
+| `health_check` | no | Periodic TCP probe to verify the proxy is reachable |
+
+## Routing
+
+Traffic routing is decided per-connection with three levels:
+
+| Level | Scope | Description |
+|-------|-------|-------------|
+| **Exclude CIDRs** | Client-side | Traffic never enters the WireGuard tunnel (handled via `AllowedIPs` in client config) |
+| **IP rules** | Server-side | Match destination IP against CIDR lists → `direct`, `outline`, or `default` |
+| **SNI rules** | Server-side | Match TLS SNI (port 443 only) against domain patterns → `direct`, `outline`, or `default` |
+
+Evaluation order: IP rules → SNI rules (TLS only) → default outline.
+
+### Exclude CIDRs (Really Direct)
+
+CIDRs listed in `routing.exclude_cidrs` are excluded from the client's WireGuard `AllowedIPs` during `genkeys`. This means the client's OS routes that traffic directly, never entering the WireGuard tunnel. The server's `public_address` is automatically excluded as well.
+
+```yaml
+wireguard:
+  public_address: "203.0.113.1"
+
+routing:
+  exclude_cidrs:
+    - "192.168.0.0/16"   # local network
+```
+
+### IP Rules
+
+Match destination IP against inline CIDRs or downloaded lists. Lists are fetched through the default Outline proxy and refreshed periodically.
+
+```yaml
+routing:
+  ip_rules:
+    - name: "private-networks"
+      action: direct
+      cidrs:
+        - "10.0.0.0/8"
+        - "172.16.0.0/12"
+        - "192.168.0.0/16"
+
+    - name: "country-bypass"
+      action: direct
+      lists:
+        - url: "https://example.com/country-cidrs.txt"
+          refresh: 86400   # seconds (default: 24h)
+```
+
+IP list format: one CIDR per line, `#` comments and blank lines are ignored.
+
+### SNI Rules
+
+Match the TLS Server Name Indication from the ClientHello on port 443. Supports exact domains and `*.suffix` wildcards.
+
+```yaml
+routing:
+  sni_rules:
+    - name: "video-via-alt"
+      action: outline
+      outline: "alt"          # route to named outline
+      domains:
+        - "*.youtube.com"
+        - "*.googlevideo.com"
+
+    - name: "direct-domains"
+      action: direct
+      domains:
+        - "*.example.com"
+```
+
+### Routing Actions
+
+| Action | Description |
+|--------|-------------|
+| `direct` | Connect to destination directly, bypassing all proxies |
+| `outline` | Route through a named outline (specify `outline: "name"`) |
+| `default` | Use the default outline (same as no rule matching) |
+
+## Live Reload
+
+Send `SIGHUP` to reload configuration without restarting:
+
+```bash
+kill -HUP <pid>
+```
+
+This reloads peers (add/remove) and swaps the default Outline client if its transport URI changed.
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `run` | Start the bridge |
+| `watch` | Run with auto-restart on binary update |
+| `init` | Generate a new server config with fresh keys |
+| `genkeys` | Generate a client keypair and add to config |
+
+## Project Structure
+
+```
+cmd/bridge/
+  main.go              CLI dispatch
+  commands/             Subcommand implementations
+internal/
+  bridge/               Core bridge orchestration
+  config/               YAML config loading, validation, CIDR utilities
+  outline/              Outline SDK client wrapper
+  proxy/                TCP/UDP proxy with gVisor, SNI parser, routing integration
+  routing/              IP/SNI routing engine, IP list downloader
+  wireguard/            gVisor netstack TUN device
+```
+
+## Requirements
+
+- Go 1.21+
+- An Outline/Shadowsocks server (obtain a `ss://` transport URI)
