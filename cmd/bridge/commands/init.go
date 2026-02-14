@@ -34,7 +34,6 @@ func Init(args []string, logger *slog.Logger) {
   address: "%s"
   mtu: 1420
   dns: "1.1.1.1"
-  peers: []
 
 outlines:
   - name: "default"
@@ -53,6 +52,12 @@ outlines:
 		os.Exit(1)
 	}
 
+	peersDir := filepath.Join(filepath.Dir(*configPath), "peers")
+	if err := os.MkdirAll(peersDir, 0o755); err != nil {
+		logger.Error("failed to create peers directory", "err", err)
+		os.Exit(1)
+	}
+
 	fmt.Println("=== Config initialized ===")
 	fmt.Printf("Config:     %s\n", *configPath)
 	fmt.Printf("Public Key: %s\n", publicKey)
@@ -60,5 +65,5 @@ outlines:
 	fmt.Printf("Address:    %s\n", *address)
 	fmt.Println()
 	fmt.Println("Share the public key with clients.")
-	fmt.Println("Run 'bridge genkeys -name <user>' to add peers.")
+	fmt.Println("Run 'bridge genconf -name <user>' to add peers.")
 }

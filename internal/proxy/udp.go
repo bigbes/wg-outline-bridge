@@ -77,7 +77,7 @@ func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest str
 	if matched {
 		routeDesc = fmt.Sprintf("%s(%s)", dec.Action, dec.RuleName)
 	}
-	p.logger.Info("udp: new session", "src", srcAddr, "dest", dest, "route", routeDesc)
+	p.logger.Debug("udp: new session", "src", srcAddr, "dest", dest, "route", routeDesc)
 
 	outConn, err := dialer.DialPacket(context.Background(), dest)
 	if err != nil {

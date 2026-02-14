@@ -4,36 +4,44 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	LogLevel  string          `yaml:"log_level"`
-	WireGuard WireGuardConfig `yaml:"wireguard"`
-	Outlines  []OutlineConfig `yaml:"outlines"`
-	Routing   RoutingConfig   `yaml:"routing"`
-	GeoIP     []GeoIPConfig   `yaml:"geoip"`
+	LogLevel    string                `yaml:"log_level"`
+	CacheDir    string                `yaml:"cache_dir"`
+	WireGuard   WireGuardConfig       `yaml:"wireguard"`
+	Outlines    []OutlineConfig       `yaml:"outlines"`
+	Routing     RoutingConfig         `yaml:"routing"`
+	GeoIP       []GeoIPConfig         `yaml:"geoip"`
+	Peers       map[string]PeerConfig `yaml:"-"`
+	PeersDir    string                `yaml:"-"`
 }
 
 type WireGuardConfig struct {
-	PrivateKey    string       `yaml:"private_key"`
-	ListenPort    int          `yaml:"listen_port"`
-	Address       string       `yaml:"address"`
-	PublicAddress string       `yaml:"public_address"`
-	MTU           int          `yaml:"mtu"`
-	DNS           string       `yaml:"dns"`
-	Peers         []PeerConfig `yaml:"peers"`
+	PrivateKey    string `yaml:"private_key"`
+	ListenPort    int    `yaml:"listen_port"`
+	Address       string `yaml:"address"`
+	PublicAddress string `yaml:"public_address"`
+	MTU           int    `yaml:"mtu"`
+	DNS           string `yaml:"dns"`
 }
 
 type PeerConfig struct {
+	PrivateKey   string `yaml:"private_key"`
 	PublicKey    string `yaml:"public_key"`
 	AllowedIPs   string `yaml:"allowed_ips"`
 	PresharedKey string `yaml:"preshared_key"`
+	Disabled     bool   `yaml:"disabled"`
 }
 
 type RoutingConfig struct {
@@ -102,6 +110,11 @@ func Load(path string) (*Config, error) {
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
 	}
+	if cfg.CacheDir == "" {
+		if userCache, err := os.UserCacheDir(); err == nil {
+			cfg.CacheDir = filepath.Join(userCache, "wg-outline-bridge")
+		}
+	}
 	if len(cfg.Outlines) == 0 {
 		return nil, fmt.Errorf("at least one outline entry is required")
 	}
@@ -150,7 +163,53 @@ func Load(path string) (*Config, error) {
 		}
 	}
 
+	cfg.PeersDir = filepath.Join(filepath.Dir(path), "peers")
+	peers, err := LoadPeers(cfg.PeersDir)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("loading peers: %w", err)
+	}
+	if peers == nil {
+		peers = make(map[string]PeerConfig)
+	}
+	cfg.Peers = peers
+
 	return &cfg, nil
+}
+
+func LoadPeers(dir string) (map[string]PeerConfig, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	peers := make(map[string]PeerConfig)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".wg.conf") {
+			continue
+		}
+		name := strings.TrimSuffix(entry.Name(), ".wg.conf")
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("reading peer %q: %w", name, err)
+		}
+		var peer PeerConfig
+		if err := yaml.Unmarshal(data, &peer); err != nil {
+			return nil, fmt.Errorf("parsing peer %q: %w", name, err)
+		}
+		peers[name] = peer
+	}
+	return peers, nil
+}
+
+func SavePeer(dir, name string, peer PeerConfig) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("creating peers directory: %w", err)
+	}
+	data, err := yaml.Marshal(peer)
+	if err != nil {
+		return fmt.Errorf("marshaling peer: %w", err)
+	}
+	return os.WriteFile(filepath.Join(dir, name+".wg.conf"), data, 0o600)
 }
 
 func (c *Config) Save(path string) error {
@@ -245,6 +304,61 @@ func (c *WireGuardConfig) ParseAddress() (netip.Addr, int, error) {
 	return prefix.Addr(), prefix.Bits(), nil
 }
 
+// ServerPublicIP returns the server's public IP address.
+// It returns public_address if configured, otherwise queries ifconfig.me.
+func (c *Config) ServerPublicIP() string {
+	if c.WireGuard.PublicAddress != "" {
+		return c.WireGuard.PublicAddress
+	}
+	if ip, err := detectPublicIP(); err == nil {
+		return ip
+	}
+	return ""
+}
+
+func detectPublicIP() (string, error) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get("https://ifconfig.me/ip")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	ip := strings.TrimSpace(string(body))
+	if _, err := netip.ParseAddr(ip); err != nil {
+		return "", fmt.Errorf("invalid IP from ifconfig.me: %q", ip)
+	}
+	return ip, nil
+}
+
+// TransportHost extracts the host (without port) from a transport URI
+// like "ss://credentials@host:port/".
+func TransportHost(uri string) string {
+	at := strings.LastIndex(uri, "@")
+	if at == -1 {
+		return ""
+	}
+	hostPort := uri[at+1:]
+	hostPort = strings.TrimRight(hostPort, "/")
+	if host, _, ok := strings.Cut(hostPort, ":"); ok {
+		return host
+	}
+	return hostPort
+}
+
+// RedactTransport obfuscates credentials in a transport URI,
+// e.g. "ss://Y2hhY2hhMjA...@host:port/" becomes "ss://***@host:port/".
+func RedactTransport(uri string) string {
+	if at := strings.LastIndex(uri, "@"); at != -1 {
+		scheme := uri[:strings.Index(uri, "//")+2]
+		return scheme + "***" + uri[at:]
+	}
+	return uri
+}
+
 func base64ToHex(b64 string) (string, error) {
 	raw, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
@@ -280,35 +394,35 @@ func PeerUAPIRemove(publicKey string) (string, error) {
 }
 
 type PeerDiff struct {
-	Added   []PeerConfig
-	Removed []PeerConfig
+	Added   map[string]PeerConfig
+	Removed map[string]PeerConfig
 }
 
-func DiffPeers(old, new []PeerConfig) PeerDiff {
-	oldMap := make(map[string]PeerConfig, len(old))
-	for _, p := range old {
-		oldMap[p.PublicKey] = p
+func DiffPeers(old, new map[string]PeerConfig) PeerDiff {
+	diff := PeerDiff{
+		Added:   make(map[string]PeerConfig),
+		Removed: make(map[string]PeerConfig),
 	}
-	newMap := make(map[string]PeerConfig, len(new))
-	for _, p := range new {
-		newMap[p.PublicKey] = p
-	}
-
-	var diff PeerDiff
-	for key, p := range newMap {
-		if _, exists := oldMap[key]; !exists {
-			diff.Added = append(diff.Added, p)
+	for name, p := range new {
+		if p.Disabled {
+			continue
+		}
+		if oldP, exists := old[name]; !exists || oldP.Disabled {
+			diff.Added[name] = p
 		}
 	}
-	for key, p := range oldMap {
-		if _, exists := newMap[key]; !exists {
-			diff.Removed = append(diff.Removed, p)
+	for name, p := range old {
+		if p.Disabled {
+			continue
+		}
+		if newP, exists := new[name]; !exists || newP.Disabled {
+			diff.Removed[name] = p
 		}
 	}
 	return diff
 }
 
-func (c *WireGuardConfig) ToUAPI() (string, error) {
+func (c *WireGuardConfig) ToUAPI(peers map[string]PeerConfig) (string, error) {
 	var b strings.Builder
 
 	privHex, err := base64ToHex(c.PrivateKey)
@@ -318,7 +432,10 @@ func (c *WireGuardConfig) ToUAPI() (string, error) {
 	fmt.Fprintf(&b, "private_key=%s\n", privHex)
 	fmt.Fprintf(&b, "listen_port=%d\n", c.ListenPort)
 
-	for _, peer := range c.Peers {
+	for _, peer := range peers {
+		if peer.Disabled {
+			continue
+		}
 		pubHex, err := base64ToHex(peer.PublicKey)
 		if err != nil {
 			return "", fmt.Errorf("peer public key: %w", err)

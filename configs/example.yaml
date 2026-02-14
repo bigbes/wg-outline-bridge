@@ -1,5 +1,6 @@
 ---
 log_level: "info"
+# cache_dir: "/var/cache/wg-outline-bridge"  # cache for downloaded files (default: ~/.cache/wg-outline-bridge)
 
 wireguard:
   private_key: "CHANGE_ME_BASE64_PRIVATE_KEY"
@@ -8,9 +9,6 @@ wireguard:
   public_address: ""  # server's public IP, used for client config generation
   mtu: 1420
   dns: "1.1.1.1"
-  peers:
-    - public_key: "CHANGE_ME_BASE64_PUBLIC_KEY"
-      allowed_ips: "10.100.0.2/32"
 
 outlines:
   - name: "default"

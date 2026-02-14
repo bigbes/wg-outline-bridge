@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,7 @@ type Bridge struct {
 	wgDev         *device.Device
 	outlineClient *outline.SwappableClient
 	tracker       *proxy.ConnTracker
+	peerMon       *peerMonitor
 }
 
 func New(configPath string, cfg *config.Config, logger *slog.Logger) *Bridge {
@@ -50,7 +52,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 		return fmt.Errorf("creating default outline client: %w", err)
 	}
 	b.outlineClient = outline.NewSwappableClient(defaultClient)
-	b.logger.Info("default outline client created", "name", defaultCfg.Name, "transport", defaultCfg.Transport)
+	b.logger.Info("default outline client created", "name", defaultCfg.Name, "transport", config.RedactTransport(defaultCfg.Transport))
 
 	dialers := proxy.NewDialerSet(b.outlineClient)
 	for _, o := range b.cfg.Outlines {
@@ -98,7 +100,8 @@ func (b *Bridge) Run(ctx context.Context) error {
 			entries[i] = geoip.GeoIPEntry{Name: g.Name, Path: g.Path, Refresh: g.Refresh}
 		}
 		var err error
-		geoMgr, err = geoip.NewManager(entries, b.outlineClient, b.logger)
+		cacheDir := filepath.Join(b.cfg.CacheDir, "geoip")
+		geoMgr, err = geoip.NewManager(entries, cacheDir, b.outlineClient, b.logger)
 		if err != nil {
 			return fmt.Errorf("loading geoip databases: %w", err)
 		}
@@ -119,15 +122,15 @@ func (b *Bridge) Run(ctx context.Context) error {
 
 	b.logger.Info("proxies configured on gVisor stack")
 
-	wgLogger := device.NewLogger(device.LogLevelVerbose, "wireguard: ")
+	wgLogger := newWireGuardLogger(b.logger, b.cfg.ParseLogLevel())
 	b.wgDev = device.NewDevice(tunDev, conn.NewDefaultBind(), wgLogger)
 	defer b.wgDev.Close()
 
-	for _, peer := range b.cfg.WireGuard.Peers {
-		b.logger.Info("configuring peer", "public_key", peer.PublicKey, "allowed_ips", peer.AllowedIPs)
+	for name, peer := range b.cfg.Peers {
+		b.logger.Info("configuring peer", "name", name, "public_key", peer.PublicKey, "allowed_ips", peer.AllowedIPs)
 	}
 
-	uapi, err := b.cfg.WireGuard.ToUAPI()
+	uapi, err := b.cfg.WireGuard.ToUAPI(b.cfg.Peers)
 	if err != nil {
 		return fmt.Errorf("generating UAPI config: %w", err)
 	}
@@ -138,6 +141,10 @@ func (b *Bridge) Run(ctx context.Context) error {
 	if err := b.wgDev.Up(); err != nil {
 		return fmt.Errorf("bringing up wireguard: %w", err)
 	}
+
+	// TODO: peer monitor disabled for now
+	// b.peerMon = newPeerMonitor(b.wgDev, b.cfg.Peers, b.logger)
+	// go b.peerMon.run(ctx)
 
 	b.logger.Info("bridge running",
 		"wg_address", addr.String(),
@@ -164,8 +171,8 @@ func (b *Bridge) Reload() error {
 	oldDefault := b.cfg.DefaultOutline()
 	if newDefault.Transport != oldDefault.Transport {
 		b.logger.Info("default outline transport changed, reconnecting",
-			"old", oldDefault.Transport,
-			"new", newDefault.Transport,
+			"old", config.RedactTransport(oldDefault.Transport),
+			"new", config.RedactTransport(newDefault.Transport),
 		)
 		newClient, err := outline.NewClient(newDefault.Transport)
 		if err != nil {
@@ -175,10 +182,10 @@ func (b *Bridge) Reload() error {
 		b.logger.Info("default outline client swapped")
 	}
 
-	diff := config.DiffPeers(b.cfg.WireGuard.Peers, newCfg.WireGuard.Peers)
+	diff := config.DiffPeers(b.cfg.Peers, newCfg.Peers)
 
-	for _, peer := range diff.Removed {
-		b.logger.Info("removing peer", "public_key", peer.PublicKey, "allowed_ips", peer.AllowedIPs)
+	for name, peer := range diff.Removed {
+		b.logger.Info("removing peer", "name", name, "public_key", peer.PublicKey, "allowed_ips", peer.AllowedIPs)
 
 		uapi, err := config.PeerUAPIRemove(peer.PublicKey)
 		if err != nil {
@@ -199,8 +206,8 @@ func (b *Bridge) Reload() error {
 		}
 	}
 
-	for _, peer := range diff.Added {
-		b.logger.Info("adding peer", "public_key", peer.PublicKey, "allowed_ips", peer.AllowedIPs)
+	for name, peer := range diff.Added {
+		b.logger.Info("adding peer", "name", name, "public_key", peer.PublicKey, "allowed_ips", peer.AllowedIPs)
 
 		uapi, err := config.PeerUAPIAdd(peer)
 		if err != nil {
@@ -214,6 +221,10 @@ func (b *Bridge) Reload() error {
 	}
 
 	b.cfg = newCfg
+	// TODO: peer monitor disabled for now
+	// if b.peerMon != nil {
+	// 	b.peerMon.updatePeers(newCfg.Peers)
+	// }
 
 	b.logger.Info("configuration reloaded",
 		"peers_added", len(diff.Added),
@@ -262,4 +273,19 @@ func (b *Bridge) startHealthChecker(ctx context.Context, name string, dialer *ou
 			check()
 		}
 	}
+}
+
+func newWireGuardLogger(logger *slog.Logger, level slog.Level) *device.Logger {
+	wgLog := logger.With("component", "wireguard")
+	l := &device.Logger{
+		Errorf: func(format string, args ...any) {
+			wgLog.Error(fmt.Sprintf(format, args...))
+		},
+	}
+	if level <= slog.LevelDebug {
+		l.Verbosef = func(format string, args ...any) {
+			wgLog.Debug(fmt.Sprintf(format, args...))
+		}
+	}
+	return l
 }

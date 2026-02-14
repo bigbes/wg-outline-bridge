@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"flag"
@@ -12,13 +11,12 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/curve25519"
-	"gopkg.in/yaml.v3"
 
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
 )
 
-func GenKeys(args []string, logger *slog.Logger) {
-	fs := flag.NewFlagSet("genkeys", flag.ExitOnError)
+func GenConf(args []string, logger *slog.Logger) {
+	fs := flag.NewFlagSet("genconf", flag.ExitOnError)
 	configPath := fs.String("config", "configs/bridge.yaml", "path to config file")
 	name := fs.String("name", "", "name/label for this peer (required)")
 	fs.Parse(args)
@@ -41,14 +39,26 @@ func GenKeys(args []string, logger *slog.Logger) {
 		os.Exit(1)
 	}
 
+	presharedKey, err := generatePresharedKey()
+	if err != nil {
+		logger.Error("failed to generate preshared key", "err", err)
+		os.Exit(1)
+	}
+
 	clientIP, err := nextPeerIP(cfg)
 	if err != nil {
 		logger.Error("failed to determine client IP", "err", err)
 		os.Exit(1)
 	}
 
-	if err := appendPeerToConfig(*configPath, *name, publicKey, clientIP); err != nil {
-		logger.Error("failed to update config", "err", err)
+	peer := config.PeerConfig{
+		PrivateKey:   privateKey,
+		PublicKey:    publicKey,
+		PresharedKey: presharedKey,
+		AllowedIPs:   clientIP + "/32",
+	}
+	if err := config.SavePeer(cfg.PeersDir, *name, peer); err != nil {
+		logger.Error("failed to save peer", "err", err)
 		os.Exit(1)
 	}
 
@@ -57,15 +67,16 @@ func GenKeys(args []string, logger *slog.Logger) {
 	fmt.Printf("Client IP:   %s\n", clientIP)
 	fmt.Printf("Public Key:  %s\n", publicKey)
 	fmt.Println()
+	serverIP := cfg.ServerPublicIP()
 	endpoint := fmt.Sprintf("<SERVER_IP>:%d", cfg.WireGuard.ListenPort)
-	if cfg.WireGuard.PublicAddress != "" {
-		endpoint = fmt.Sprintf("%s:%d", cfg.WireGuard.PublicAddress, cfg.WireGuard.ListenPort)
+	if serverIP != "" {
+		endpoint = fmt.Sprintf("%s:%d", serverIP, cfg.WireGuard.ListenPort)
 	}
 
 	allowedIPs := "0.0.0.0/0"
 	excludes := cfg.Routing.ExcludeCIDRs
-	if cfg.WireGuard.PublicAddress != "" {
-		if addr, err := netip.ParseAddr(cfg.WireGuard.PublicAddress); err == nil {
+	if serverIP != "" {
+		if addr, err := netip.ParseAddr(serverIP); err == nil {
 			bits := 32
 			if addr.Is6() {
 				bits = 128
@@ -106,9 +117,18 @@ func GenKeys(args []string, logger *slog.Logger) {
 	} else {
 		fmt.Println("PublicKey = <failed to derive, check server private key>")
 	}
+	fmt.Printf("PresharedKey = %s\n", presharedKey)
 	fmt.Printf("Endpoint = %s\n", endpoint)
 	fmt.Printf("AllowedIPs = %s\n", allowedIPs)
 	fmt.Println("PersistentKeepalive = 25")
+}
+
+func generatePresharedKey() (string, error) {
+	var key [32]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		return "", fmt.Errorf("generating random bytes: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(key[:]), nil
 }
 
 func generateKeyPair() (privateKeyB64, publicKeyB64 string, err error) {
@@ -153,7 +173,7 @@ func nextPeerIP(cfg *config.Config) (string, error) {
 
 	used := make(map[netip.Addr]bool)
 	used[addr] = true
-	for _, peer := range cfg.WireGuard.Peers {
+	for _, peer := range cfg.Peers {
 		ip := strings.Split(peer.AllowedIPs, "/")[0]
 		if a, err := netip.ParseAddr(ip); err == nil {
 			used[a] = true
@@ -171,81 +191,3 @@ func nextPeerIP(cfg *config.Config) (string, error) {
 	return "", fmt.Errorf("no available IPs in subnet")
 }
 
-func appendPeerToConfig(path, name, publicKey, clientIP string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("reading config: %w", err)
-	}
-
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return fmt.Errorf("parsing yaml: %w", err)
-	}
-
-	peersNode, err := findPeersNode(&doc)
-	if err != nil {
-		return err
-	}
-
-	if peersNode.Kind == yaml.ScalarNode || (peersNode.Kind == yaml.SequenceNode && peersNode.Style == yaml.FlowStyle) {
-		peersNode.Kind = yaml.SequenceNode
-		peersNode.Tag = "!!seq"
-		peersNode.Style = 0
-		peersNode.Value = ""
-		if peersNode.Content == nil {
-			peersNode.Content = nil
-		}
-	}
-
-	peerMapping := &yaml.Node{
-		Kind:        yaml.MappingNode,
-		Tag:         "!!map",
-		HeadComment: name,
-		Content: []*yaml.Node{
-			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "public_key"},
-			{Kind: yaml.ScalarNode, Tag: "!!str", Value: publicKey, Style: yaml.DoubleQuotedStyle},
-			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "allowed_ips"},
-			{Kind: yaml.ScalarNode, Tag: "!!str", Value: clientIP + "/32", Style: yaml.DoubleQuotedStyle},
-		},
-	}
-
-	peersNode.Content = append(peersNode.Content, peerMapping)
-
-	var buf bytes.Buffer
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
-	if err := enc.Encode(&doc); err != nil {
-		return fmt.Errorf("marshaling yaml: %w", err)
-	}
-	enc.Close()
-
-	return os.WriteFile(path, buf.Bytes(), 0o600)
-}
-
-func findPeersNode(doc *yaml.Node) (*yaml.Node, error) {
-	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
-		return nil, fmt.Errorf("invalid yaml document")
-	}
-
-	root := doc.Content[0]
-	if root.Kind != yaml.MappingNode {
-		return nil, fmt.Errorf("root is not a mapping")
-	}
-
-	for i := 0; i < len(root.Content)-1; i += 2 {
-		if root.Content[i].Value == "wireguard" {
-			wgNode := root.Content[i+1]
-			if wgNode.Kind != yaml.MappingNode {
-				return nil, fmt.Errorf("wireguard is not a mapping")
-			}
-			for j := 0; j < len(wgNode.Content)-1; j += 2 {
-				if wgNode.Content[j].Value == "peers" {
-					return wgNode.Content[j+1], nil
-				}
-			}
-			return nil, fmt.Errorf("peers key not found under wireguard")
-		}
-	}
-
-	return nil, fmt.Errorf("wireguard key not found in config")
-}

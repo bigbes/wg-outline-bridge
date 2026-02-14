@@ -99,7 +99,7 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 		routeDesc = fmt.Sprintf("%s(%s)", dec.Action, dec.RuleName)
 	}
 
-	p.logger.Info("tcp: new connection", "src", srcAddr, "dest", dest, "route", routeDesc, "sni", req.SNI)
+	p.logger.Debug("tcp: new connection", "src", srcAddr, "dest", dest, "route", routeDesc, "sni", req.SNI)
 
 	outConn, err := dialer.DialStream(context.Background(), dest)
 	if err != nil {
