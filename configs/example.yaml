@@ -38,6 +38,21 @@ wireguard:
 #       domains:
 #         - "telemetry.example.com"
 
+# mtproxy:                    # MTProxy server (Telegram proxy protocol)
+#   enabled: true
+#   listen:
+#     - "0.0.0.0:443"
+#   outline: "default"         # which outline to use for backend connections
+#   secrets:                   # 16-byte hex secrets (32 chars; optional dd/ee prefix)
+#     - "dd0123456789abcdef0123456789abcdef"
+#   fake_tls:                  # fake TLS handshake for censorship resistance
+#     enabled: false
+#     max_clock_skew_seconds: 600
+#     replay_cache_ttl_hours: 48
+#   endpoints:                 # override Telegram DC endpoints (optional)
+#     1: ["149.154.175.50:443"]
+#     2: ["149.154.167.51:443"]
+
 outlines:
   - name: "default"
     transport: "ss://CHANGE_ME"

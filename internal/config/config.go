@@ -21,6 +21,7 @@ type Config struct {
 	CacheDir    string                `yaml:"cache_dir"`
 	WireGuard   WireGuardConfig       `yaml:"wireguard"`
 	DNS         DNSConfig             `yaml:"dns"`
+	MTProxy     MTProxyConfig         `yaml:"mtproxy"`
 	Outlines    []OutlineConfig       `yaml:"outlines"`
 	Routing     RoutingConfig         `yaml:"routing"`
 	GeoIP       []GeoIPConfig         `yaml:"geoip"`
@@ -119,6 +120,21 @@ type GeoIPConfig struct {
 	Refresh int    `yaml:"refresh"` // seconds
 }
 
+type MTProxyConfig struct {
+	Enabled   bool              `yaml:"enabled"`
+	Listen    []string          `yaml:"listen"`
+	Outline   string            `yaml:"outline"`
+	Secrets   []string          `yaml:"secrets"`
+	FakeTLS   FakeTLSConfig     `yaml:"fake_tls"`
+	Endpoints map[int][]string  `yaml:"endpoints"`
+}
+
+type FakeTLSConfig struct {
+	Enabled             bool `yaml:"enabled"`
+	MaxClockSkewSeconds int  `yaml:"max_clock_skew_seconds"`
+	ReplayCacheTTLHours int  `yaml:"replay_cache_ttl_hours"`
+}
+
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -206,6 +222,21 @@ func Load(path string) (*Config, error) {
 		}
 		if cfg.GeoIP[i].Refresh == 0 {
 			cfg.GeoIP[i].Refresh = 86400
+		}
+	}
+
+	if cfg.MTProxy.Enabled {
+		if len(cfg.MTProxy.Listen) == 0 {
+			return nil, fmt.Errorf("mtproxy: at least one listen address is required")
+		}
+		if len(cfg.MTProxy.Secrets) == 0 {
+			return nil, fmt.Errorf("mtproxy: at least one secret is required")
+		}
+		if cfg.MTProxy.FakeTLS.MaxClockSkewSeconds == 0 {
+			cfg.MTProxy.FakeTLS.MaxClockSkewSeconds = 600
+		}
+		if cfg.MTProxy.FakeTLS.ReplayCacheTTLHours == 0 {
+			cfg.MTProxy.FakeTLS.ReplayCacheTTLHours = 48
 		}
 	}
 

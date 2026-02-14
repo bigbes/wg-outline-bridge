@@ -13,6 +13,9 @@ import (
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
 	"github.com/blikh/wireguard-outline-bridge/internal/dns"
 	"github.com/blikh/wireguard-outline-bridge/internal/geoip"
+	"github.com/blikh/wireguard-outline-bridge/internal/mtproxy"
+	mpcrypto "github.com/blikh/wireguard-outline-bridge/internal/mtproxy/crypto"
+	"github.com/blikh/wireguard-outline-bridge/internal/mtproxy/telegram"
 	"github.com/blikh/wireguard-outline-bridge/internal/outline"
 	"github.com/blikh/wireguard-outline-bridge/internal/proxy"
 	"github.com/blikh/wireguard-outline-bridge/internal/routing"
@@ -133,6 +136,12 @@ func (b *Bridge) Run(ctx context.Context) error {
 		defer dnsServer.Stop()
 	}
 
+	if b.cfg.MTProxy.Enabled {
+		if err := b.startMTProxy(ctx, dialers); err != nil {
+			return fmt.Errorf("starting mtproxy: %w", err)
+		}
+	}
+
 	wgLogger := newWireGuardLogger(b.logger, b.cfg.ParseLogLevel())
 	b.wgDev = device.NewDevice(tunDev, conn.NewDefaultBind(), wgLogger)
 	defer b.wgDev.Close()
@@ -241,6 +250,47 @@ func (b *Bridge) Reload() error {
 		"peers_added", len(diff.Added),
 		"peers_removed", len(diff.Removed),
 	)
+	return nil
+}
+
+func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) error {
+	secrets := make([]mpcrypto.Secret, 0, len(b.cfg.MTProxy.Secrets))
+	for _, s := range b.cfg.MTProxy.Secrets {
+		secret, err := mpcrypto.ParseSecret(s)
+		if err != nil {
+			return fmt.Errorf("parsing mtproxy secret: %w", err)
+		}
+		secrets = append(secrets, secret)
+	}
+
+	var dialer mtproxy.StreamDialer = b.outlineClient
+	if name := b.cfg.MTProxy.Outline; name != "" && name != "default" {
+		if d, ok := dialers.Outlines[name]; ok {
+			dialer = d
+		}
+	}
+
+	endpoints := telegram.NewEndpointManager(b.cfg.MTProxy.Endpoints)
+
+	serverCfg := mtproxy.ServerConfig{
+		ListenAddrs: b.cfg.MTProxy.Listen,
+		Secrets:     secrets,
+	}
+	if b.cfg.MTProxy.FakeTLS.Enabled {
+		serverCfg.FakeTLS = &mtproxy.FakeTLSConfig{
+			MaxClockSkewSec:     b.cfg.MTProxy.FakeTLS.MaxClockSkewSeconds,
+			ReplayCacheTTLHours: b.cfg.MTProxy.FakeTLS.ReplayCacheTTLHours,
+		}
+	}
+
+	srv := mtproxy.NewServer(serverCfg, dialer, endpoints, b.logger)
+	go func() {
+		if err := srv.Start(ctx); err != nil {
+			b.logger.Error("mtproxy exited", "err", err)
+		}
+	}()
+
+	b.logger.Info("mtproxy server started", "listen", b.cfg.MTProxy.Listen, "secrets", len(secrets), "fake_tls", b.cfg.MTProxy.FakeTLS.Enabled)
 	return nil
 }
 
