@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -599,6 +600,30 @@ func stripBlockComments(text string) string {
 		text = text[start+2+end+2:]
 	}
 	return b.String()
+}
+
+// ProxyLinks builds Telegram proxy links for all configured MTProxy secrets.
+func ProxyLinks(cfg *Config) []string {
+	serverIP := cfg.ServerPublicIP()
+	if serverIP == "" {
+		serverIP = "<SERVER_IP>"
+	}
+
+	if len(cfg.MTProxy.Listen) == 0 || len(cfg.MTProxy.Secrets) == 0 {
+		return nil
+	}
+
+	_, port, err := net.SplitHostPort(cfg.MTProxy.Listen[0])
+	if err != nil {
+		return nil
+	}
+
+	links := make([]string, 0, len(cfg.MTProxy.Secrets))
+	for _, secret := range cfg.MTProxy.Secrets {
+		link := fmt.Sprintf("https://t.me/proxy?server=%s&port=%s&secret=%s", serverIP, port, secret)
+		links = append(links, link)
+	}
+	return links
 }
 
 // AppendSecret appends a secret line to the given file, creating it if needed.

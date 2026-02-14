@@ -35,7 +35,7 @@ This generates a server keypair and writes a config file. The output shows the s
 ### Add a Peer
 
 ```bash
-./main genkeys -name alice -config configs/bridge.yaml
+./main genconf -name alice -config configs/bridge.yaml
 ```
 
 This generates a client keypair, assigns the next available IP, adds the peer to the config, and prints a ready-to-use WireGuard client config.
@@ -68,10 +68,6 @@ wireguard:
   public_address: "203.0.113.1"   # server's public IP (for client config generation)
   mtu: 1420
   dns: "1.1.1.1"
-  peers:
-    - public_key: "base64-encoded-key"
-      allowed_ips: "10.100.0.2/32"
-
 outlines:
   - name: "default"
     transport: "ss://..."
@@ -206,6 +202,7 @@ If `chat_id` is omitted, the bot only responds to direct commands — no push no
 | Command | Description |
 |---------|-------------|
 | `/status` | Show peer status, traffic, and active connections |
+| `/proxy` | Show Telegram proxy links (MTProxy) |
 | `/help` | List available commands |
 
 ### Status Output
@@ -243,8 +240,10 @@ This reloads peers (add/remove) and swaps the default Outline client if its tran
 | `run` | Start the bridge |
 | `watch` | Run with auto-restart on binary update |
 | `init` | Generate a new server config with fresh keys |
-| `genkeys` | Generate a client keypair and add to config |
+| `genconf` | Generate a client keypair and add to config |
+| `showconf` | Print WireGuard client config for a peer |
 | `gensecret` | Generate a new MTProxy secret and save to secrets file |
+| `showproxy` | Print Telegram proxy links for all MTProxy secrets |
 
 ### MTProxy Secrets File
 
@@ -279,12 +278,16 @@ cmd/bridge/
 internal/
   bridge/               Core bridge orchestration
   config/               YAML config loading, validation, CIDR utilities
+  dns/                  Built-in DNS proxy server with blocklists
+  geoip/                GeoIP database management for country-based routing
+  mtproxy/              MTProxy (Telegram proxy) server implementation
   observer/             Telegram bot observer (status push & command handling)
   outline/              Outline SDK client wrapper
   proxy/                TCP/UDP proxy with gVisor, SNI parser, routing integration
   routing/              IP/SNI routing engine, IP list downloader
   telegram/             Telegram Bot API client
   wireguard/            gVisor netstack TUN device
+configs/                Example configuration files
 ```
 
 ## Requirements

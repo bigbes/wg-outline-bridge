@@ -29,6 +29,8 @@ func main() {
 		commands.ShowConf(os.Args[2:], logger)
 	case "gensecret":
 		commands.GenSecret(os.Args[2:], logger)
+	case "showproxy":
+		commands.ShowProxy(os.Args[2:], logger)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		printUsage()
@@ -46,4 +48,5 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  init      Generate a new server config with fresh keys")
 	fmt.Fprintln(os.Stderr, "  showconf  Print WireGuard client config for a peer")
 	fmt.Fprintln(os.Stderr, "  gensecret Generate a new MTProxy secret")
+	fmt.Fprintln(os.Stderr, "  showproxy Print Telegram proxy links")
 }

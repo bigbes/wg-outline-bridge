@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/blikh/wireguard-outline-bridge/internal/config"
 	"github.com/blikh/wireguard-outline-bridge/internal/telegram"
 )
 
@@ -29,6 +30,7 @@ type StatusProvider interface {
 type Observer struct {
 	bot      *telegram.Bot
 	provider StatusProvider
+	cfg      *config.Config
 	interval time.Duration
 	chatID   int64
 	logger   *slog.Logger
@@ -36,10 +38,11 @@ type Observer struct {
 
 // New creates a new Observer. If chatID is 0, periodic push notifications
 // are disabled but the bot still responds to incoming commands.
-func New(bot *telegram.Bot, provider StatusProvider, interval time.Duration, chatID int64, logger *slog.Logger) *Observer {
+func New(bot *telegram.Bot, provider StatusProvider, cfg *config.Config, interval time.Duration, chatID int64, logger *slog.Logger) *Observer {
 	return &Observer{
 		bot:      bot,
 		provider: provider,
+		cfg:      cfg,
 		interval: interval,
 		chatID:   chatID,
 		logger:   logger,
@@ -113,9 +116,22 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 	case "/status":
 		peers := o.provider.PeerStatuses()
 		reply = formatStatus(peers)
+	case "/proxy":
+		links := config.ProxyLinks(o.cfg)
+		if len(links) == 0 {
+			reply = "No proxy links available (MTProxy not configured or no secrets)"
+		} else {
+			var b strings.Builder
+			b.WriteString("🔗 Telegram Proxy Links:\n\n")
+			for i, link := range links {
+				fmt.Fprintf(&b, "[%d] %s\n", i+1, link)
+			}
+			reply = b.String()
+		}
 	case "/help", "/start":
 		reply = "Available commands:\n" +
 			"/status — show peer status, traffic, and connections\n" +
+			"/proxy — show Telegram proxy links\n" +
 			"/help — show this message"
 	default:
 		return
