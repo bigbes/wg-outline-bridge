@@ -104,7 +104,33 @@ func (o *Observer) pollLoop(ctx context.Context) {
 	}
 }
 
+func (o *Observer) isAllowed(msg *telegram.Message) bool {
+	allowedUsers := o.cfg.Telegram.AllowedUsers
+	if len(allowedUsers) == 0 {
+		return true
+	}
+	// Group/channel messages are allowed (filtered by chat_id if needed)
+	if msg.Chat.Type != "private" {
+		return true
+	}
+	if msg.From == nil {
+		return false
+	}
+	for _, uid := range allowedUsers {
+		if uid == msg.From.ID {
+			return true
+		}
+	}
+	return false
+}
+
 func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
+	if !o.isAllowed(msg) {
+		o.logger.Debug("observer: ignoring message from unauthorized user",
+			"user_id", msg.From.ID, "chat_id", msg.Chat.ID)
+		return
+	}
+
 	cmd := strings.TrimSpace(msg.Text)
 	// Strip @botname suffix from commands (e.g., /status@mybot)
 	if at := strings.Index(cmd, "@"); at > 0 {

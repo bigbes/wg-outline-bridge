@@ -60,6 +60,8 @@ wireguard:
 #   token: "123456:ABC-DEF..."   # Bot API token from @BotFather
 #   chat_id: -1001234567890      # (optional) Chat ID for periodic status push
 #   interval: 300                # Status push interval in seconds (default: 300)
+#   allowed_users:               # (optional) Only these user IDs can use the bot in private chats
+#     - 123456789
 
 outlines:
   - name: "default"

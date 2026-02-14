@@ -193,9 +193,13 @@ telegram:
   token: "123456:ABC-DEF..."
   # chat_id: -1001234567890   # optional: enables periodic push notifications
   # interval: 300             # push interval in seconds (default: 300)
+  # allowed_users:            # optional: restrict private-chat access to these user IDs
+  #   - 123456789
 ```
 
 If `chat_id` is omitted, the bot only responds to direct commands — no push notifications are sent.
+
+If `allowed_users` is set, the bot ignores private messages from users not in the list. Group/channel messages are not affected. When omitted, anyone can use the bot in private chats.
 
 ### Commands
 

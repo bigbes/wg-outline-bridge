@@ -140,10 +140,11 @@ type FakeTLSConfig struct {
 }
 
 type TelegramConfig struct {
-	Enabled  bool   `yaml:"enabled"`
-	Token    string `yaml:"token"`
-	ChatID   int64  `yaml:"chat_id"`
-	Interval int    `yaml:"interval"` // status report interval in seconds
+	Enabled      bool    `yaml:"enabled"`
+	Token        string  `yaml:"token"`
+	ChatID       int64   `yaml:"chat_id"`
+	Interval     int     `yaml:"interval"`      // status report interval in seconds
+	AllowedUsers []int64 `yaml:"allowed_users"` // user IDs allowed in private chats
 }
 
 func Load(path string) (*Config, error) {

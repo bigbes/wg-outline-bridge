@@ -19,13 +19,20 @@ type Update struct {
 // Message represents a Telegram message.
 type Message struct {
 	MessageID int64  `json:"message_id"`
+	From      *User  `json:"from"`
 	Chat      Chat   `json:"chat"`
 	Text      string `json:"text"`
 }
 
+// User represents a Telegram user.
+type User struct {
+	ID int64 `json:"id"`
+}
+
 // Chat represents a Telegram chat.
 type Chat struct {
-	ID int64 `json:"id"`
+	ID   int64  `json:"id"`
+	Type string `json:"type"`
 }
 
 // Bot is a minimal Telegram Bot API client.
