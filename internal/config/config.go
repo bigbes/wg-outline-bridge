@@ -122,13 +122,14 @@ type GeoIPConfig struct {
 }
 
 type MTProxyConfig struct {
-	Enabled     bool              `yaml:"enabled"`
-	Listen      []string          `yaml:"listen"`
-	Outline     string            `yaml:"outline"`
-	Secrets     []string          `yaml:"secrets"`
-	SecretsFile string            `yaml:"secrets_file"`
-	FakeTLS     FakeTLSConfig     `yaml:"fake_tls"`
-	Endpoints   map[int][]string  `yaml:"endpoints"`
+	Enabled     bool             `yaml:"enabled"`
+	Listen      []string         `yaml:"listen"`
+	Outline     string           `yaml:"outline"`
+	Secrets     []string         `yaml:"secrets"`
+	SecretsFile string           `yaml:"secrets_file"`
+	StatsAddr   string           `yaml:"stats_addr"`
+	FakeTLS     FakeTLSConfig    `yaml:"fake_tls"`
+	Endpoints   map[int][]string `yaml:"endpoints"`
 }
 
 type FakeTLSConfig struct {

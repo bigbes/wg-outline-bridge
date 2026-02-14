@@ -299,6 +299,15 @@ func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) err
 		}
 	}()
 
+	if b.cfg.MTProxy.StatsAddr != "" {
+		statsSrv := mtproxy.NewStatsServer(b.cfg.MTProxy.StatsAddr, srv, b.logger)
+		go func() {
+			if err := statsSrv.Start(ctx); err != nil {
+				b.logger.Error("mtproxy stats server exited", "err", err)
+			}
+		}()
+	}
+
 	b.logger.Info("mtproxy server started", "listen", b.cfg.MTProxy.Listen, "secrets", len(secrets), "fake_tls", b.cfg.MTProxy.FakeTLS.Enabled)
 	return nil
 }

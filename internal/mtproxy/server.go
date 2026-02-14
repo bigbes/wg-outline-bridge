@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	mpcrypto "github.com/blikh/wireguard-outline-bridge/internal/mtproxy/crypto"
@@ -42,6 +43,17 @@ type FakeTLSConfig struct {
 	ReplayCacheTTLHours int
 }
 
+// Stats holds atomic counters for the MTProxy server.
+type Stats struct {
+	Connections          atomic.Int64 // total connections accepted
+	ActiveConnections    atomic.Int64 // currently active connections
+	TLSConnections       atomic.Int64 // connections using fake TLS
+	HandshakeErrors      atomic.Int64 // failed handshakes (TLS, header, secret mismatch)
+	BackendDialErrors    atomic.Int64 // failed backend dials
+	BytesClientToBackend atomic.Int64 // bytes relayed client -> backend
+	BytesBackendToClient atomic.Int64 // bytes relayed backend -> client
+}
+
 // Server is the MTProxy server.
 type Server struct {
 	config    ServerConfig
@@ -51,6 +63,9 @@ type Server struct {
 
 	listeners []net.Listener
 	wg        sync.WaitGroup
+
+	// Stats counters
+	stats Stats
 
 	// Replay cache for fake TLS (client_random dedup)
 	replayMu    sync.Mutex
@@ -102,6 +117,26 @@ func (s *Server) closeListeners() {
 	}
 }
 
+// ReplayCacheSize returns the current number of entries in the replay cache.
+func (s *Server) ReplayCacheSize() int {
+	s.replayMu.Lock()
+	defer s.replayMu.Unlock()
+	return len(s.replayCache)
+}
+
+// StatsSnapshot returns a point-in-time snapshot of the server stats.
+func (s *Server) StatsSnapshot() *Stats {
+	snap := &Stats{}
+	snap.Connections.Store(s.stats.Connections.Load())
+	snap.ActiveConnections.Store(s.stats.ActiveConnections.Load())
+	snap.TLSConnections.Store(s.stats.TLSConnections.Load())
+	snap.HandshakeErrors.Store(s.stats.HandshakeErrors.Load())
+	snap.BackendDialErrors.Store(s.stats.BackendDialErrors.Load())
+	snap.BytesClientToBackend.Store(s.stats.BytesClientToBackend.Load())
+	snap.BytesBackendToClient.Store(s.stats.BytesBackendToClient.Load())
+	return snap
+}
+
 func (s *Server) acceptLoop(ctx context.Context, ln net.Listener) {
 	for {
 		conn, err := ln.Accept()
@@ -120,6 +155,9 @@ func (s *Server) acceptLoop(ctx context.Context, ln net.Listener) {
 
 func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
+	s.stats.Connections.Add(1)
+	s.stats.ActiveConnections.Add(1)
+	defer s.stats.ActiveConnections.Add(-1)
 
 	remoteAddr := conn.RemoteAddr().String()
 	conn.SetDeadline(time.Now().Add(handshakeTimeout))
@@ -127,6 +165,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	// Read initial bytes to detect protocol
 	var peekBuf [3]byte
 	if _, err := io.ReadFull(conn, peekBuf[:]); err != nil {
+		s.stats.HandshakeErrors.Add(1)
 		s.logger.Debug("handshake: failed to read initial bytes", "remote", remoteAddr, "err", err)
 		return
 	}
@@ -137,6 +176,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	// Check for TLS ClientHello: 0x16 0x03 0x01
 	if peekBuf[0] == 0x16 && peekBuf[1] == 0x03 && peekBuf[2] == 0x01 {
 		if s.config.FakeTLS == nil {
+			s.stats.HandshakeErrors.Add(1)
 			s.logger.Debug("handshake: TLS not configured, dropping", "remote", remoteAddr)
 			return
 		}
@@ -144,11 +184,13 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 		// Handle fake TLS handshake
 		tlsConn, err := s.handleFakeTLSHandshake(conn, peekBuf[:])
 		if err != nil {
+			s.stats.HandshakeErrors.Add(1)
 			s.logger.Debug("handshake: fake TLS failed", "remote", remoteAddr, "err", err)
 			return
 		}
 		innerConn = tlsConn
 		isTLS = true
+		s.stats.TLSConnections.Add(1)
 	}
 
 	// Read the 64-byte obfuscated header
@@ -160,6 +202,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 		// We already read 3 bytes, prepend them
 		copy(fullHeader[:3], peekBuf[:])
 		if _, err := io.ReadFull(conn, fullHeader[3:]); err != nil {
+			s.stats.HandshakeErrors.Add(1)
 			s.logger.Debug("handshake: failed to read obfuscated header", "remote", remoteAddr, "err", err)
 			return
 		}
@@ -168,6 +211,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 
 	if headerReader != nil {
 		if _, err := io.ReadFull(headerReader, fullHeader[:]); err != nil {
+			s.stats.HandshakeErrors.Add(1)
 			s.logger.Debug("handshake: failed to read obfuscated header from TLS", "remote", remoteAddr, "err", err)
 			return
 		}
@@ -176,6 +220,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	// Decrypt header with configured secrets
 	parsed, err := mpcrypto.DecryptHeader(fullHeader, s.config.Secrets)
 	if err != nil {
+		s.stats.HandshakeErrors.Add(1)
 		s.logger.Debug("handshake: header decryption failed", "remote", remoteAddr, "err", err)
 		return
 	}
@@ -185,6 +230,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	dcID := int(parsed.DCID)
 	backendAddr, err := s.endpoints.Resolve(dcID)
 	if err != nil {
+		s.stats.HandshakeErrors.Add(1)
 		s.logger.Warn("no backend for DC", "dc_id", dcID, "remote", remoteAddr)
 		return
 	}
@@ -200,6 +246,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	// Dial backend via Outline
 	backendConn, err := s.dialer.DialStream(ctx, backendAddr)
 	if err != nil {
+		s.stats.BackendDialErrors.Add(1)
 		s.logger.Error("failed to dial backend", "backend", backendAddr, "dc_id", dcID, "err", err)
 		return
 	}
@@ -226,7 +273,8 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	go func() {
 		defer relayWg.Done()
 		sr := &cipher.StreamReader{S: parsed.Decrypt, R: clientReader}
-		_, err := io.Copy(backendConn, sr)
+		n, err := io.Copy(backendConn, sr)
+		s.stats.BytesClientToBackend.Add(n)
 		if err != nil {
 			s.logger.Debug("relay: client->backend done", "remote", remoteAddr, "err", err)
 		}
@@ -236,7 +284,8 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	go func() {
 		defer relayWg.Done()
 		sw := &cipher.StreamWriter{S: parsed.Encrypt, W: clientWriter}
-		_, err := io.Copy(sw, backendConn)
+		n, err := io.Copy(sw, backendConn)
+		s.stats.BytesBackendToClient.Add(n)
 		if err != nil {
 			s.logger.Debug("relay: backend->client done", "remote", remoteAddr, "err", err)
 		}
