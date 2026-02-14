@@ -247,9 +247,6 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("mtproxy: loading secrets file: %w", err)
 		}
 		cfg.MTProxy.Secrets = append(cfg.MTProxy.Secrets, fileSecrets...)
-		if len(cfg.MTProxy.Secrets) == 0 {
-			return nil, fmt.Errorf("mtproxy: at least one secret is required (inline or in secrets_file)")
-		}
 		if cfg.MTProxy.FakeTLS.MaxClockSkewSeconds == 0 {
 			cfg.MTProxy.FakeTLS.MaxClockSkewSeconds = 600
 		}
