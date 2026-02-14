@@ -20,6 +20,7 @@ type Config struct {
 	LogLevel    string                `yaml:"log_level"`
 	CacheDir    string                `yaml:"cache_dir"`
 	WireGuard   WireGuardConfig       `yaml:"wireguard"`
+	DNS         DNSConfig             `yaml:"dns"`
 	Outlines    []OutlineConfig       `yaml:"outlines"`
 	Routing     RoutingConfig         `yaml:"routing"`
 	GeoIP       []GeoIPConfig         `yaml:"geoip"`
@@ -34,6 +35,34 @@ type WireGuardConfig struct {
 	PublicAddress string `yaml:"public_address"`
 	MTU           int    `yaml:"mtu"`
 	DNS           string `yaml:"dns"`
+}
+
+type DNSConfig struct {
+	Enabled  bool                       `yaml:"enabled"`
+	Listen   string                     `yaml:"listen"`   // e.g. "10.100.0.1:53"
+	Upstream string                     `yaml:"upstream"` // default upstream e.g. "1.1.1.1:53"
+	Records  map[string]DNSRecordConfig `yaml:"records"`
+	Rules    []DNSRuleConfig            `yaml:"rules"`
+}
+
+type DNSRecordConfig struct {
+	A    []string `yaml:"a"`
+	AAAA []string `yaml:"aaaa"`
+	TTL  uint32   `yaml:"ttl"`
+}
+
+type DNSRuleConfig struct {
+	Name     string          `yaml:"name"`
+	Action   string          `yaml:"action"`   // "block" or "upstream"
+	Upstream string          `yaml:"upstream"` // for action=upstream
+	Domains  []string        `yaml:"domains"`  // glob patterns like "*.example.com"
+	Lists    []DNSListConfig `yaml:"lists"`    // URL-based blocklists
+}
+
+type DNSListConfig struct {
+	URL     string `yaml:"url"`
+	Format  string `yaml:"format"`  // "hosts" or "domains" (default: "domains")
+	Refresh int    `yaml:"refresh"` // seconds, default 86400
 }
 
 type PeerConfig struct {
@@ -106,6 +135,23 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.WireGuard.DNS == "" {
 		cfg.WireGuard.DNS = "1.1.1.1"
+	}
+	if cfg.DNS.Enabled {
+		if cfg.DNS.Listen == "" {
+			addr, _, err := cfg.WireGuard.ParseAddress()
+			if err != nil {
+				return nil, fmt.Errorf("parsing wireguard address for dns listen default: %w", err)
+			}
+			cfg.DNS.Listen = addr.String() + ":53"
+		}
+		if cfg.DNS.Upstream == "" {
+			cfg.DNS.Upstream = cfg.WireGuard.DNS
+		}
+		if !strings.Contains(cfg.DNS.Upstream, ":") {
+			cfg.DNS.Upstream = cfg.DNS.Upstream + ":53"
+		}
+		listenHost, _, _ := strings.Cut(cfg.DNS.Listen, ":")
+		cfg.WireGuard.DNS = listenHost
 	}
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"

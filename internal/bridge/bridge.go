@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
+	"github.com/blikh/wireguard-outline-bridge/internal/dns"
 	"github.com/blikh/wireguard-outline-bridge/internal/geoip"
 	"github.com/blikh/wireguard-outline-bridge/internal/outline"
 	"github.com/blikh/wireguard-outline-bridge/internal/proxy"
@@ -121,6 +122,16 @@ func (b *Bridge) Run(ctx context.Context) error {
 	udpProxy.SetupForwarder(tunDev.Stack)
 
 	b.logger.Info("proxies configured on gVisor stack")
+
+	if b.cfg.DNS.Enabled {
+		records := buildDNSRecords(b.cfg.DNS)
+		rules := buildDNSRules(b.cfg.DNS, b.logger)
+		dnsServer := dns.New(b.cfg.DNS.Listen, b.cfg.DNS.Upstream, records, rules, b.logger)
+		if err := dnsServer.Start(ctx); err != nil {
+			return fmt.Errorf("starting dns server: %w", err)
+		}
+		defer dnsServer.Stop()
+	}
 
 	wgLogger := newWireGuardLogger(b.logger, b.cfg.ParseLogLevel())
 	b.wgDev = device.NewDevice(tunDev, conn.NewDefaultBind(), wgLogger)
@@ -288,4 +299,66 @@ func newWireGuardLogger(logger *slog.Logger, level slog.Level) *device.Logger {
 		}
 	}
 	return l
+}
+
+func buildDNSRules(cfg config.DNSConfig, logger *slog.Logger) []dns.Rule {
+	rules := make([]dns.Rule, 0, len(cfg.Rules))
+	for _, rc := range cfg.Rules {
+		rule := dns.Rule{
+			Name:     rc.Name,
+			Action:   rc.Action,
+			Upstream: rc.Upstream,
+		}
+		if rule.Action == "upstream" && !strings.Contains(rule.Upstream, ":") {
+			rule.Upstream += ":53"
+		}
+		for _, d := range rc.Domains {
+			rule.Patterns = append(rule.Patterns, dns.ParseDomainPattern(d))
+		}
+		if len(rc.Lists) > 0 {
+			var lists []dns.ListEntry
+			for _, l := range rc.Lists {
+				refresh := time.Duration(l.Refresh) * time.Second
+				if refresh == 0 {
+					refresh = 86400 * time.Second
+				}
+				format := l.Format
+				if format == "" {
+					format = "domains"
+				}
+				lists = append(lists, dns.ListEntry{
+					URL:     l.URL,
+					Format:  format,
+					Refresh: refresh,
+				})
+			}
+			rule.Blocklist = dns.NewBlocklistLoader(lists, logger)
+		}
+		rules = append(rules, rule)
+	}
+	return rules
+}
+
+func buildDNSRecords(cfg config.DNSConfig) map[string]dns.Record {
+	records := make(map[string]dns.Record, len(cfg.Records))
+	for name, rc := range cfg.Records {
+		fqdn := strings.ToLower(name)
+		if !strings.HasSuffix(fqdn, ".") {
+			fqdn += "."
+		}
+		var rec dns.Record
+		rec.TTL = rc.TTL
+		for _, s := range rc.A {
+			if addr, err := netip.ParseAddr(s); err == nil {
+				rec.A = append(rec.A, addr)
+			}
+		}
+		for _, s := range rc.AAAA {
+			if addr, err := netip.ParseAddr(s); err == nil {
+				rec.AAAA = append(rec.AAAA, addr)
+			}
+		}
+		records[fqdn] = rec
+	}
+	return records
 }

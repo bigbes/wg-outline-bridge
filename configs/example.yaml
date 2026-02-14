@@ -10,6 +10,34 @@ wireguard:
   mtu: 1420
   dns: "1.1.1.1"
 
+# dns:                         # Built-in DNS proxy server
+#   enabled: true
+#   listen: "10.100.0.1:53"    # defaults to wireguard address :53
+#   upstream: "1.1.1.1:53"     # defaults to wireguard dns :53
+#   records:                   # static local records (highest priority)
+#     myhost.internal:
+#       a: ["10.100.0.10"]
+#       ttl: 60
+#   rules:                     # evaluated in order, first match wins
+#     - name: "ads"
+#       action: block
+#       lists:
+#         - url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
+#           format: hosts
+#           refresh: 86400
+#         - url: "https://big.oisd.nl/domainswild2"
+#           format: domains
+#     - name: "ru-direct-dns"
+#       action: upstream
+#       upstream: "77.88.8.8:53"
+#       domains:
+#         - "*.ru"
+#         - "*.yandex.com"
+#     - name: "custom-block"
+#       action: block
+#       domains:
+#         - "telemetry.example.com"
+
 outlines:
   - name: "default"
     transport: "ss://CHANGE_ME"
