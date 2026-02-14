@@ -244,6 +244,31 @@ This reloads peers (add/remove) and swaps the default Outline client if its tran
 | `watch` | Run with auto-restart on binary update |
 | `init` | Generate a new server config with fresh keys |
 | `genkeys` | Generate a client keypair and add to config |
+| `gensecret` | Generate a new MTProxy secret and save to secrets file |
+
+### MTProxy Secrets File
+
+MTProxy secrets can be stored in an external file (default: `mtproxy.secrets` next to your config). Generate new secrets with `gensecret`:
+
+```bash
+./main gensecret -config configs/bridge.yaml       # standard secret
+./main gensecret -config configs/bridge.yaml -dd   # dd-prefix (padding mode)
+```
+
+The file supports two comment styles:
+
+```
+# Line comment — everything from # to end of line
+dd0123456789abcdef0123456789abcdef  # inline comment after a secret
+
+#~ Block comment:
+   everything between #~ and ~# is ignored,
+   can span multiple lines ~#
+
+ee0123456789abcdef0123456789abcdef
+```
+
+Secrets from the file are merged with any inline `secrets:` in the YAML config. The file path can be customized with `mtproxy.secrets_file` in the config.
 
 ## Project Structure
 

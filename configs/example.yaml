@@ -43,8 +43,9 @@ wireguard:
 #   listen:
 #     - "0.0.0.0:443"
 #   outline: "default"         # which outline to use for backend connections
-#   secrets:                   # 16-byte hex secrets (32 chars; optional dd/ee prefix)
+#   secrets:                   # inline 16-byte hex secrets (32 chars; optional dd/ee prefix)
 #     - "dd0123456789abcdef0123456789abcdef"
+#   secrets_file: "configs/mtproxy.secrets"  # file with one secret per line (default: <config_dir>/mtproxy.secrets)
 #   fake_tls:                  # fake TLS handshake for censorship resistance
 #     enabled: false
 #     max_clock_skew_seconds: 600

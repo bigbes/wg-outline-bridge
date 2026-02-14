@@ -122,12 +122,13 @@ type GeoIPConfig struct {
 }
 
 type MTProxyConfig struct {
-	Enabled   bool              `yaml:"enabled"`
-	Listen    []string          `yaml:"listen"`
-	Outline   string            `yaml:"outline"`
-	Secrets   []string          `yaml:"secrets"`
-	FakeTLS   FakeTLSConfig     `yaml:"fake_tls"`
-	Endpoints map[int][]string  `yaml:"endpoints"`
+	Enabled     bool              `yaml:"enabled"`
+	Listen      []string          `yaml:"listen"`
+	Outline     string            `yaml:"outline"`
+	Secrets     []string          `yaml:"secrets"`
+	SecretsFile string            `yaml:"secrets_file"`
+	FakeTLS     FakeTLSConfig     `yaml:"fake_tls"`
+	Endpoints   map[int][]string  `yaml:"endpoints"`
 }
 
 type FakeTLSConfig struct {
@@ -237,8 +238,16 @@ func Load(path string) (*Config, error) {
 		if len(cfg.MTProxy.Listen) == 0 {
 			return nil, fmt.Errorf("mtproxy: at least one listen address is required")
 		}
+		if cfg.MTProxy.SecretsFile == "" {
+			cfg.MTProxy.SecretsFile = filepath.Join(filepath.Dir(path), "mtproxy.secrets")
+		}
+		fileSecrets, err := LoadSecretsFile(cfg.MTProxy.SecretsFile)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("mtproxy: loading secrets file: %w", err)
+		}
+		cfg.MTProxy.Secrets = append(cfg.MTProxy.Secrets, fileSecrets...)
 		if len(cfg.MTProxy.Secrets) == 0 {
-			return nil, fmt.Errorf("mtproxy: at least one secret is required")
+			return nil, fmt.Errorf("mtproxy: at least one secret is required (inline or in secrets_file)")
 		}
 		if cfg.MTProxy.FakeTLS.MaxClockSkewSeconds == 0 {
 			cfg.MTProxy.FakeTLS.MaxClockSkewSeconds = 600
@@ -548,4 +557,61 @@ func (c *WireGuardConfig) ToUAPI(peers map[string]PeerConfig) (string, error) {
 	}
 
 	return b.String(), nil
+}
+
+// LoadSecretsFile reads secrets from a file, one per line.
+// Supports line comments (# to end of line) and block comments (#~ to ~#).
+func LoadSecretsFile(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	text := stripBlockComments(string(data))
+
+	var secrets []string
+	for _, line := range strings.Split(text, "\n") {
+		if i := strings.Index(line, "#"); i >= 0 {
+			line = line[:i]
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		secrets = append(secrets, line)
+	}
+	return secrets, nil
+}
+
+// stripBlockComments removes all #~ ... ~# regions from text.
+func stripBlockComments(text string) string {
+	var b strings.Builder
+	for {
+		start := strings.Index(text, "#~")
+		if start < 0 {
+			b.WriteString(text)
+			break
+		}
+		b.WriteString(text[:start])
+		end := strings.Index(text[start+2:], "~#")
+		if end < 0 {
+			// Unterminated block comment: treat rest as comment.
+			break
+		}
+		text = text[start+2+end+2:]
+	}
+	return b.String()
+}
+
+// AppendSecret appends a secret line to the given file, creating it if needed.
+func AppendSecret(path, secret string) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("opening secrets file: %w", err)
+	}
+	defer f.Close()
+	if _, err := fmt.Fprintln(f, secret); err != nil {
+		return fmt.Errorf("writing secret: %w", err)
+	}
+	return nil
 }
