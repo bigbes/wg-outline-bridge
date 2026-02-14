@@ -61,6 +61,8 @@ type peerStatus struct {
 	publicKeyHex      string
 	lastHandshakeSec  int64
 	lastHandshakeNsec int64
+	rxBytes           int64
+	txBytes           int64
 }
 
 func (m *peerMonitor) check() {

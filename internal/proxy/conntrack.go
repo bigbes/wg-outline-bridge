@@ -37,6 +37,13 @@ func (t *ConnTracker) Untrack(src netip.Addr, c io.Closer) {
 	}
 }
 
+// CountBySource returns the number of active connections for a given source address.
+func (t *ConnTracker) CountBySource(src netip.Addr) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.conns[src])
+}
+
 func (t *ConnTracker) CloseBySource(src netip.Addr) int {
 	t.mu.Lock()
 	m, ok := t.conns[src]

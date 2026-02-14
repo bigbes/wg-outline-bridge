@@ -53,6 +53,12 @@ wireguard:
 #     1: ["149.154.175.50:443"]
 #     2: ["149.154.167.51:443"]
 
+# telegram:                     # Telegram bot for observation & commands
+#   enabled: true
+#   token: "123456:ABC-DEF..."   # Bot API token from @BotFather
+#   chat_id: -1001234567890      # (optional) Chat ID for periodic status push
+#   interval: 300                # Status push interval in seconds (default: 300)
+
 outlines:
   - name: "default"
     transport: "ss://CHANGE_ME"

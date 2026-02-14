@@ -1,11 +1,13 @@
 package bridge
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
 	"net/netip"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,9 +18,11 @@ import (
 	"github.com/blikh/wireguard-outline-bridge/internal/mtproxy"
 	mpcrypto "github.com/blikh/wireguard-outline-bridge/internal/mtproxy/crypto"
 	"github.com/blikh/wireguard-outline-bridge/internal/mtproxy/telegram"
+	"github.com/blikh/wireguard-outline-bridge/internal/observer"
 	"github.com/blikh/wireguard-outline-bridge/internal/outline"
 	"github.com/blikh/wireguard-outline-bridge/internal/proxy"
 	"github.com/blikh/wireguard-outline-bridge/internal/routing"
+	tgbot "github.com/blikh/wireguard-outline-bridge/internal/telegram"
 	wg "github.com/blikh/wireguard-outline-bridge/internal/wireguard"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
@@ -166,6 +170,13 @@ func (b *Bridge) Run(ctx context.Context) error {
 	// b.peerMon = newPeerMonitor(b.wgDev, b.cfg.Peers, b.logger)
 	// go b.peerMon.run(ctx)
 
+	if b.cfg.Telegram.Enabled {
+		bot := tgbot.NewBot(b.cfg.Telegram.Token, b.cfg.Telegram.ChatID)
+		obs := observer.New(bot, b, time.Duration(b.cfg.Telegram.Interval)*time.Second, b.cfg.Telegram.ChatID, b.logger)
+		go obs.Run(ctx)
+		b.logger.Info("telegram observer started", "interval", b.cfg.Telegram.Interval)
+	}
+
 	b.logger.Info("bridge running",
 		"wg_address", addr.String(),
 		"wg_port", b.cfg.WireGuard.ListenPort,
@@ -292,6 +303,95 @@ func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) err
 
 	b.logger.Info("mtproxy server started", "listen", b.cfg.MTProxy.Listen, "secrets", len(secrets), "fake_tls", b.cfg.MTProxy.FakeTLS.Enabled)
 	return nil
+}
+
+// PeerStatuses implements observer.StatusProvider.
+func (b *Bridge) PeerStatuses() []observer.PeerStatus {
+	b.mu.Lock()
+	peers := b.cfg.Peers
+	b.mu.Unlock()
+
+	statuses := b.getPeerStatuses()
+	statusMap := make(map[string]peerStatus, len(statuses))
+	for _, st := range statuses {
+		pubB64 := hexToBase64(st.publicKeyHex)
+		statusMap[pubB64] = st
+	}
+
+	var result []observer.PeerStatus
+	for name, peer := range peers {
+		if peer.Disabled {
+			continue
+		}
+		ps := observer.PeerStatus{
+			Name:      name,
+			PublicKey: peer.PublicKey,
+		}
+		if st, ok := statusMap[peer.PublicKey]; ok {
+			if st.lastHandshakeSec > 0 {
+				ps.LastHandshake = time.Unix(st.lastHandshakeSec, st.lastHandshakeNsec)
+			}
+			ps.RxBytes = st.rxBytes
+			ps.TxBytes = st.txBytes
+		}
+		peerIPs := peerAllowedIPs(peer)
+		for _, ip := range peerIPs {
+			ps.ActiveConnections += b.tracker.CountBySource(ip)
+		}
+		result = append(result, ps)
+	}
+	return result
+}
+
+// getPeerStatuses reads peer status from the WireGuard device via IPC.
+func (b *Bridge) getPeerStatuses() []peerStatus {
+	if b.wgDev == nil {
+		return nil
+	}
+	ipcStr, err := b.wgDev.IpcGet()
+	if err != nil {
+		b.logger.Error("failed to get IPC status", "err", err)
+		return nil
+	}
+
+	var statuses []peerStatus
+	var current *peerStatus
+
+	scanner := bufio.NewScanner(strings.NewReader(ipcStr))
+	for scanner.Scan() {
+		line := scanner.Text()
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "public_key":
+			if current != nil {
+				statuses = append(statuses, *current)
+			}
+			current = &peerStatus{publicKeyHex: value}
+		case "last_handshake_time_sec":
+			if current != nil {
+				current.lastHandshakeSec, _ = strconv.ParseInt(value, 10, 64)
+			}
+		case "last_handshake_time_nsec":
+			if current != nil {
+				current.lastHandshakeNsec, _ = strconv.ParseInt(value, 10, 64)
+			}
+		case "rx_bytes":
+			if current != nil {
+				current.rxBytes, _ = strconv.ParseInt(value, 10, 64)
+			}
+		case "tx_bytes":
+			if current != nil {
+				current.txBytes, _ = strconv.ParseInt(value, 10, 64)
+			}
+		}
+	}
+	if current != nil {
+		statuses = append(statuses, *current)
+	}
+	return statuses
 }
 
 func peerAllowedIPs(peer config.PeerConfig) []netip.Addr {

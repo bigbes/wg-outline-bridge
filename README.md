@@ -179,6 +179,53 @@ routing:
 | `outline` | Route through a named outline (specify `outline: "name"`) |
 | `default` | Use the default outline (same as no rule matching) |
 
+## Telegram Bot
+
+The bridge can be monitored via a Telegram bot. It supports two modes that can be used independently or together:
+
+- **Interactive commands** — send commands directly to the bot from any chat
+- **Push notifications** — periodic status updates sent to a configured chat (requires `chat_id`)
+
+### Setup
+
+1. Create a bot via [@BotFather](https://t.me/BotFather) and copy the API token
+2. Add to your config:
+
+```yaml
+telegram:
+  enabled: true
+  token: "123456:ABC-DEF..."
+  # chat_id: -1001234567890   # optional: enables periodic push notifications
+  # interval: 300             # push interval in seconds (default: 300)
+```
+
+If `chat_id` is omitted, the bot only responds to direct commands — no push notifications are sent.
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `/status` | Show peer status, traffic, and active connections |
+| `/help` | List available commands |
+
+### Status Output
+
+```
+📊 Bridge Status
+
+🟢 alice
+  Handshake: 45s ago
+  Traffic: ↓12.3 MB ↑1.2 MB
+  Connections: 3
+
+🟡 bob
+  Handshake: 5m30s ago
+  Traffic: ↓45.6 MB ↑8.9 MB
+  Connections: 0
+```
+
+Indicators: 🟢 active (handshake < 3 min), 🟡 stale, ⚪ never connected.
+
 ## Live Reload
 
 Send `SIGHUP` to reload configuration without restarting:
@@ -207,9 +254,11 @@ cmd/bridge/
 internal/
   bridge/               Core bridge orchestration
   config/               YAML config loading, validation, CIDR utilities
+  observer/             Telegram bot observer (status push & command handling)
   outline/              Outline SDK client wrapper
   proxy/                TCP/UDP proxy with gVisor, SNI parser, routing integration
   routing/              IP/SNI routing engine, IP list downloader
+  telegram/             Telegram Bot API client
   wireguard/            gVisor netstack TUN device
 ```
 

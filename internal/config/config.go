@@ -22,6 +22,7 @@ type Config struct {
 	WireGuard   WireGuardConfig       `yaml:"wireguard"`
 	DNS         DNSConfig             `yaml:"dns"`
 	MTProxy     MTProxyConfig         `yaml:"mtproxy"`
+	Telegram    TelegramConfig        `yaml:"telegram"`
 	Outlines    []OutlineConfig       `yaml:"outlines"`
 	Routing     RoutingConfig         `yaml:"routing"`
 	GeoIP       []GeoIPConfig         `yaml:"geoip"`
@@ -135,6 +136,13 @@ type FakeTLSConfig struct {
 	ReplayCacheTTLHours int  `yaml:"replay_cache_ttl_hours"`
 }
 
+type TelegramConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Token    string `yaml:"token"`
+	ChatID   int64  `yaml:"chat_id"`
+	Interval int    `yaml:"interval"` // status report interval in seconds
+}
+
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -237,6 +245,15 @@ func Load(path string) (*Config, error) {
 		}
 		if cfg.MTProxy.FakeTLS.ReplayCacheTTLHours == 0 {
 			cfg.MTProxy.FakeTLS.ReplayCacheTTLHours = 48
+		}
+	}
+
+	if cfg.Telegram.Enabled {
+		if cfg.Telegram.Token == "" {
+			return nil, fmt.Errorf("telegram: token is required")
+		}
+		if cfg.Telegram.Interval == 0 {
+			cfg.Telegram.Interval = 300
 		}
 	}
 
