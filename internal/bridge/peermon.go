@@ -15,10 +15,16 @@ import (
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
 )
 
-const (
-	peerMonitorInterval   = 10 * time.Second
-	peerHandshakeTimeout  = 30 * time.Second // remove peer after no handshake for this long
-)
+const peerMonitorInterval = 10 * time.Second
+
+// peerStatus holds parsed UAPI status for a single peer.
+type peerStatus struct {
+	publicKeyHex      string
+	lastHandshakeSec  int64
+	lastHandshakeNsec int64
+	rxBytes           int64
+	txBytes           int64
+}
 
 type peerMonitor struct {
 	dev    *device.Device
@@ -26,10 +32,7 @@ type peerMonitor struct {
 	logger *slog.Logger
 
 	// lastGoodHandshake tracks when each peer (by public key) last had a valid handshake.
-	// Zero time means the peer has never completed a handshake.
 	lastGoodHandshake map[string]time.Time
-	// removed tracks peers that have been removed due to stale handshakes.
-	removed map[string]bool
 }
 
 func newPeerMonitor(dev *device.Device, peers map[string]config.PeerConfig, logger *slog.Logger) *peerMonitor {
@@ -38,7 +41,6 @@ func newPeerMonitor(dev *device.Device, peers map[string]config.PeerConfig, logg
 		peers:             peers,
 		logger:            logger,
 		lastGoodHandshake: make(map[string]time.Time),
-		removed:           make(map[string]bool),
 	}
 }
 
@@ -56,18 +58,8 @@ func (m *peerMonitor) run(ctx context.Context) {
 	}
 }
 
-// peerStatus holds parsed UAPI status for a single peer.
-type peerStatus struct {
-	publicKeyHex      string
-	lastHandshakeSec  int64
-	lastHandshakeNsec int64
-	rxBytes           int64
-	txBytes           int64
-}
-
 func (m *peerMonitor) check() {
 	statuses := m.getPeerStatuses()
-	now := time.Now()
 
 	for _, st := range statuses {
 		pubB64 := hexToBase64(st.publicKeyHex)
@@ -77,36 +69,21 @@ func (m *peerMonitor) check() {
 			hsTime = time.Time{}
 		}
 
-		// Update lastGoodHandshake if we see a valid (non-zero) handshake time.
+		prev, known := m.lastGoodHandshake[pubB64]
+
 		if !hsTime.IsZero() {
 			m.lastGoodHandshake[pubB64] = hsTime
 		}
 
-		lastGood, known := m.lastGoodHandshake[pubB64]
-		if !known {
-			// Peer has never completed a handshake; nothing to reap yet.
-			continue
-		}
-
-		staleDuration := now.Sub(lastGood)
-		if staleDuration > peerHandshakeTimeout && !m.removed[pubB64] {
-			m.logger.Info("peer monitor: removing stale peer",
+		// Log when a peer completes its first handshake or reconnects after being stale.
+		if !hsTime.IsZero() && (!known || hsTime.After(prev)) {
+			name := m.peerName(pubB64)
+			m.logger.Info("peer monitor: handshake",
+				"name", name,
 				"public_key", pubB64,
-				"last_handshake", lastGood.Format(time.RFC3339),
-				"stale_for", staleDuration.Round(time.Second).String(),
+				"last_handshake", hsTime.Format(time.RFC3339),
 			)
-			m.removePeer(pubB64)
-			m.removed[pubB64] = true
 		}
-	}
-
-	// Re-add removed peers so they can accept incoming handshakes.
-	// This is done on every tick: the peer is re-added with no endpoint,
-	// so WireGuard won't initiate outgoing handshakes but will respond
-	// to incoming ones from the client.
-	for pubB64 := range m.removed {
-		m.readdPeer(pubB64)
-		delete(m.removed, pubB64)
 	}
 }
 
@@ -141,6 +118,14 @@ func (m *peerMonitor) getPeerStatuses() []peerStatus {
 			if current != nil {
 				current.lastHandshakeNsec, _ = strconv.ParseInt(value, 10, 64)
 			}
+		case "rx_bytes":
+			if current != nil {
+				current.rxBytes, _ = strconv.ParseInt(value, 10, 64)
+			}
+		case "tx_bytes":
+			if current != nil {
+				current.txBytes, _ = strconv.ParseInt(value, 10, 64)
+			}
 		}
 	}
 	if current != nil {
@@ -149,34 +134,13 @@ func (m *peerMonitor) getPeerStatuses() []peerStatus {
 	return statuses
 }
 
-func (m *peerMonitor) removePeer(pubB64 string) {
-	uapi, err := config.PeerUAPIRemove(pubB64)
-	if err != nil {
-		m.logger.Error("peer monitor: failed to generate remove UAPI", "public_key", pubB64, "err", err)
-		return
-	}
-	if err := m.dev.IpcSet(uapi); err != nil {
-		m.logger.Error("peer monitor: failed to remove peer", "public_key", pubB64, "err", err)
-	}
-}
-
-func (m *peerMonitor) readdPeer(pubB64 string) {
+func (m *peerMonitor) peerName(pubB64 string) string {
 	for name, peer := range m.peers {
 		if peer.PublicKey == pubB64 {
-			uapi, err := config.PeerUAPIAdd(peer)
-			if err != nil {
-				m.logger.Error("peer monitor: failed to generate add UAPI", "name", name, "err", err)
-				return
-			}
-			if err := m.dev.IpcSet(uapi); err != nil {
-				m.logger.Error("peer monitor: failed to re-add peer", "name", name, "err", err)
-			}
-			m.logger.Info("peer monitor: re-added stale peer (will accept incoming handshakes)",
-				"name", name,
-			)
-			return
+			return name
 		}
 	}
+	return pubB64[:8] + "..."
 }
 
 func (m *peerMonitor) updatePeers(peers map[string]config.PeerConfig) {

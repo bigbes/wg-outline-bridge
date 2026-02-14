@@ -166,9 +166,8 @@ func (b *Bridge) Run(ctx context.Context) error {
 		return fmt.Errorf("bringing up wireguard: %w", err)
 	}
 
-	// TODO: peer monitor disabled for now
-	// b.peerMon = newPeerMonitor(b.wgDev, b.cfg.Peers, b.logger)
-	// go b.peerMon.run(ctx)
+	b.peerMon = newPeerMonitor(b.wgDev, b.cfg.Peers, b.logger)
+	go b.peerMon.run(ctx)
 
 	if b.cfg.Telegram.Enabled {
 		bot := tgbot.NewBot(b.cfg.Telegram.Token, b.cfg.Telegram.ChatID)
@@ -252,10 +251,9 @@ func (b *Bridge) Reload() error {
 	}
 
 	b.cfg = newCfg
-	// TODO: peer monitor disabled for now
-	// if b.peerMon != nil {
-	// 	b.peerMon.updatePeers(newCfg.Peers)
-	// }
+	if b.peerMon != nil {
+		b.peerMon.updatePeers(newCfg.Peers)
+	}
 
 	b.logger.Info("configuration reloaded",
 		"peers_added", len(diff.Added),
