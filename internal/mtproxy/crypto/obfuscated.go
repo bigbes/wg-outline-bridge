@@ -3,6 +3,7 @@ package crypto
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
@@ -165,4 +166,85 @@ func tryDecryptHeader(header [64]byte, secret Secret) (*ObfuscatedHeader, error)
 		Encrypt: writeStream,
 		Decrypt: readStream, // continues from position 64
 	}, nil
+}
+
+// GenerateHeader creates a new 64-byte obfuscated2 header for a backend connection
+// (no secret involved). Returns the header to send, plus encrypt/decrypt streams
+// for the backend leg.
+//
+// The receiver (Telegram DC) derives keys from the wire bytes, so we:
+//  1. Generate random bytes for header[0:56] (these go on the wire as-is)
+//  2. Derive key/IV from those wire bytes
+//  3. Construct header[56:64] by XORing tag/dcID with the keystream at offset 56
+//
+// Encrypt: used to encrypt data sent to the backend (continues from position 64).
+// Decrypt: used to decrypt data received from the backend (starts at position 0).
+func GenerateHeader(tag uint32, dcID int16) (header [64]byte, encrypt cipher.Stream, decrypt cipher.Stream, err error) {
+	for {
+		if _, err = rand.Read(header[:56]); err != nil {
+			return header, nil, nil, fmt.Errorf("generating random header: %w", err)
+		}
+
+		// Ensure first bytes don't look like known protocols
+		first := header[0]
+		if first == 0xef || first == 0x48 || first == 0x44 ||
+			first == 0x50 || first == 0x47 || first == 0x16 || first == 0x14 {
+			continue
+		}
+		first4 := binary.LittleEndian.Uint32(header[:4])
+		if first4 == 0x00000000 || first4 == TagCompact || first4 == TagMedium || first4 == TagMediumPadded {
+			continue
+		}
+		break
+	}
+
+	// Derive encrypt key from wire bytes: SHA256(header[8:40]), IV = header[40:56]
+	encKey := sha256.Sum256(header[8:40])
+	var encIV [16]byte
+	copy(encIV[:], header[40:56])
+
+	encBlock, err := aes.NewCipher(encKey[:])
+	if err != nil {
+		return header, nil, nil, fmt.Errorf("creating encrypt cipher: %w", err)
+	}
+	encStream := cipher.NewCTR(encBlock, encIV[:])
+
+	// Advance the encrypt stream by 56 bytes to reach the tag position
+	var skip [56]byte
+	encStream.XORKeyStream(skip[:], skip[:])
+
+	// Construct the plaintext for positions 56-63: tag(4) + dcID(2) + padding(2)
+	var plain [8]byte
+	binary.LittleEndian.PutUint32(plain[0:4], tag)
+	binary.LittleEndian.PutUint16(plain[4:6], uint16(dcID))
+	// plain[6:8] stays zero (padding)
+
+	// XOR with keystream to produce wire bytes at header[56:64]
+	encStream.XORKeyStream(header[56:], plain[:])
+
+	// encStream is now at position 64, ready for payload
+
+	// Ensure the final header[0:4] still passes the first-byte checks after
+	// we set [56:64]. Re-check first4 against encrypted tag values — but
+	// header[0:56] is unchanged, so no re-check needed.
+
+	// Derive decrypt key (for data we receive): SHA256(reverse(header[24:56])),
+	// IV = reverse(header[8:24])
+	var decKeyInput [32]byte
+	for i := 0; i < 32; i++ {
+		decKeyInput[i] = header[55-i]
+	}
+	decKey := sha256.Sum256(decKeyInput[:])
+	var decIV [16]byte
+	for i := 0; i < 16; i++ {
+		decIV[i] = header[23-i]
+	}
+
+	decBlock, err := aes.NewCipher(decKey[:])
+	if err != nil {
+		return header, nil, nil, fmt.Errorf("creating decrypt cipher: %w", err)
+	}
+	decStream := cipher.NewCTR(decBlock, decIV[:])
+
+	return header, encStream, decStream, nil
 }

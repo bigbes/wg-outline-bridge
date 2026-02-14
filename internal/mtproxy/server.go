@@ -83,8 +83,8 @@ func NewServer(config ServerConfig, dialer StreamDialer, endpoints *telegram.End
 	}
 }
 
-// Start begins listening on all configured addresses. Blocks until ctx is cancelled.
-func (s *Server) Start(ctx context.Context) error {
+// Listen binds all configured addresses. Call Serve to start accepting connections.
+func (s *Server) Listen() error {
 	for _, addr := range s.config.ListenAddrs {
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -93,7 +93,14 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 		s.listeners = append(s.listeners, ln)
 		s.logger.Info("listening", "addr", addr)
+	}
+	return nil
+}
 
+// Serve starts accepting connections on all listeners. Blocks until ctx is cancelled.
+// Listen must be called first.
+func (s *Server) Serve(ctx context.Context) {
+	for _, ln := range s.listeners {
 		s.wg.Add(1)
 		go func(ln net.Listener) {
 			defer s.wg.Done()
@@ -108,7 +115,6 @@ func (s *Server) Start(ctx context.Context) error {
 	<-ctx.Done()
 	s.closeListeners()
 	s.wg.Wait()
-	return nil
 }
 
 func (s *Server) closeListeners() {
@@ -252,9 +258,24 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	}
 	defer backendConn.Close()
 
-	// Bidirectional relay with AES-CTR encryption/decryption
-	// Client -> Backend: decrypt with parsed.Decrypt
-	// Backend -> Client: encrypt with parsed.Encrypt
+	// Send transport preamble to the backend (plaintext, no obfuscation)
+	var preamble []byte
+	switch parsed.Tag {
+	case mpcrypto.TagCompact:
+		preamble = []byte{0xef}
+	case mpcrypto.TagMedium:
+		preamble = []byte{0xee, 0xee, 0xee, 0xee}
+	case mpcrypto.TagMediumPadded:
+		preamble = []byte{0xdd, 0xdd, 0xdd, 0xdd}
+	}
+	if _, err := backendConn.Write(preamble); err != nil {
+		s.logger.Error("failed to send backend preamble", "backend", backendAddr, "err", err)
+		return
+	}
+
+	// Bidirectional relay:
+	// Client -> Backend: decrypt from client, send plaintext to backend
+	// Backend -> Client: read plaintext from backend, encrypt for client
 	var relayWg sync.WaitGroup
 	relayWg.Add(2)
 
@@ -269,30 +290,45 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 		clientWriter = conn
 	}
 
-	// Client -> Backend (decrypt incoming)
+	var bytesUp, bytesDown int64
+	var closeReason string
+
+	// Client -> Backend (decrypt from client, forward plaintext)
 	go func() {
 		defer relayWg.Done()
 		sr := &cipher.StreamReader{S: parsed.Decrypt, R: clientReader}
 		n, err := io.Copy(backendConn, sr)
-		s.stats.BytesClientToBackend.Add(n)
+		bytesUp = n
 		if err != nil {
-			s.logger.Debug("relay: client->backend done", "remote", remoteAddr, "err", err)
+			closeReason = fmt.Sprintf("client->backend: %v", err)
+		} else {
+			closeReason = "client EOF"
 		}
 	}()
 
-	// Backend -> Client (encrypt outgoing)
+	// Backend -> Client (read plaintext, encrypt for client)
 	go func() {
 		defer relayWg.Done()
 		sw := &cipher.StreamWriter{S: parsed.Encrypt, W: clientWriter}
 		n, err := io.Copy(sw, backendConn)
-		s.stats.BytesBackendToClient.Add(n)
+		bytesDown = n
 		if err != nil {
-			s.logger.Debug("relay: backend->client done", "remote", remoteAddr, "err", err)
+			closeReason = fmt.Sprintf("backend->client: %v", err)
+		} else {
+			closeReason = "backend EOF"
 		}
 	}()
 
 	relayWg.Wait()
-	s.logger.Debug("connection closed", "remote", remoteAddr, "dc_id", dcID)
+	s.stats.BytesClientToBackend.Add(bytesUp)
+	s.stats.BytesBackendToClient.Add(bytesDown)
+	s.logger.Debug("connection closed",
+		"remote", remoteAddr,
+		"dc_id", dcID,
+		"up", bytesUp,
+		"down", bytesDown,
+		"reason", closeReason,
+	)
 }
 
 // handleFakeTLSHandshake processes the TLS ClientHello and sends ServerHello.

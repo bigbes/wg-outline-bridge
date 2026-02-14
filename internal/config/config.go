@@ -134,9 +134,10 @@ type MTProxyConfig struct {
 }
 
 type FakeTLSConfig struct {
-	Enabled             bool `yaml:"enabled"`
-	MaxClockSkewSeconds int  `yaml:"max_clock_skew_seconds"`
-	ReplayCacheTTLHours int  `yaml:"replay_cache_ttl_hours"`
+	Enabled             bool     `yaml:"enabled"`
+	SNI                 []string `yaml:"sni"`
+	MaxClockSkewSeconds int      `yaml:"max_clock_skew_seconds"`
+	ReplayCacheTTLHours int      `yaml:"replay_cache_ttl_hours"`
 }
 
 type TelegramConfig struct {
@@ -621,7 +622,17 @@ func ProxyLinks(cfg *Config) []string {
 
 	links := make([]string, 0, len(cfg.MTProxy.Secrets))
 	for _, secret := range cfg.MTProxy.Secrets {
-		link := fmt.Sprintf("https://t.me/proxy?server=%s&port=%s&secret=%s", serverIP, port, secret)
+		linkSecret := secret
+		if cfg.MTProxy.FakeTLS.Enabled && len(cfg.MTProxy.FakeTLS.SNI) > 0 {
+			// For fake TLS, the client secret is: ee + raw_secret_hex + hex(sni)
+			// Strip any dd/ee prefix to get the raw 32-char hex secret
+			raw := secret
+			if len(raw) == 34 && (raw[:2] == "dd" || raw[:2] == "ee") {
+				raw = raw[2:]
+			}
+			linkSecret = "ee" + raw + hex.EncodeToString([]byte(cfg.MTProxy.FakeTLS.SNI[0]))
+		}
+		link := fmt.Sprintf("https://t.me/proxy?server=%s&port=%s&secret=%s", serverIP, port, linkSecret)
 		links = append(links, link)
 	}
 	return links

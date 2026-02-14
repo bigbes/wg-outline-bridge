@@ -49,6 +49,9 @@ wireguard:
 #   stats_addr: "127.0.0.1:8080"  # HTTP stats endpoint (localhost-only, GET /stats)
 #   fake_tls:                  # fake TLS handshake for censorship resistance
 #     enabled: false
+#     sni:                     # allowed SNI hostnames (first is used in client proxy links)
+#       - "www.google.com"
+#       - "www.cloudflare.com"
 #     max_clock_skew_seconds: 600
 #     replay_cache_ttl_hours: 48
 #   endpoints:                 # override Telegram DC endpoints (optional)

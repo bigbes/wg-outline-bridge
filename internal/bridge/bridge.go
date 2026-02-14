@@ -287,17 +287,17 @@ func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) err
 	}
 	if b.cfg.MTProxy.FakeTLS.Enabled {
 		serverCfg.FakeTLS = &mtproxy.FakeTLSConfig{
+			AllowedSNIs:         b.cfg.MTProxy.FakeTLS.SNI,
 			MaxClockSkewSec:     b.cfg.MTProxy.FakeTLS.MaxClockSkewSeconds,
 			ReplayCacheTTLHours: b.cfg.MTProxy.FakeTLS.ReplayCacheTTLHours,
 		}
 	}
 
 	srv := mtproxy.NewServer(serverCfg, dialer, endpoints, b.logger)
-	go func() {
-		if err := srv.Start(ctx); err != nil {
-			b.logger.Error("mtproxy exited", "err", err)
-		}
-	}()
+	if err := srv.Listen(); err != nil {
+		return fmt.Errorf("mtproxy: %w", err)
+	}
+	go srv.Serve(ctx)
 
 	if b.cfg.MTProxy.StatsAddr != "" {
 		statsSrv := mtproxy.NewStatsServer(b.cfg.MTProxy.StatsAddr, srv, b.logger)
