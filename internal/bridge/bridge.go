@@ -454,6 +454,7 @@ func newWireGuardLogger(logger *slog.Logger, level slog.Level) *device.Logger {
 			wgLog.Error(fmt.Sprintf(format, args...))
 		},
 	}
+	l.Verbosef = func(format string, args ...any) {}
 	if level <= slog.LevelDebug {
 		l.Verbosef = func(format string, args ...any) {
 			wgLog.Debug(fmt.Sprintf(format, args...))

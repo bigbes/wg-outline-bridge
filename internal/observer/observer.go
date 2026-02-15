@@ -177,6 +177,7 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 		}
 	case "/listconf":
 		reply = o.formatPeerList()
+		html = true
 	case "/showconf":
 		if args == "" {
 			reply = "Usage: /showconf &lt;peer-name&gt;"
@@ -270,16 +271,7 @@ func (o *Observer) formatPeerList() string {
 	var b strings.Builder
 	b.WriteString("📋 Peers:\n\n")
 	for _, name := range names {
-		peer := peers[name]
-		shortKey := peer.PublicKey
-		if len(shortKey) > 8 {
-			shortKey = shortKey[:8]
-		}
-		if peer.Disabled {
-			fmt.Fprintf(&b, "⊘ %s  %s\n", shortKey, name)
-		} else {
-			fmt.Fprintf(&b, "• %s  %s\n", shortKey, name)
-		}
+		fmt.Fprintf(&b, "• <code>%s</code>\n", name)
 	}
 	return b.String()
 }

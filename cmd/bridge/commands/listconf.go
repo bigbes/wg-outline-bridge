@@ -33,15 +33,6 @@ func ListConf(args []string, logger *slog.Logger) {
 	sort.Strings(names)
 
 	for _, name := range names {
-		peer := cfg.Peers[name]
-		shortKey := peer.PublicKey
-		if len(shortKey) > 8 {
-			shortKey = shortKey[:8]
-		}
-		if peer.Disabled {
-			fmt.Printf("[disabled] %s  %s\n", shortKey, name)
-		} else {
-			fmt.Printf("%s  %s\n", shortKey, name)
-		}
+		fmt.Println(name)
 	}
 }
