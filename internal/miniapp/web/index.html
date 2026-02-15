@@ -430,7 +430,7 @@ function addSecret() {
   const type = document.getElementById('new-secret-type').value;
   api('POST', '/api/secrets', { type }).then(d => {
     if (d.error) { showMsg('secret-msg', d.error, true); return; }
-    showMsg('secret-msg', 'Secret added (restart required)', false);
+    showMsg('secret-msg', 'Secret added (send SIGHUP to reload)', false);
     refresh();
   });
 }
@@ -440,7 +440,7 @@ function deleteSecret(hex) {
     if (!ok) return;
     api('DELETE', '/api/secrets/' + encodeURIComponent(hex)).then(d => {
       if (d.error) { showMsg('secret-msg', d.error, true); return; }
-      showMsg('secret-msg', 'Secret deleted (restart required)', false);
+      showMsg('secret-msg', 'Secret deleted (send SIGHUP to reload)', false);
       refresh();
     });
   });

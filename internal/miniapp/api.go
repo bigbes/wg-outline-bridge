@@ -420,44 +420,55 @@ func (s *Server) handleAddUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	input := strings.TrimPrefix(req.User, "@")
+	numericID, parseErr := strconv.ParseInt(input, 10, 64)
+	isNumeric := parseErr == nil
+
+	// Try to resolve profile info via Telegram API.
 	chatID := req.User
-	if !strings.HasPrefix(chatID, "@") {
-		if _, err := strconv.ParseInt(chatID, 10, 64); err != nil {
-			chatID = "@" + chatID
-		}
+	if !isNumeric && !strings.HasPrefix(chatID, "@") {
+		chatID = "@" + chatID
 	}
 
+	var u statsdb.AllowedUser
 	info, err := s.bot.GetChat(r.Context(), chatID)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("user not found: %v", err)})
-		return
-	}
-
-	var photoURL string
-	if info.Photo != nil && info.Photo.SmallFileID != "" {
-		if u, err := s.bot.GetFileURL(r.Context(), info.Photo.SmallFileID); err == nil {
-			photoURL = u
+		// getChat only works for users who have interacted with the bot.
+		// For numeric IDs, allow adding without profile info.
+		if !isNumeric {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "user not found — the user must message the bot first, or use their numeric ID",
+			})
+			return
+		}
+		u = statsdb.AllowedUser{UserID: numericID}
+	} else {
+		var photoURL string
+		if info.Photo != nil && info.Photo.SmallFileID != "" {
+			if fileURL, err := s.bot.GetFileURL(r.Context(), info.Photo.SmallFileID); err == nil {
+				photoURL = fileURL
+			}
+		}
+		u = statsdb.AllowedUser{
+			UserID:    info.ID,
+			Username:  info.Username,
+			FirstName: info.FirstName,
+			LastName:  info.LastName,
+			PhotoURL:  photoURL,
 		}
 	}
 
-	u := statsdb.AllowedUser{
-		UserID:    info.ID,
-		Username:  info.Username,
-		FirstName: info.FirstName,
-		LastName:  info.LastName,
-		PhotoURL:  photoURL,
-	}
 	if err := s.store.AddAllowedUser(u); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"user_id":    info.ID,
-		"username":   info.Username,
-		"first_name": info.FirstName,
-		"last_name":  info.LastName,
-		"photo_url":  photoURL,
+		"user_id":    u.UserID,
+		"username":   u.Username,
+		"first_name": u.FirstName,
+		"last_name":  u.LastName,
+		"photo_url":  u.PhotoURL,
 	})
 }
 

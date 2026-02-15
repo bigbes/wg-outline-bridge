@@ -81,6 +81,7 @@ type Server struct {
 	dialer    StreamDialer
 	endpoints *telegram.EndpointManager
 	logger    *slog.Logger
+	configMu  sync.RWMutex
 
 	listeners []net.Listener
 	wg        sync.WaitGroup
@@ -107,6 +108,21 @@ func NewServer(config ServerConfig, dialer StreamDialer, endpoints *telegram.End
 		secretStats: make(map[int]*secretCounters),
 		replayCache: make(map[[32]byte]time.Time),
 	}
+}
+
+func (s *Server) getSecrets() ([]mpcrypto.Secret, []string) {
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
+	return s.config.Secrets, s.config.SecretHexes
+}
+
+// UpdateSecrets replaces the server's secrets at runtime without restart.
+func (s *Server) UpdateSecrets(secrets []mpcrypto.Secret, hexes []string) {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	s.config.Secrets = secrets
+	s.config.SecretHexes = hexes
+	s.logger.Info("secrets updated", "count", len(secrets))
 }
 
 // Listen binds all configured addresses. Call Serve to start accepting connections.
@@ -182,13 +198,14 @@ func (s *Server) getSecretCounters(idx int) *secretCounters {
 
 // SecretStatsSnapshot returns a copy of all per-secret stats.
 func (s *Server) SecretStatsSnapshot() []SecretSnapshot {
+	_, hexes := s.getSecrets()
 	s.secretMu.Lock()
 	defer s.secretMu.Unlock()
 	result := make([]SecretSnapshot, 0, len(s.secretStats))
 	for idx, sc := range s.secretStats {
 		hex := ""
-		if idx >= 0 && idx < len(s.config.SecretHexes) {
-			hex = s.config.SecretHexes[idx]
+		if idx >= 0 && idx < len(hexes) {
+			hex = hexes[idx]
 		}
 		result = append(result, SecretSnapshot{
 			SecretHex:          hex,
@@ -281,7 +298,8 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	}
 
 	// Decrypt header with configured secrets
-	parsed, secretIdx, err := mpcrypto.DecryptHeader(fullHeader, s.config.Secrets)
+	secrets, _ := s.getSecrets()
+	parsed, secretIdx, err := mpcrypto.DecryptHeader(fullHeader, secrets)
 	if err != nil {
 		s.stats.HandshakeErrors.Add(1)
 		s.logger.Debug("handshake: header decryption failed", "remote", remoteAddr, "err", err)
@@ -434,9 +452,10 @@ func (s *Server) handleFakeTLSHandshake(conn net.Conn, peeked []byte) (*tlsFrame
 	}
 
 	// Try each secret for HMAC validation
+	secrets, _ := s.getSecrets()
 	matchedSecretIdx := -1
 	var expectedRandom [32]byte
-	for i, secret := range s.config.Secrets {
+	for i, secret := range secrets {
 		mac := hmac.New(sha256.New, secret.Raw[:])
 		mac.Write(fullRecordForHMAC)
 		computed := mac.Sum(nil)
@@ -529,7 +548,7 @@ func (s *Server) handleFakeTLSHandshake(conn net.Conn, peeked []byte) (*tlsFrame
 	rand.Read(resp[pos : pos+encryptedSize])
 
 	// Compute server_random via HMAC-SHA256(secret, client_random + entire response)
-	secret := s.config.Secrets[matchedSecretIdx]
+	secret := secrets[matchedSecretIdx]
 	mac := hmac.New(sha256.New, secret.Raw[:])
 	mac.Write(buffer[:32+responseSize])
 	serverRandom := mac.Sum(nil)

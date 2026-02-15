@@ -378,6 +378,23 @@ func (b *Bridge) Reload() error {
 	}
 
 	b.cfg = newCfg
+
+	// Update MTProxy secrets at runtime
+	if b.mtSrv != nil && len(newCfg.MTProxy.Secrets) > 0 {
+		secrets := make([]mpcrypto.Secret, 0, len(newCfg.MTProxy.Secrets))
+		for _, s := range newCfg.MTProxy.Secrets {
+			secret, err := mpcrypto.ParseSecret(s)
+			if err != nil {
+				b.logger.Error("failed to parse mtproxy secret during reload", "err", err)
+				continue
+			}
+			secrets = append(secrets, secret)
+		}
+		if len(secrets) > 0 {
+			b.mtSrv.UpdateSecrets(secrets, newCfg.MTProxy.Secrets)
+		}
+	}
+
 	if b.peerMon != nil {
 		b.peerMon.updatePeers(newCfg.Peers)
 	}

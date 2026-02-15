@@ -634,7 +634,7 @@ func (o *Observer) handleAddSecret(args string) string {
 	if len(links) > 0 {
 		fmt.Fprintf(&b, "\n🔗 %s", links[len(links)-1])
 	}
-	fmt.Fprintf(&b, "\n\n⚠️ Restart required for MTProxy to accept this secret")
+	fmt.Fprintf(&b, "\n\n💡 Send SIGHUP to reload secrets without restart")
 
 	return b.String()
 }
@@ -643,7 +643,7 @@ func (o *Observer) handleDelSecret(secretHex string) string {
 	if err := o.manager.DeleteSecret(secretHex); err != nil {
 		return fmt.Sprintf("❌ Failed to delete secret: %s", err)
 	}
-	return fmt.Sprintf("✅ Secret deleted\n\n⚠️ Restart required for MTProxy to stop accepting this secret")
+	return fmt.Sprintf("✅ Secret deleted\n\n💡 Send SIGHUP to reload secrets without restart")
 }
 
 func (o *Observer) handleAddProxy(args string) string {
