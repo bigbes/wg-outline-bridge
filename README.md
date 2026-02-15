@@ -103,6 +103,15 @@ outlines:
 database:
   path: "/var/lib/wg-outline-bridge/bridge.sqlite"  # empty or omitted = disabled
   flush_interval: 30                                 # seconds (default: 30)
+proxies:
+  - name: "socks-main"
+    type: socks5
+    listen: "0.0.0.0:1080"
+  - name: "http-auth"
+    type: http
+    listen: "0.0.0.0:8080"
+    username: "user"
+    password: "pass"
 ```
 
 ### Outline Entries
@@ -209,6 +218,52 @@ routing:
 | `direct` | Connect to destination directly, bypassing all proxies |
 | `outline` | Route through a named outline (specify `outline: "name"`) |
 | `default` | Use the default outline (same as no rule matching) |
+
+## Proxy Servers
+
+The bridge can expose SOCKS5, HTTP, and HTTPS forward proxy servers that route traffic through Outline. Multiple instances of each type can run simultaneously.
+
+```yaml
+proxies:
+  - name: "socks-main"
+    type: socks5              # socks5, http, or https
+    listen: "0.0.0.0:1080"
+    outline: ""               # optional: named outline (default = default)
+    username: "user"          # optional: enables SOCKS5 user/pass auth
+    password: "pass"
+
+  - name: "http-main"
+    type: http
+    listen: "0.0.0.0:8080"
+    username: "user"          # optional: enables HTTP Basic auth
+    password: "pass"
+
+  - name: "https-secure"
+    type: https
+    listen: "0.0.0.0:8443"
+    username: "user"
+    password: "pass"
+    tls:
+      cert_file: "/path/to/cert.pem"   # manual TLS cert
+      key_file: "/path/to/key.pem"
+      # OR automatic Let's Encrypt:
+      # domain: "proxy.example.com"
+      # acme_email: "admin@example.com"
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | yes | Unique identifier for the proxy instance |
+| `type` | yes | `socks5`, `http`, or `https` |
+| `listen` | yes | Listen address (e.g. `0.0.0.0:1080`) |
+| `outline` | no | Named outline to use (default = default outline) |
+| `username` | no | Enable authentication (SOCKS5 user/pass or HTTP Basic) |
+| `password` | no | Password for authentication |
+| `tls` | https only | TLS configuration (cert files or ACME domain) |
+
+- **HTTP** proxy handles both plain HTTP forwarding and HTTPS via `CONNECT` tunneling
+- **HTTPS** proxy is an HTTP proxy with TLS on the listener (client↔proxy connection is encrypted)
+- **SOCKS5** proxy supports the `CONNECT` command
 
 ## Telegram Bot
 
@@ -390,6 +445,7 @@ internal/
   dns/                  Built-in DNS proxy server with blocklists
   geoip/                GeoIP database management for country-based routing
   mtproxy/              MTProxy (Telegram proxy) server implementation
+  proxyserver/          SOCKS5, HTTP, and HTTPS forward proxy servers
   observer/             Telegram bot observer (status push & command handling)
   outline/              Outline SDK client wrapper
   proxy/                TCP/UDP proxy with gVisor, SNI parser, routing integration

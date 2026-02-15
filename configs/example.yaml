@@ -58,6 +58,35 @@ wireguard:
 #     1: ["149.154.175.50:443"]
 #     2: ["149.154.167.51:443"]
 
+# proxies:                      # SOCKS5 / HTTP / HTTPS forward proxy servers
+#   - name: "socks-main"
+#     type: socks5
+#     listen: "0.0.0.0:1080"
+#     outline: ""                # optional: named outline (default = default)
+#     username: ""               # optional: enable user/pass authentication
+#     password: ""
+#
+#   - name: "http-main"
+#     type: http
+#     listen: "0.0.0.0:8080"
+#     outline: ""
+#     username: "user"           # HTTP Basic auth
+#     password: "pass"
+#
+#   - name: "https-secure"
+#     type: https
+#     listen: "0.0.0.0:8443"
+#     outline: ""
+#     username: "user"
+#     password: "pass"
+#     tls:
+#       # Option 1: manual cert files
+#       cert_file: "/path/to/cert.pem"
+#       key_file: "/path/to/key.pem"
+#       # Option 2: automatic Let's Encrypt (requires valid domain)
+#       # domain: "proxy.example.com"
+#       # acme_email: "admin@example.com"
+
 # database:                                         # SQLite database for persistent stats + peer/secret management
 #   path: "/var/lib/wg-outline-bridge/bridge.sqlite"  # empty or omitted = disabled
 #   flush_interval: 30                                # seconds (default: 30)

@@ -24,6 +24,7 @@ import (
 	"github.com/blikh/wireguard-outline-bridge/internal/observer"
 	"github.com/blikh/wireguard-outline-bridge/internal/outline"
 	"github.com/blikh/wireguard-outline-bridge/internal/proxy"
+	"github.com/blikh/wireguard-outline-bridge/internal/proxyserver"
 	"github.com/blikh/wireguard-outline-bridge/internal/routing"
 	"github.com/blikh/wireguard-outline-bridge/internal/statsdb"
 	tgbot "github.com/blikh/wireguard-outline-bridge/internal/telegram"
@@ -198,6 +199,12 @@ func (b *Bridge) Run(ctx context.Context) error {
 	if b.cfg.MTProxy.Enabled {
 		if err := b.startMTProxy(ctx, dialers); err != nil {
 			return fmt.Errorf("starting mtproxy: %w", err)
+		}
+	}
+
+	if len(b.cfg.Proxies) > 0 {
+		if err := b.startProxyServers(ctx, dialers); err != nil {
+			return fmt.Errorf("starting proxy servers: %w", err)
 		}
 	}
 
@@ -393,6 +400,43 @@ func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) err
 	}
 
 	b.logger.Info("mtproxy server started", "listen", b.cfg.MTProxy.Listen, "secrets", len(secrets), "fake_tls", b.cfg.MTProxy.FakeTLS.Enabled)
+	return nil
+}
+
+func (b *Bridge) startProxyServers(ctx context.Context, dialers *proxy.DialerSet) error {
+	for _, pcfg := range b.cfg.Proxies {
+		var dialer proxyserver.StreamDialer = b.outlineClient
+		if name := pcfg.Outline; name != "" && name != "default" {
+			if d, ok := dialers.Outlines[name]; ok {
+				dialer = d
+			}
+		}
+
+		acmeDir := ""
+		if pcfg.TLS.Domain != "" && b.cfg.CacheDir != "" {
+			acmeDir = filepath.Join(b.cfg.CacheDir, "acme", pcfg.Name)
+		}
+
+		srv := proxyserver.NewServer(proxyserver.ServerConfig{
+			Name:      pcfg.Name,
+			Type:      pcfg.Type,
+			Listen:    pcfg.Listen,
+			Username:  pcfg.Username,
+			Password:  pcfg.Password,
+			CertFile:  pcfg.TLS.CertFile,
+			KeyFile:   pcfg.TLS.KeyFile,
+			Domain:    pcfg.TLS.Domain,
+			ACMEEmail: pcfg.TLS.ACMEEmail,
+			ACMEDir:   acmeDir,
+		}, dialer, b.logger)
+
+		if err := srv.Listen(); err != nil {
+			return fmt.Errorf("proxy %q: %w", pcfg.Name, err)
+		}
+		go srv.Serve(ctx)
+
+		b.logger.Info("proxy server started", "name", pcfg.Name, "type", pcfg.Type, "listen", pcfg.Listen)
+	}
 	return nil
 }
 

@@ -25,6 +25,7 @@ type Config struct {
 	WireGuard WireGuardConfig       `yaml:"wireguard"`
 	DNS       DNSConfig             `yaml:"dns"`
 	MTProxy   MTProxyConfig         `yaml:"mtproxy"`
+	Proxies   []ProxyServerConfig   `yaml:"proxies"`
 	Telegram  TelegramConfig        `yaml:"telegram"`
 	Database  DatabaseConfig        `yaml:"database"`
 	Outlines  []OutlineConfig       `yaml:"outlines"`
@@ -141,6 +142,23 @@ type FakeTLSConfig struct {
 	SNI                 []string `yaml:"sni"`
 	MaxClockSkewSeconds int      `yaml:"max_clock_skew_seconds"`
 	ReplayCacheTTLHours int      `yaml:"replay_cache_ttl_hours"`
+}
+
+type ProxyServerConfig struct {
+	Name     string         `yaml:"name"`
+	Type     string         `yaml:"type"`     // "socks5", "http", "https"
+	Listen   string         `yaml:"listen"`
+	Outline  string         `yaml:"outline"`  // optional named outline, default = default
+	Username string         `yaml:"username"` // optional auth
+	Password string         `yaml:"password"`
+	TLS      ProxyTLSConfig `yaml:"tls"`      // for https type only
+}
+
+type ProxyTLSConfig struct {
+	CertFile  string `yaml:"cert_file"`
+	KeyFile   string `yaml:"key_file"`
+	Domain    string `yaml:"domain"`
+	ACMEEmail string `yaml:"acme_email"`
 }
 
 type TelegramConfig struct {
@@ -271,6 +289,26 @@ func Load(path string) (*Config, error) {
 		}
 		if len(cfg.MTProxy.FakeTLS.SNI) == 0 {
 			cfg.MTProxy.FakeTLS.SNI = []string{"www.google.com"}
+		}
+	}
+
+	for i := range cfg.Proxies {
+		p := &cfg.Proxies[i]
+		if p.Name == "" {
+			return nil, fmt.Errorf("proxy entry %d: name is required", i)
+		}
+		switch p.Type {
+		case "socks5", "http", "https":
+		default:
+			return nil, fmt.Errorf("proxy %q: type must be socks5, http, or https", p.Name)
+		}
+		if p.Listen == "" {
+			return nil, fmt.Errorf("proxy %q: listen address is required", p.Name)
+		}
+		if p.Type == "https" {
+			if p.TLS.Domain == "" && (p.TLS.CertFile == "" || p.TLS.KeyFile == "") {
+				return nil, fmt.Errorf("proxy %q: https requires tls.domain or tls.cert_file+tls.key_file", p.Name)
+			}
 		}
 	}
 
