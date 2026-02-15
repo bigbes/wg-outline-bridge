@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WG-Outline Bridge Admin</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root {
+  --bg: var(--tg-theme-bg-color, #1a1a2e);
+  --text: var(--tg-theme-text-color, #e0e0e0);
+  --hint: var(--tg-theme-hint-color, #999);
+  --link: var(--tg-theme-link-color, #5eaff2);
+  --btn: var(--tg-theme-button-color, #5eaff2);
+  --btn-text: var(--tg-theme-button-text-color, #fff);
+  --secondary-bg: var(--tg-theme-secondary-bg-color, #232340);
+  --section-bg: var(--tg-theme-section-bg-color, #232340);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  padding: 12px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+h1 { font-size: 18px; margin-bottom: 12px; text-align: center; }
+h2 { font-size: 15px; margin: 16px 0 8px; display: flex; align-items: center; gap: 6px; }
+.card {
+  background: var(--section-bg);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+.card-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 6px;
+}
+.card-header .name { font-weight: 600; }
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 4px;
+}
+.status-dot.online { background: #4caf50; }
+.status-dot.recent { background: #ffc107; }
+.status-dot.offline { background: #666; }
+.meta { color: var(--hint); font-size: 12px; }
+.meta span { margin-right: 10px; }
+.btn {
+  background: var(--btn);
+  color: var(--btn-text);
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 500;
+}
+.btn:active { opacity: 0.8; }
+.btn-sm { padding: 4px 10px; font-size: 12px; border-radius: 6px; }
+.btn-danger { background: #e53935; }
+.btn-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--hint);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  width: 100%;
+}
+.input-row {
+  display: flex; gap: 8px; margin-top: 8px;
+}
+.input-row .input { flex: 1; }
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  overflow-x: auto;
+}
+.tab {
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: var(--secondary-bg);
+  color: var(--hint);
+  border: none;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tab.active {
+  background: var(--btn);
+  color: var(--btn-text);
+}
+.section { display: none; }
+.section.active { display: block; }
+.uptime { text-align: center; color: var(--hint); font-size: 12px; margin-bottom: 12px; }
+.error-msg { color: #e53935; font-size: 12px; margin-top: 4px; }
+.success-msg { color: #4caf50; font-size: 12px; margin-top: 4px; }
+.loading { text-align: center; color: var(--hint); padding: 40px; }
+.empty { text-align: center; color: var(--hint); padding: 20px; font-size: 13px; }
+.secret-text { font-family: monospace; font-size: 11px; word-break: break-all; }
+.link-text { font-family: monospace; font-size: 11px; word-break: break-all; color: var(--link); }
+.copy-btn {
+  background: none; border: none; color: var(--link); cursor: pointer; font-size: 12px; padding: 2px 4px;
+}
+</style>
+</head>
+<body>
+
+<h1>🌐 WG-Outline Bridge</h1>
+<div id="uptime" class="uptime"></div>
+
+<div class="tabs">
+  <button class="tab active" onclick="showTab('peers')">👥 Peers</button>
+  <button class="tab" onclick="showTab('mtproxy')">📡 MTProxy</button>
+  <button class="tab" onclick="showTab('proxies')">🔌 Proxies</button>
+</div>
+
+<div id="loading" class="loading">Loading...</div>
+
+<div id="peers" class="section active">
+  <div id="peers-list"></div>
+  <div class="input-row">
+    <input class="input" id="new-peer-name" placeholder="New peer name">
+    <button class="btn btn-sm" onclick="addPeer()">+ Add</button>
+  </div>
+  <div id="peer-msg"></div>
+</div>
+
+<div id="mtproxy" class="section">
+  <div id="mtproxy-status"></div>
+  <div id="secrets-list"></div>
+  <div class="input-row">
+    <select class="input" id="new-secret-type" style="flex:0.6">
+      <option value="faketls">FakeTLS (ee)</option>
+      <option value="padded">Padded (dd)</option>
+      <option value="default">Default</option>
+    </select>
+    <button class="btn btn-sm" onclick="addSecret()">+ Add Secret</button>
+  </div>
+  <div id="secret-msg"></div>
+  <div id="proxy-links"></div>
+</div>
+
+<div id="proxies" class="section">
+  <div id="proxies-list"></div>
+  <h2>Add Proxy Server</h2>
+  <div style="display:flex;flex-direction:column;gap:6px">
+    <div class="input-row">
+      <select class="input" id="new-proxy-type" style="flex:0.5">
+        <option value="socks5">SOCKS5</option>
+        <option value="http">HTTP</option>
+      </select>
+      <input class="input" id="new-proxy-listen" placeholder="0.0.0.0:1080">
+    </div>
+    <div class="input-row">
+      <input class="input" id="new-proxy-name" placeholder="Name (optional)">
+      <button class="btn btn-sm" onclick="addProxy()">+ Add</button>
+    </div>
+  </div>
+  <div id="proxy-msg"></div>
+</div>
+
+<script>
+const tg = window.Telegram.WebApp;
+tg.ready();
+tg.expand();
+
+const initData = tg.initData;
+let data = null;
+
+function api(method, path, body) {
+  const opts = {
+    method,
+    headers: {
+      'X-Telegram-Init-Data': initData,
+      'Content-Type': 'application/json',
+    },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(path, opts).then(r => r.json());
+}
+
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach((t, i) => {
+    const sections = ['peers', 'mtproxy', 'proxies'];
+    t.classList.toggle('active', sections[i] === name);
+  });
+  document.querySelectorAll('.section').forEach(s => {
+    s.classList.toggle('active', s.id === name);
+  });
+}
+
+function formatBytes(b) {
+  if (b >= 1073741824) return (b / 1073741824).toFixed(1) + ' GB';
+  if (b >= 1048576) return (b / 1048576).toFixed(1) + ' MB';
+  if (b >= 1024) return (b / 1024).toFixed(1) + ' KB';
+  return b + ' B';
+}
+
+function formatDuration(sec) {
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return d + 'd ' + h + 'h ' + m + 'm';
+  if (h > 0) return h + 'h ' + m + 'm';
+  return m + 'm';
+}
+
+function timeAgo(unix) {
+  if (!unix || unix <= 0) return 'never';
+  const sec = Math.floor(Date.now() / 1000) - unix;
+  if (sec < 60) return sec + 's ago';
+  if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
+  if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
+  return Math.floor(sec / 86400) + 'd ago';
+}
+
+function peerStatusClass(unix) {
+  if (!unix || unix <= 0) return 'offline';
+  const sec = Math.floor(Date.now() / 1000) - unix;
+  if (sec < 180) return 'online';
+  return 'recent';
+}
+
+function truncSecret(s) {
+  let d = s;
+  if (d.length === 34 && (d.startsWith('dd') || d.startsWith('ee'))) d = d.slice(2);
+  return d.length > 8 ? d.slice(0, 8) + '…' : d;
+}
+
+function copyText(text) {
+  navigator.clipboard.writeText(text).then(() => {
+    tg.showAlert('Copied!');
+  });
+}
+
+function render() {
+  if (!data) return;
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('uptime').textContent = '⏱ Uptime: ' + formatDuration(data.daemon.uptime_seconds);
+
+  // Peers
+  const pl = document.getElementById('peers-list');
+  if (!data.peers || data.peers.length === 0) {
+    pl.innerHTML = '<div class="empty">No peers configured</div>';
+  } else {
+    pl.innerHTML = data.peers.map(p => `
+      <div class="card">
+        <div class="card-header">
+          <span class="name"><span class="status-dot ${peerStatusClass(p.last_handshake_unix)}"></span>${p.name || p.public_key.slice(0,8)+'...'}</span>
+          <button class="btn btn-sm btn-danger" onclick="deletePeer('${p.name}')">Delete</button>
+        </div>
+        <div class="meta">
+          <span>Handshake: ${timeAgo(p.last_handshake_unix)}</span>
+          <span>Conns: ${p.active_connections}</span>
+        </div>
+        <div class="meta">
+          <span>↓${formatBytes(p.rx_bytes)} ↑${formatBytes(p.tx_bytes)}</span>
+          ${p.rx_total > 0 ? `<span>Total: ↓${formatBytes(p.rx_total)} ↑${formatBytes(p.tx_total)}</span>` : ''}
+        </div>
+        <div class="meta"><span>IP: ${p.allowed_ips || '—'}</span></div>
+      </div>
+    `).join('');
+  }
+
+  // MTProxy
+  const ms = document.getElementById('mtproxy-status');
+  if (!data.mtproxy.enabled) {
+    ms.innerHTML = '<div class="empty">MTProxy not enabled</div>';
+    document.getElementById('secrets-list').innerHTML = '';
+    document.getElementById('proxy-links').innerHTML = '';
+  } else {
+    ms.innerHTML = `
+      <div class="card">
+        <div class="meta">
+          <span>Active: ${data.mtproxy.active_connections}</span>
+          <span>Session: ${data.mtproxy.connections}</span>
+        </div>
+        <div class="meta">
+          <span>↑${formatBytes(data.mtproxy.bytes_c2b)} ↓${formatBytes(data.mtproxy.bytes_b2c)}</span>
+          ${data.mtproxy.bytes_c2b_total > 0 ? `<span>Total: ↑${formatBytes(data.mtproxy.bytes_c2b_total)} ↓${formatBytes(data.mtproxy.bytes_b2c_total)}</span>` : ''}
+        </div>
+      </div>
+    `;
+
+    const sl = document.getElementById('secrets-list');
+    if (!data.mtproxy.secrets || data.mtproxy.secrets.length === 0) {
+      sl.innerHTML = '<div class="empty">No secrets</div>';
+    } else {
+      sl.innerHTML = '<h2>🔑 Secrets</h2>' + data.mtproxy.secrets.map(s => `
+        <div class="card">
+          <div class="card-header">
+            <span class="name secret-text">${truncSecret(s.secret)}</span>
+            <button class="btn btn-sm btn-danger" onclick="deleteSecret('${s.secret}')">Delete</button>
+          </div>
+          <div class="meta">
+            <span>Last: ${timeAgo(s.last_connection_unix)}</span>
+            <span>Conns: ${s.connections}${s.connections_total > 0 ? ' / ' + s.connections_total + ' total' : ''}</span>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    const ll = document.getElementById('proxy-links');
+    if (data.mtproxy.links && data.mtproxy.links.length > 0) {
+      ll.innerHTML = '<h2>🔗 Proxy Links</h2>' + data.mtproxy.links.map(l => `
+        <div class="card">
+          <span class="link-text">${l}</span>
+          <button class="copy-btn" onclick="copyText('${l}')">📋 Copy</button>
+        </div>
+      `).join('');
+    } else {
+      ll.innerHTML = '';
+    }
+  }
+
+  // Proxies
+  const pxl = document.getElementById('proxies-list');
+  if (!data.proxies || data.proxies.length === 0) {
+    pxl.innerHTML = '<div class="empty">No proxy servers</div>';
+  } else {
+    pxl.innerHTML = data.proxies.map(p => `
+      <div class="card">
+        <div class="card-header">
+          <span class="name">${p.name} <span class="meta">(${p.type})</span></span>
+          <button class="btn btn-sm btn-danger" onclick="deleteProxy('${p.name}')">Delete</button>
+        </div>
+        <div class="meta">
+          <span>Listen: ${p.listen}</span>
+          ${p.has_auth ? '<span>🔒 Auth</span>' : ''}
+        </div>
+        <div class="meta">
+          <span class="link-text">${p.link}</span>
+          <button class="copy-btn" onclick="copyText('${p.link}')">📋</button>
+        </div>
+      </div>
+    `).join('');
+  }
+}
+
+function refresh() {
+  api('GET', '/api/status').then(d => {
+    data = d;
+    render();
+  }).catch(err => {
+    document.getElementById('loading').textContent = 'Error: ' + err.message;
+  });
+}
+
+function showMsg(id, text, isError) {
+  const el = document.getElementById(id);
+  el.className = isError ? 'error-msg' : 'success-msg';
+  el.textContent = text;
+  setTimeout(() => { el.textContent = ''; }, 3000);
+}
+
+function addPeer() {
+  const name = document.getElementById('new-peer-name').value.trim();
+  if (!name) return;
+  api('POST', '/api/peers', { name }).then(d => {
+    if (d.error) { showMsg('peer-msg', d.error, true); return; }
+    document.getElementById('new-peer-name').value = '';
+    showMsg('peer-msg', 'Peer "' + name + '" added', false);
+    refresh();
+  });
+}
+
+function deletePeer(name) {
+  tg.showConfirm('Delete peer "' + name + '"?', (ok) => {
+    if (!ok) return;
+    api('DELETE', '/api/peers/' + encodeURIComponent(name)).then(d => {
+      if (d.error) { showMsg('peer-msg', d.error, true); return; }
+      refresh();
+    });
+  });
+}
+
+function addSecret() {
+  const type = document.getElementById('new-secret-type').value;
+  api('POST', '/api/secrets', { type }).then(d => {
+    if (d.error) { showMsg('secret-msg', d.error, true); return; }
+    showMsg('secret-msg', 'Secret added (restart required)', false);
+    refresh();
+  });
+}
+
+function deleteSecret(hex) {
+  tg.showConfirm('Delete this secret?', (ok) => {
+    if (!ok) return;
+    api('DELETE', '/api/secrets/' + encodeURIComponent(hex)).then(d => {
+      if (d.error) { showMsg('secret-msg', d.error, true); return; }
+      showMsg('secret-msg', 'Secret deleted (restart required)', false);
+      refresh();
+    });
+  });
+}
+
+function addProxy() {
+  const type = document.getElementById('new-proxy-type').value;
+  const listen = document.getElementById('new-proxy-listen').value.trim();
+  const name = document.getElementById('new-proxy-name').value.trim();
+  if (!listen) return;
+  api('POST', '/api/proxies', { type, listen, name: name || undefined }).then(d => {
+    if (d.error) { showMsg('proxy-msg', d.error, true); return; }
+    document.getElementById('new-proxy-listen').value = '';
+    document.getElementById('new-proxy-name').value = '';
+    showMsg('proxy-msg', 'Proxy added (restart required)', false);
+    refresh();
+  });
+}
+
+function deleteProxy(name) {
+  tg.showConfirm('Delete proxy "' + name + '"?', (ok) => {
+    if (!ok) return;
+    api('DELETE', '/api/proxies/' + encodeURIComponent(name)).then(d => {
+      if (d.error) { showMsg('proxy-msg', d.error, true); return; }
+      showMsg('proxy-msg', 'Proxy deleted (restart required)', false);
+      refresh();
+    });
+  });
+}
+
+// Initial load
+refresh();
+// Auto-refresh every 30s
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>

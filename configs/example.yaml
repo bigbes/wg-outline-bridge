@@ -99,6 +99,11 @@ wireguard:
 #   allowed_users:               # (optional) Only these user IDs can use the bot in private chats
 #     - 123456789
 
+# miniapp:                       # Telegram Mini App (web admin panel)
+#   enabled: true
+#   listen: ":8443"              # HTTP listen address (default: ":8443")
+#   domain: "admin.example.com"  # public domain (required; Telegram requires HTTPS)
+
 outlines:
   - name: "default"
     transport: "ss://CHANGE_ME"

@@ -378,6 +378,25 @@ Tracked stats:
 
 Counters survive daemon restarts via delta-accumulation (UAPI/atomic counters that reset are reconciled with stored baselines).
 
+## Telegram Mini App
+
+A web-based admin panel accessible as a [Telegram Mini App](https://core.telegram.org/bots/webapps). It provides the same management capabilities as the bot commands but with a richer UI — peer status dashboard, MTProxy secret management, and proxy server configuration.
+
+### Setup
+
+1. Requires `telegram.enabled` and `telegram.token` to be configured
+2. Point a domain at your server and set up a reverse proxy (e.g. nginx) with TLS to forward to the mini app listen address
+3. Add to your config:
+
+```yaml
+miniapp:
+  enabled: true
+  listen: ":8443"              # HTTP listen address (default: ":8443")
+  domain: "admin.example.com"  # public domain (required; Telegram requires HTTPS)
+```
+
+When enabled, the bot's menu button is automatically set to open the Mini App. Authentication uses Telegram WebApp init data validation (HMAC-SHA256). If `telegram.allowed_users` is configured, the same restrictions apply to the Mini App.
+
 ## Live Reload
 
 Send `SIGHUP` to reload configuration without restarting:
@@ -462,6 +481,7 @@ internal/
   geoip/                GeoIP database management for country-based routing
   mtproxy/              MTProxy (Telegram proxy) server implementation
   proxyserver/          SOCKS5, HTTP, and HTTPS forward proxy servers
+  miniapp/              Telegram Mini App web admin panel
   observer/             Telegram bot observer (status push & command handling)
   outline/              Outline SDK client wrapper
   proxy/                TCP/UDP proxy with gVisor, SNI parser, routing integration

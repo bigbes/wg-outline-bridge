@@ -18,6 +18,7 @@ import (
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
 	"github.com/blikh/wireguard-outline-bridge/internal/dns"
 	"github.com/blikh/wireguard-outline-bridge/internal/geoip"
+	"github.com/blikh/wireguard-outline-bridge/internal/miniapp"
 	"github.com/blikh/wireguard-outline-bridge/internal/mtproxy"
 	mpcrypto "github.com/blikh/wireguard-outline-bridge/internal/mtproxy/crypto"
 	"github.com/blikh/wireguard-outline-bridge/internal/mtproxy/telegram"
@@ -266,6 +267,20 @@ func (b *Bridge) Run(ctx context.Context) error {
 		obs := observer.New(bot, b, b, b, time.Duration(b.cfg.Telegram.Interval)*time.Second, b.cfg.Telegram.ChatID, b.logger)
 		go obs.Run(ctx)
 		b.logger.Info("telegram observer started", "interval", b.cfg.Telegram.Interval)
+
+		if b.cfg.MiniApp.Enabled {
+			maSrv := miniapp.New(b, b, b, b.cfg.Telegram.Token, b.cfg.Telegram.AllowedUsers, b.cfg.MiniApp.Listen, b.cfg.MiniApp.Domain, b.logger)
+			go func() {
+				if err := maSrv.Run(ctx); err != nil {
+					b.logger.Error("miniapp server error", "err", err)
+				}
+			}()
+			if err := bot.SetChatMenuButton(ctx, maSrv.URL(), "Admin"); err != nil {
+				b.logger.Error("failed to set chat menu button", "err", err)
+			} else {
+				b.logger.Info("telegram mini app registered", "url", maSrv.URL())
+			}
+		}
 	}
 
 	b.logger.Info("bridge running",

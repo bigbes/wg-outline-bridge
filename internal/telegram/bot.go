@@ -116,6 +116,58 @@ func (b *Bot) SetMyCommands(ctx context.Context, commands []BotCommand) error {
 	return nil
 }
 
+// SetChatMenuButton sets the bot's menu button to open a Web App.
+// If url is empty, the default menu button is restored.
+func (b *Bot) SetChatMenuButton(ctx context.Context, url, text string) error {
+	type menuButton struct {
+		Type   string `json:"type"`
+		Text   string `json:"text,omitempty"`
+		WebApp *struct {
+			URL string `json:"url"`
+		} `json:"web_app,omitempty"`
+	}
+
+	var btn menuButton
+	if url == "" {
+		btn.Type = "default"
+	} else {
+		btn.Type = "web_app"
+		btn.Text = text
+		btn.WebApp = &struct {
+			URL string `json:"url"`
+		}{URL: url}
+	}
+
+	payload := struct {
+		MenuButton menuButton `json:"menu_button"`
+	}{MenuButton: btn}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshaling request: %w", err)
+	}
+
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/setChatMenuButton", b.token)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("setting menu button: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("telegram API error: status %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
 func (b *Bot) sendMessageTo(ctx context.Context, chatID int64, text, parseMode string) error {
 	reqBody := sendMessageRequest{
 		ChatID:    chatID,

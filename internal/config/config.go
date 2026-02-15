@@ -27,6 +27,7 @@ type Config struct {
 	MTProxy   MTProxyConfig         `yaml:"mtproxy"`
 	Proxies   []ProxyServerConfig   `yaml:"proxies"`
 	Telegram  TelegramConfig        `yaml:"telegram"`
+	MiniApp   MiniAppConfig         `yaml:"miniapp"`
 	Database  DatabaseConfig        `yaml:"database"`
 	Outlines  []OutlineConfig       `yaml:"outlines"`
 	Routing   RoutingConfig         `yaml:"routing"`
@@ -190,6 +191,12 @@ type TelegramConfig struct {
 	AllowedUsers []int64 `yaml:"allowed_users"` // user IDs allowed in private chats
 }
 
+type MiniAppConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Listen  string `yaml:"listen"` // e.g. ":8443"
+	Domain  string `yaml:"domain"` // public domain for Telegram WebApp URL
+}
+
 type DatabaseConfig struct {
 	Path          string `yaml:"path"`
 	FlushInterval int    `yaml:"flush_interval"`
@@ -347,6 +354,18 @@ func Load(path string) (*Config, error) {
 		}
 		if cfg.Telegram.Interval == 0 {
 			cfg.Telegram.Interval = 300
+		}
+	}
+
+	if cfg.MiniApp.Enabled {
+		if cfg.MiniApp.Listen == "" {
+			cfg.MiniApp.Listen = ":8443"
+		}
+		if cfg.MiniApp.Domain == "" {
+			return nil, fmt.Errorf("miniapp: domain is required when enabled")
+		}
+		if !cfg.Telegram.Enabled || cfg.Telegram.Token == "" {
+			return nil, fmt.Errorf("miniapp: requires telegram.enabled and telegram.token")
 		}
 	}
 
