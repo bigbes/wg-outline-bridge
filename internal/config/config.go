@@ -36,12 +36,33 @@ type Config struct {
 }
 
 type WireGuardConfig struct {
-	PrivateKey    string `yaml:"private_key"`
-	ListenPort    int    `yaml:"listen_port"`
-	Address       string `yaml:"address"`
-	PublicAddress string `yaml:"public_address"`
-	MTU           int    `yaml:"mtu"`
-	DNS           string `yaml:"dns"`
+	PrivateKey    string           `yaml:"private_key"`
+	ListenPort    int              `yaml:"listen_port"`
+	Address       string           `yaml:"address"`
+	PublicAddress string           `yaml:"public_address"`
+	MTU           int              `yaml:"mtu"`
+	DNS           string           `yaml:"dns"`
+	Mode          string           `yaml:"mode"`
+	AmneziaWG     *AmneziaWGConfig `yaml:"amneziawg,omitempty"`
+}
+
+type AmneziaWGConfig struct {
+	Jc   int    `yaml:"jc,omitempty"`
+	Jmin int    `yaml:"jmin,omitempty"`
+	Jmax int    `yaml:"jmax,omitempty"`
+	S1   int    `yaml:"s1,omitempty"`
+	S2   int    `yaml:"s2,omitempty"`
+	S3   int    `yaml:"s3,omitempty"`
+	S4   int    `yaml:"s4,omitempty"`
+	H1   string `yaml:"h1,omitempty"`
+	H2   string `yaml:"h2,omitempty"`
+	H3   string `yaml:"h3,omitempty"`
+	H4   string `yaml:"h4,omitempty"`
+	I1   string `yaml:"i1,omitempty"`
+	I2   string `yaml:"i2,omitempty"`
+	I3   string `yaml:"i3,omitempty"`
+	I4   string `yaml:"i4,omitempty"`
+	I5   string `yaml:"i5,omitempty"`
 }
 
 type DNSConfig struct {
@@ -189,6 +210,14 @@ func Load(path string) (*Config, error) {
 
 	if cfg.WireGuard.MTU == 0 {
 		cfg.WireGuard.MTU = 1420
+	}
+	if cfg.WireGuard.Mode == "" {
+		cfg.WireGuard.Mode = "wireguard"
+	}
+	switch cfg.WireGuard.Mode {
+	case "wireguard", "amneziawg":
+	default:
+		return nil, fmt.Errorf("wireguard.mode must be 'wireguard' or 'amneziawg', got %q", cfg.WireGuard.Mode)
 	}
 	if cfg.WireGuard.DNS == "" {
 		cfg.WireGuard.DNS = "1.1.1.1"
@@ -458,6 +487,10 @@ func (c *Config) ParseLogLevel() slog.Level {
 	}
 }
 
+func (c *WireGuardConfig) IsAmneziaWG() bool {
+	return c.Mode == "amneziawg"
+}
+
 func (c *WireGuardConfig) ParseAddress() (netip.Addr, int, error) {
 	prefix, err := netip.ParsePrefix(c.Address)
 	if err != nil {
@@ -519,6 +552,18 @@ func RedactTransport(uri string) string {
 		return scheme + "***" + uri[at:]
 	}
 	return uri
+}
+
+func writeUAPIInt(b *strings.Builder, key string, v int) {
+	if v != 0 {
+		fmt.Fprintf(b, "%s=%d\n", key, v)
+	}
+}
+
+func writeUAPIStr(b *strings.Builder, key string, v string) {
+	if v != "" {
+		fmt.Fprintf(b, "%s=%s\n", key, v)
+	}
 }
 
 func base64ToHex(b64 string) (string, error) {
@@ -593,6 +638,26 @@ func (c *WireGuardConfig) ToUAPI(peers map[string]PeerConfig) (string, error) {
 	}
 	fmt.Fprintf(&b, "private_key=%s\n", privHex)
 	fmt.Fprintf(&b, "listen_port=%d\n", c.ListenPort)
+
+	if c.IsAmneziaWG() && c.AmneziaWG != nil {
+		awg := c.AmneziaWG
+		writeUAPIInt(&b, "jc", awg.Jc)
+		writeUAPIInt(&b, "jmin", awg.Jmin)
+		writeUAPIInt(&b, "jmax", awg.Jmax)
+		writeUAPIInt(&b, "s1", awg.S1)
+		writeUAPIInt(&b, "s2", awg.S2)
+		writeUAPIInt(&b, "s3", awg.S3)
+		writeUAPIInt(&b, "s4", awg.S4)
+		writeUAPIStr(&b, "h1", awg.H1)
+		writeUAPIStr(&b, "h2", awg.H2)
+		writeUAPIStr(&b, "h3", awg.H3)
+		writeUAPIStr(&b, "h4", awg.H4)
+		writeUAPIStr(&b, "i1", awg.I1)
+		writeUAPIStr(&b, "i2", awg.I2)
+		writeUAPIStr(&b, "i3", awg.I3)
+		writeUAPIStr(&b, "i4", awg.I4)
+		writeUAPIStr(&b, "i5", awg.I5)
+	}
 
 	for _, peer := range peers {
 		if peer.Disabled {

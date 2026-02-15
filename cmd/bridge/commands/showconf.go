@@ -79,6 +79,9 @@ func ShowConf(args []string, logger *slog.Logger) {
 	fmt.Printf("PrivateKey = %s\n", peer.PrivateKey)
 	fmt.Printf("Address = %s/24\n", clientIP)
 	fmt.Printf("DNS = %s\n", cfg.WireGuard.DNS)
+	if cfg.WireGuard.IsAmneziaWG() {
+		printAWGInterfaceParams(cfg.WireGuard.AmneziaWG)
+	}
 	fmt.Println()
 	fmt.Println("[Peer]")
 	if serverPublicKey, err := config.DerivePublicKey(cfg.WireGuard.PrivateKey); err == nil {

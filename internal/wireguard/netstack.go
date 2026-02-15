@@ -9,7 +9,6 @@ import (
 	"sync"
 	"syscall"
 
-	"golang.zx2c4.com/wireguard/tun"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
@@ -22,10 +21,12 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 )
 
-type NetTUN struct {
+// netTUNCore contains the shared gVisor netstack TUN logic.
+// It implements most of tun.Device methods but not Events(),
+// which is provided by the backend-specific wrappers (wgTUN, awgTUN).
+type netTUNCore struct {
 	ep             *channel.Endpoint
 	Stack          *stack.Stack
-	events         chan tun.Event
 	notifyHandle   *channel.NotificationHandle
 	incomingPacket chan *buffer.View
 	mtu            int
@@ -34,17 +35,17 @@ type NetTUN struct {
 	closeOnce      sync.Once
 }
 
-func CreateNetTUNWithStack(localAddresses []netip.Addr, mtu int, logger *slog.Logger) (*NetTUN, error) {
+// createNetTUN creates a netTUNCore with a gVisor network stack.
+func createNetTUN(localAddresses []netip.Addr, mtu int, logger *slog.Logger) (*netTUNCore, error) {
 	opts := stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol, icmp.NewProtocol6, icmp.NewProtocol4},
 		HandleLocal:        false,
 	}
 
-	dev := &NetTUN{
+	dev := &netTUNCore{
 		ep:             channel.New(1024, uint32(mtu), ""),
 		Stack:          stack.New(opts),
-		events:         make(chan tun.Event, 10),
 		incomingPacket: make(chan *buffer.View, 256),
 		mtu:            mtu,
 		logger:         logger,
@@ -99,17 +100,15 @@ func CreateNetTUNWithStack(localAddresses []netip.Addr, mtu int, logger *slog.Lo
 		dev.Stack.AddRoute(tcpip.Route{Destination: header.IPv6EmptySubnet, NIC: 1})
 	}
 
-	dev.events <- tun.EventUp
 	return dev, nil
 }
 
-func (t *NetTUN) File() *os.File           { return nil }
-func (t *NetTUN) Events() <-chan tun.Event { return t.events }
-func (t *NetTUN) MTU() (int, error)        { return t.mtu, nil }
-func (t *NetTUN) Name() (string, error)    { return "wgbridge0", nil }
-func (t *NetTUN) BatchSize() int           { return 1 }
+func (t *netTUNCore) File() *os.File        { return nil }
+func (t *netTUNCore) MTU() (int, error)     { return t.mtu, nil }
+func (t *netTUNCore) Name() (string, error) { return "wgbridge0", nil }
+func (t *netTUNCore) BatchSize() int        { return 1 }
 
-func (t *NetTUN) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+func (t *netTUNCore) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 	view, ok := <-t.incomingPacket
 	if !ok {
 		return 0, os.ErrClosed
@@ -123,7 +122,7 @@ func (t *NetTUN) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 	return 1, nil
 }
 
-func (t *NetTUN) Write(bufs [][]byte, offset int) (int, error) {
+func (t *netTUNCore) Write(bufs [][]byte, offset int) (int, error) {
 	for _, buf := range bufs {
 		packet := buf[offset:]
 		if len(packet) == 0 {
@@ -149,7 +148,7 @@ func (t *NetTUN) Write(bufs [][]byte, offset int) (int, error) {
 	return len(bufs), nil
 }
 
-func (t *NetTUN) WriteNotify() {
+func (t *netTUNCore) WriteNotify() {
 	pkt := t.ep.Read()
 	if pkt == nil {
 		return
@@ -164,13 +163,12 @@ func (t *NetTUN) WriteNotify() {
 	}
 }
 
-func (t *NetTUN) Close() error {
+func (t *netTUNCore) Close() error {
 	t.closeOnce.Do(func() {
 		t.Stack.RemoveNIC(1)
 		t.Stack.Close()
 		t.ep.RemoveNotify(t.notifyHandle)
 		t.ep.Close()
-		close(t.events)
 		close(t.incomingPacket)
 	})
 	return nil

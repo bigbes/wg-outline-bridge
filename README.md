@@ -1,6 +1,6 @@
 # WireGuard-Outline Bridge
 
-A userspace WireGuard server that proxies all client traffic through [Outline](https://getoutline.org/) (Shadowsocks) servers. Built with [gVisor netstack](https://gvisor.dev/) for in-process TCP/UDP handling — no TUN device or root access required on the host.
+A userspace WireGuard/AmneziaWG server that proxies all client traffic through [Outline](https://getoutline.org/) (Shadowsocks) servers. Built with [gVisor netstack](https://gvisor.dev/) for in-process TCP/UDP handling — no TUN device or root access required on the host. Supports standard WireGuard and [AmneziaWG](https://docs.amnezia.org/documentation/amnezia-wg/) (DPI-resistant WireGuard fork) protocols.
 
 ## How It Works
 
@@ -90,6 +90,17 @@ wireguard:
   public_address: "203.0.113.1"   # server's public IP (for client config generation)
   mtu: 1420
   dns: "1.1.1.1"
+  mode: "wireguard"               # "wireguard" (default) or "amneziawg"
+  # amneziawg:                    # AmneziaWG obfuscation params (only when mode: amneziawg)
+  #   jc: 4                       # junk packet count (sent before each handshake)
+  #   jmin: 50                    # minimum junk packet size
+  #   jmax: 1000                  # maximum junk packet size
+  #   s1: 20                      # handshake init padding
+  #   s2: 20                      # handshake response padding
+  #   h1: "100-200"               # handshake init header (single value or range)
+  #   h2: "100-200"               # handshake response header
+  #   h3: "100-200"               # cookie message header
+  #   h4: "100-200"               # transport message header
 outlines:
   - name: "default"
     transport: "ss://..."

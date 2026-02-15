@@ -110,12 +110,19 @@ func GenConf(args []string, logger *slog.Logger) {
 		allowedIPs = computed
 	}
 
-	fmt.Println("=== Client WireGuard config ===")
+	if cfg.WireGuard.IsAmneziaWG() {
+		fmt.Println("=== Client AmneziaWG config ===")
+	} else {
+		fmt.Println("=== Client WireGuard config ===")
+	}
 	fmt.Println()
 	fmt.Println("[Interface]")
 	fmt.Printf("PrivateKey = %s\n", privateKey)
 	fmt.Printf("Address = %s/24\n", clientIP)
 	fmt.Printf("DNS = %s\n", cfg.WireGuard.DNS)
+	if cfg.WireGuard.IsAmneziaWG() {
+		printAWGInterfaceParams(cfg.WireGuard.AmneziaWG)
+	}
 	fmt.Println()
 	fmt.Println("[Peer]")
 	if serverPublicKey, err := config.DerivePublicKey(cfg.WireGuard.PrivateKey); err == nil {

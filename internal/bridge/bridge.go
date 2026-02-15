@@ -29,8 +29,6 @@ import (
 	"github.com/blikh/wireguard-outline-bridge/internal/statsdb"
 	tgbot "github.com/blikh/wireguard-outline-bridge/internal/telegram"
 	wg "github.com/blikh/wireguard-outline-bridge/internal/wireguard"
-	"golang.zx2c4.com/wireguard/conn"
-	"golang.zx2c4.com/wireguard/device"
 )
 
 type Bridge struct {
@@ -40,7 +38,7 @@ type Bridge struct {
 
 	mu            sync.Mutex
 	cfg           *config.Config
-	wgDev         *device.Device
+	wgDev         wg.Device
 	outlineClient *outline.SwappableClient
 	tracker       *proxy.ConnTracker
 	peerMon       *peerMonitor
@@ -102,11 +100,14 @@ func (b *Bridge) Run(ctx context.Context) error {
 		}
 	}
 
-	tunDev, err := wg.CreateNetTUNWithStack([]netip.Addr{addr}, b.cfg.WireGuard.MTU, b.logger)
+	backend := wg.NewBackend(b.cfg.WireGuard.Mode)
+	b.logger.Info("using wireguard backend", "backend", backend.Name())
+
+	tunDevice, netStack, tunCloser, err := backend.CreateTUN([]netip.Addr{addr}, b.cfg.WireGuard.MTU, b.logger)
 	if err != nil {
 		return fmt.Errorf("creating netstack tun: %w", err)
 	}
-	defer tunDev.Close()
+	defer tunCloser()
 
 	b.tracker = proxy.NewConnTracker()
 
@@ -202,13 +203,13 @@ func (b *Bridge) Run(ctx context.Context) error {
 	downloader.Start(ctx)
 
 	tcpProxy := proxy.NewTCPProxy(router, dialers, b.tracker, b.logger)
-	tcpProxy.SetupForwarder(tunDev.Stack)
+	tcpProxy.SetupForwarder(netStack)
 
 	udpProxy := proxy.NewUDPProxy(router, dialers, b.tracker, b.logger)
 	if b.cfg.DNS.Enabled {
 		udpProxy.SetDNSTarget(b.cfg.DNS.Listen)
 	}
-	udpProxy.SetupForwarder(tunDev.Stack)
+	udpProxy.SetupForwarder(netStack)
 
 	b.logger.Info("proxies configured on gVisor stack")
 
@@ -224,8 +225,11 @@ func (b *Bridge) Run(ctx context.Context) error {
 		}
 	}
 
-	wgLogger := newWireGuardLogger(b.logger, b.cfg.ParseLogLevel())
-	b.wgDev = device.NewDevice(tunDev, conn.NewDefaultBind(), wgLogger)
+	wgDev, err := backend.CreateDevice(tunDevice, b.logger, b.cfg.ParseLogLevel())
+	if err != nil {
+		return fmt.Errorf("creating wireguard device: %w", err)
+	}
+	b.wgDev = wgDev
 	defer b.wgDev.Close()
 
 	for name, peer := range b.cfg.Peers {
@@ -983,22 +987,6 @@ func (b *Bridge) startHealthChecker(ctx context.Context, name string, dialer *ou
 			check()
 		}
 	}
-}
-
-func newWireGuardLogger(logger *slog.Logger, level slog.Level) *device.Logger {
-	wgLog := logger.With("component", "wireguard")
-	l := &device.Logger{
-		Errorf: func(format string, args ...any) {
-			wgLog.Error(fmt.Sprintf(format, args...))
-		},
-	}
-	l.Verbosef = func(format string, args ...any) {}
-	if level <= slog.LevelDebug {
-		l.Verbosef = func(format string, args ...any) {
-			wgLog.Debug(fmt.Sprintf(format, args...))
-		}
-	}
-	return l
 }
 
 func buildDNSRules(cfg config.DNSConfig, logger *slog.Logger) []dns.Rule {

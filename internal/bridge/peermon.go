@@ -10,9 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"golang.zx2c4.com/wireguard/device"
-
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
+	wg "github.com/blikh/wireguard-outline-bridge/internal/wireguard"
 )
 
 const peerMonitorInterval = 10 * time.Second
@@ -27,7 +26,7 @@ type peerStatus struct {
 }
 
 type peerMonitor struct {
-	dev    *device.Device
+	dev    wg.Device
 	peers  map[string]config.PeerConfig
 	logger *slog.Logger
 
@@ -35,7 +34,7 @@ type peerMonitor struct {
 	lastGoodHandshake map[string]time.Time
 }
 
-func newPeerMonitor(dev *device.Device, peers map[string]config.PeerConfig, logger *slog.Logger) *peerMonitor {
+func newPeerMonitor(dev wg.Device, peers map[string]config.PeerConfig, logger *slog.Logger) *peerMonitor {
 	return &peerMonitor{
 		dev:               dev,
 		peers:             peers,
