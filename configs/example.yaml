@@ -101,8 +101,9 @@ wireguard:
 
 # miniapp:                       # Telegram Mini App (web admin panel)
 #   enabled: true
-#   listen: ":8443"              # HTTP listen address (default: ":8443")
+#   listen: ":443"               # HTTPS listen address (default: ":443")
 #   domain: "admin.example.com"  # public domain (required; Telegram requires HTTPS)
+#   acme_email: "admin@example.com"  # optional email for Let's Encrypt notifications
 
 outlines:
   - name: "default"

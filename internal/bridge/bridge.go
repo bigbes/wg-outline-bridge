@@ -269,7 +269,11 @@ func (b *Bridge) Run(ctx context.Context) error {
 		b.logger.Info("telegram observer started", "interval", b.cfg.Telegram.Interval)
 
 		if b.cfg.MiniApp.Enabled {
-			maSrv := miniapp.New(b, b, b, b.cfg.Telegram.Token, b.cfg.Telegram.AllowedUsers, b.cfg.MiniApp.Listen, b.cfg.MiniApp.Domain, b.logger)
+			acmeDir := ""
+			if b.cfg.CacheDir != "" {
+				acmeDir = filepath.Join(b.cfg.CacheDir, "acme", "miniapp")
+			}
+			maSrv := miniapp.New(b, b, b, b.cfg.Telegram.Token, b.cfg.Telegram.AllowedUsers, b.cfg.MiniApp.Listen, b.cfg.MiniApp.Domain, b.cfg.MiniApp.ACMEEmail, acmeDir, b.logger)
 			go func() {
 				if err := maSrv.Run(ctx); err != nil {
 					b.logger.Error("miniapp server error", "err", err)

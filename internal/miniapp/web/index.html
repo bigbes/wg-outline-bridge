@@ -78,6 +78,7 @@ h2 { font-size: 15px; margin: 16px 0 8px; display: flex; align-items: center; ga
   gap: 4px;
   margin-bottom: 12px;
   overflow-x: auto;
+  justify-content: center;
 }
 .tab {
   padding: 6px 14px;
@@ -109,6 +110,27 @@ h2 { font-size: 15px; margin: 16px 0 8px; display: flex; align-items: center; ga
 </head>
 <body>
 
+<div id="unauthorized" style="display:none;text-align:center;padding:40px 20px;">
+  <div style="font-size:80px;line-height:1;margin-bottom:16px;">🕸️🕷️🕸️</div>
+  <h1 style="font-size:22px;margin-bottom:12px;">Nothing to see here</h1>
+  <p style="color:var(--hint);font-size:14px;max-width:300px;margin:0 auto 16px;">
+    This admin panel only works inside Telegram.<br>
+    A wild spider has taken over this page in the meantime.
+  </p>
+  <p style="font-size:12px;color:var(--hint);">🚪 Please open this via the Telegram bot menu.</p>
+</div>
+
+<div id="forbidden" style="display:none;text-align:center;padding:40px 20px;">
+  <div style="font-size:80px;line-height:1;margin-bottom:16px;">🐔🐔🐔</div>
+  <h1 style="font-size:22px;margin-bottom:12px;">Bawk! Access denied!</h1>
+  <p style="color:var(--hint);font-size:14px;max-width:300px;margin:0 auto 16px;">
+    Only the farmer gets in here.<br>
+    You're just a chicken passing by. 🐣
+  </p>
+  <p style="font-size:12px;color:var(--hint);">🚜 Ask the admin to add you to the coop.</p>
+</div>
+
+<div id="app">
 <h1>🌐 WG-Outline Bridge</h1>
 <div id="uptime" class="uptime"></div>
 
@@ -162,9 +184,16 @@ h2 { font-size: 15px; margin: 16px 0 8px; display: flex; align-items: center; ga
   </div>
   <div id="proxy-msg"></div>
 </div>
+</div>
 
 <script>
-const tg = window.Telegram.WebApp;
+const tg = window.Telegram && window.Telegram.WebApp;
+
+if (!tg || !tg.initData) {
+  document.getElementById('unauthorized').style.display = 'block';
+  document.getElementById('app').style.display = 'none';
+} else {
+
 tg.ready();
 tg.expand();
 
@@ -180,7 +209,14 @@ function api(method, path, body) {
     },
   };
   if (body) opts.body = JSON.stringify(body);
-  return fetch(path, opts).then(r => r.json());
+  return fetch(path, opts).then(r => {
+    if (r.status === 403) {
+      document.getElementById('app').style.display = 'none';
+      document.getElementById('forbidden').style.display = 'block';
+      return Promise.reject(new Error('forbidden'));
+    }
+    return r.json();
+  });
 }
 
 function showTab(name) {
@@ -427,6 +463,8 @@ function deleteProxy(name) {
 refresh();
 // Auto-refresh every 30s
 setInterval(refresh, 30000);
+
+} // end else (Telegram gate)
 </script>
 </body>
 </html>

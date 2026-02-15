@@ -192,9 +192,10 @@ type TelegramConfig struct {
 }
 
 type MiniAppConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Listen  string `yaml:"listen"` // e.g. ":8443"
-	Domain  string `yaml:"domain"` // public domain for Telegram WebApp URL
+	Enabled   bool   `yaml:"enabled"`
+	Listen    string `yaml:"listen"`     // e.g. ":443"
+	Domain    string `yaml:"domain"`     // public domain for Telegram WebApp URL
+	ACMEEmail string `yaml:"acme_email"` // optional email for Let's Encrypt
 }
 
 type DatabaseConfig struct {
@@ -359,13 +360,16 @@ func Load(path string) (*Config, error) {
 
 	if cfg.MiniApp.Enabled {
 		if cfg.MiniApp.Listen == "" {
-			cfg.MiniApp.Listen = ":8443"
+			cfg.MiniApp.Listen = ":443"
 		}
 		if cfg.MiniApp.Domain == "" {
 			return nil, fmt.Errorf("miniapp: domain is required when enabled")
 		}
 		if !cfg.Telegram.Enabled || cfg.Telegram.Token == "" {
 			return nil, fmt.Errorf("miniapp: requires telegram.enabled and telegram.token")
+		}
+		if len(cfg.Telegram.AllowedUsers) == 0 {
+			return nil, fmt.Errorf("miniapp: requires telegram.allowed_users to restrict access")
 		}
 	}
 

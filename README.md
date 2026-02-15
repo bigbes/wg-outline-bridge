@@ -385,15 +385,18 @@ A web-based admin panel accessible as a [Telegram Mini App](https://core.telegra
 ### Setup
 
 1. Requires `telegram.enabled` and `telegram.token` to be configured
-2. Point a domain at your server and set up a reverse proxy (e.g. nginx) with TLS to forward to the mini app listen address
+2. Point a domain's DNS A record at your server
 3. Add to your config:
 
 ```yaml
 miniapp:
   enabled: true
-  listen: ":8443"              # HTTP listen address (default: ":8443")
-  domain: "admin.example.com"  # public domain (required; Telegram requires HTTPS)
+  listen: ":443"                         # HTTPS listen address (default: ":443")
+  domain: "admin.example.com"            # public domain (required; Telegram requires HTTPS)
+  acme_email: "admin@example.com"        # optional email for Let's Encrypt notifications
 ```
+
+TLS certificates are obtained automatically from Let's Encrypt. The server attempts HTTP-01 challenge validation on port 80 and falls back to TLS-ALPN-01 on the main listen port. Certificates are cached in `<cache_dir>/acme/miniapp/`.
 
 When enabled, the bot's menu button is automatically set to open the Mini App. Authentication uses Telegram WebApp init data validation (HMAC-SHA256). If `telegram.allowed_users` is configured, the same restrictions apply to the Mini App.
 

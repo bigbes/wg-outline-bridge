@@ -2,12 +2,15 @@ package miniapp
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/blikh/wireguard-outline-bridge/internal/observer"
 )
@@ -21,6 +24,8 @@ type Server struct {
 	allowedUsers []int64
 	listen       string
 	domain       string
+	acmeEmail    string
+	acmeDir      string
 	logger       *slog.Logger
 }
 
@@ -33,6 +38,8 @@ func New(
 	allowedUsers []int64,
 	listen string,
 	domain string,
+	acmeEmail string,
+	acmeDir string,
 	logger *slog.Logger,
 ) *Server {
 	return &Server{
@@ -43,16 +50,22 @@ func New(
 		allowedUsers: allowedUsers,
 		listen:       listen,
 		domain:       domain,
+		acmeEmail:    acmeEmail,
+		acmeDir:      acmeDir,
 		logger:       logger,
 	}
 }
 
 // URL returns the public URL of the Mini App.
 func (s *Server) URL() string {
-	return fmt.Sprintf("https://%s/", s.domain)
+	_, port, _ := strings.Cut(s.listen, ":")
+	if port == "" || port == "443" {
+		return fmt.Sprintf("https://%s/", s.domain)
+	}
+	return fmt.Sprintf("https://%s:%s/", s.domain, port)
 }
 
-// Run starts the HTTP server and blocks until ctx is cancelled.
+// Run starts the HTTPS server with Let's Encrypt and blocks until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
 
@@ -68,8 +81,21 @@ func (s *Server) Run(ctx context.Context) error {
 	// Static files (SPA).
 	mux.HandleFunc("/", s.handleStatic)
 
+	m := &autocert.Manager{
+		Prompt:     autocert.AcceptTOS,
+		HostPolicy: autocert.HostWhitelist(s.domain),
+		Email:      s.acmeEmail,
+	}
+	if s.acmeDir != "" {
+		m.Cache = autocert.DirCache(s.acmeDir)
+	}
+
+	tlsCfg := m.TLSConfig()
+	tlsCfg.MinVersion = tls.VersionTLS12
+
 	srv := &http.Server{
 		Handler:      mux,
+		TLSConfig:    tlsCfg,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		BaseContext:  func(_ net.Listener) context.Context { return ctx },
@@ -79,6 +105,31 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("miniapp: listen %s: %w", s.listen, err)
 	}
+	tlsLn := tls.NewListener(ln, tlsCfg)
+
+	// Start HTTP-01 challenge server on :80 if the main listener is not :80.
+	go func() {
+		httpSrv := &http.Server{
+			Handler:      m.HTTPHandler(nil),
+			ReadTimeout:  5 * time.Second,
+			WriteTimeout: 5 * time.Second,
+		}
+		httpLn, err := net.Listen("tcp", ":80")
+		if err != nil {
+			s.logger.Warn("miniapp: could not listen on :80 for ACME HTTP-01 challenge, using TLS-ALPN-01 only", "err", err)
+			return
+		}
+		s.logger.Info("miniapp: ACME HTTP-01 challenge server started", "listen", ":80")
+		go func() {
+			<-ctx.Done()
+			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			httpSrv.Shutdown(shutCtx)
+		}()
+		if err := httpSrv.Serve(httpLn); err != nil && err != http.ErrServerClosed {
+			s.logger.Warn("miniapp: ACME HTTP-01 server error", "err", err)
+		}
+	}()
 
 	go func() {
 		<-ctx.Done()
@@ -87,8 +138,8 @@ func (s *Server) Run(ctx context.Context) error {
 		srv.Shutdown(shutCtx)
 	}()
 
-	s.logger.Info("miniapp server started", "listen", s.listen, "domain", s.domain)
-	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+	s.logger.Info("miniapp server started", "listen", s.listen, "domain", s.domain, "tls", true)
+	if err := srv.Serve(tlsLn); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("miniapp: serve: %w", err)
 	}
 	return nil
@@ -126,19 +177,17 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		if len(s.allowedUsers) > 0 {
-			allowed := false
-			for _, uid := range s.allowedUsers {
-				if uid == userID {
-					allowed = true
-					break
-				}
+		allowed := false
+		for _, uid := range s.allowedUsers {
+			if uid == userID {
+				allowed = true
+				break
 			}
-			if !allowed {
-				s.logger.Debug("miniapp: unauthorized user", "user_id", userID)
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
-				return
-			}
+		}
+		if !allowed {
+			s.logger.Debug("miniapp: unauthorized user", "user_id", userID)
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
+			return
 		}
 
 		next.ServeHTTP(w, r)
