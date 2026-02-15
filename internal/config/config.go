@@ -168,12 +168,12 @@ type FakeTLSConfig struct {
 
 type ProxyServerConfig struct {
 	Name     string         `yaml:"name"`
-	Type     string         `yaml:"type"`     // "socks5", "http", "https"
+	Type     string         `yaml:"type"` // "socks5", "http", "https"
 	Listen   string         `yaml:"listen"`
 	Outline  string         `yaml:"outline"`  // optional named outline, default = default
 	Username string         `yaml:"username"` // optional auth
 	Password string         `yaml:"password"`
-	TLS      ProxyTLSConfig `yaml:"tls"`      // for https type only
+	TLS      ProxyTLSConfig `yaml:"tls"` // for https type only
 }
 
 type ProxyTLSConfig struct {

@@ -39,24 +39,24 @@ type peerInfo struct {
 }
 
 type mtproxyInfo struct {
-	Enabled           bool             `json:"enabled"`
-	Connections       int64            `json:"connections"`
-	ActiveConnections int64            `json:"active_connections"`
-	BytesC2B          int64            `json:"bytes_c2b"`
-	BytesB2C          int64            `json:"bytes_b2c"`
-	BytesC2BTotal     int64            `json:"bytes_c2b_total"`
-	BytesB2CTotal     int64            `json:"bytes_b2c_total"`
-	Secrets           []secretInfo     `json:"secrets"`
-	Links             []string         `json:"links"`
+	Enabled           bool         `json:"enabled"`
+	Connections       int64        `json:"connections"`
+	ActiveConnections int64        `json:"active_connections"`
+	BytesC2B          int64        `json:"bytes_c2b"`
+	BytesB2C          int64        `json:"bytes_b2c"`
+	BytesC2BTotal     int64        `json:"bytes_c2b_total"`
+	BytesB2CTotal     int64        `json:"bytes_b2c_total"`
+	Secrets           []secretInfo `json:"secrets"`
+	Links             []string     `json:"links"`
 }
 
 type secretInfo struct {
-	Secret          string `json:"secret"`
-	LastConnection  int64  `json:"last_connection_unix"`
-	Connections     int64  `json:"connections"`
-	ConnectionsTotal int64 `json:"connections_total"`
-	BytesC2B        int64  `json:"bytes_c2b"`
-	BytesB2C        int64  `json:"bytes_b2c"`
+	Secret           string `json:"secret"`
+	LastConnection   int64  `json:"last_connection_unix"`
+	Connections      int64  `json:"connections"`
+	ConnectionsTotal int64  `json:"connections_total"`
+	BytesC2B         int64  `json:"bytes_c2b"`
+	BytesB2C         int64  `json:"bytes_b2c"`
 }
 
 type outlineInfo struct {
@@ -68,12 +68,12 @@ type outlineInfo struct {
 }
 
 type proxyInfo struct {
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	Listen   string `json:"listen"`
-	Outline  string `json:"outline"`
-	HasAuth  bool   `json:"has_auth"`
-	Link     string `json:"link"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Listen  string `json:"listen"`
+	Outline string `json:"outline"`
+	HasAuth bool   `json:"has_auth"`
+	Link    string `json:"link"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
