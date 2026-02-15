@@ -95,6 +95,20 @@ CREATE TABLE IF NOT EXISTS mtproxy_secrets (
   disabled INTEGER NOT NULL DEFAULT 0,
   comment TEXT NOT NULL DEFAULT '',
   created_unix INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE TABLE IF NOT EXISTS proxy_servers (
+  name TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  listen TEXT NOT NULL,
+  outline TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  password TEXT NOT NULL DEFAULT '',
+  tls_cert_file TEXT NOT NULL DEFAULT '',
+  tls_key_file TEXT NOT NULL DEFAULT '',
+  tls_domain TEXT NOT NULL DEFAULT '',
+  tls_acme_email TEXT NOT NULL DEFAULT '',
+  created_unix INTEGER NOT NULL DEFAULT (unixepoch())
 );`
 	if _, err := s.db.Exec(ddl); err != nil {
 		return fmt.Errorf("statsdb: init schema: %w", err)
@@ -569,6 +583,96 @@ func (s *Store) ImportSecrets(secrets []string) (int, error) {
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("statsdb: commit import secrets: %w", err)
+	}
+	return count, nil
+}
+
+// ---------------------------------------------------------------------------
+// Proxy Server CRUD
+// ---------------------------------------------------------------------------
+
+// ListProxyServers returns all proxy server configs from the database.
+func (s *Store) ListProxyServers() ([]config.ProxyServerConfig, error) {
+	rows, err := s.db.Query(
+		`SELECT name, type, listen, outline, username, password,
+		        tls_cert_file, tls_key_file, tls_domain, tls_acme_email
+		 FROM proxy_servers`)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list proxy servers: %w", err)
+	}
+	defer rows.Close()
+
+	var out []config.ProxyServerConfig
+	for rows.Next() {
+		var p config.ProxyServerConfig
+		if err := rows.Scan(&p.Name, &p.Type, &p.Listen, &p.Outline,
+			&p.Username, &p.Password,
+			&p.TLS.CertFile, &p.TLS.KeyFile, &p.TLS.Domain, &p.TLS.ACMEEmail); err != nil {
+			return nil, fmt.Errorf("statsdb: scan proxy server: %w", err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("statsdb: iterate proxy servers: %w", err)
+	}
+	return out, nil
+}
+
+// AddProxyServer inserts a new proxy server config.
+func (s *Store) AddProxyServer(p config.ProxyServerConfig) error {
+	_, err := s.db.Exec(
+		`INSERT INTO proxy_servers (name, type, listen, outline, username, password,
+		                            tls_cert_file, tls_key_file, tls_domain, tls_acme_email)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Name, p.Type, p.Listen, p.Outline, p.Username, p.Password,
+		p.TLS.CertFile, p.TLS.KeyFile, p.TLS.Domain, p.TLS.ACMEEmail,
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: add proxy server %q: %w", p.Name, err)
+	}
+	return nil
+}
+
+// DeleteProxyServer deletes a proxy server by name.
+func (s *Store) DeleteProxyServer(name string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM proxy_servers WHERE name = ?`, name)
+	if err != nil {
+		return false, fmt.Errorf("statsdb: delete proxy server %q: %w", name, err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ImportProxyServers inserts proxy servers from a list, skipping names that already exist.
+func (s *Store) ImportProxyServers(proxies []config.ProxyServerConfig) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(
+		`INSERT OR IGNORE INTO proxy_servers (name, type, listen, outline, username, password,
+		                                      tls_cert_file, tls_key_file, tls_domain, tls_acme_email)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: prepare import proxy servers: %w", err)
+	}
+	defer stmt.Close()
+
+	var count int
+	for _, p := range proxies {
+		res, err := stmt.Exec(p.Name, p.Type, p.Listen, p.Outline, p.Username, p.Password,
+			p.TLS.CertFile, p.TLS.KeyFile, p.TLS.Domain, p.TLS.ACMEEmail)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: import proxy server %q: %w", p.Name, err)
+		}
+		n, _ := res.RowsAffected()
+		count += int(n)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("statsdb: commit import proxy servers: %w", err)
 	}
 	return count, nil
 }

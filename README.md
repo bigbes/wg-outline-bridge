@@ -265,6 +265,8 @@ proxies:
 - **HTTPS** proxy is an HTTP proxy with TLS on the listener (client↔proxy connection is encrypted)
 - **SOCKS5** proxy supports the `CONNECT` command
 
+Proxy servers can also be managed via Telegram bot commands (`/addproxy`, `/delproxy`, `/listproxy`) when the database is enabled. Use `/listproxy` to see connection links in `socks5://` or `http://` format. On first run, proxies from the config file are imported into the database.
+
 ## Telegram Bot
 
 The bridge can be monitored via a Telegram bot. It supports two modes that can be used independently or together:
@@ -303,9 +305,12 @@ If `allowed_users` is set, the bot ignores private messages from users not in th
 | `/delpeer <name>` | Delete a WireGuard peer (requires database) |
 | `/addsecret [type] [comment]` | Add a new MTProxy secret (requires database) |
 | `/delsecret <hex>` | Delete an MTProxy secret (requires database) |
+| `/addproxy <type> <listen> [name] [outline] [user:pass]` | Add a proxy server (requires database) |
+| `/delproxy <name>` | Delete a proxy server (requires database) |
+| `/listproxy` | List proxy servers with connection links |
 | `/help` | List available commands |
 
-The management commands (`/addpeer`, `/delpeer`, `/addsecret`, `/delsecret`) require `database.path` to be configured. Peer changes are applied immediately to the running WireGuard device. MTProxy secret changes require a restart to take effect.
+The management commands (`/addpeer`, `/delpeer`, `/addsecret`, `/delsecret`, `/addproxy`, `/delproxy`) require `database.path` to be configured. Peer changes are applied immediately to the running WireGuard device. MTProxy secret and proxy server changes require a restart to take effect.
 
 ### Status Output
 

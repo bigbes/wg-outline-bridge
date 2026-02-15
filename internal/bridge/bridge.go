@@ -162,6 +162,22 @@ func (b *Bridge) Run(ctx context.Context) error {
 		} else if len(dbSecrets) > 0 {
 			b.cfg.MTProxy.Secrets = dbSecrets
 		}
+
+		// Import file-based proxy servers into DB if DB is empty
+		dbProxies, err := store.ListProxyServers()
+		if err != nil {
+			b.logger.Error("failed to list db proxy servers", "err", err)
+		}
+		if len(dbProxies) == 0 && len(b.cfg.Proxies) > 0 {
+			imported, err := store.ImportProxyServers(b.cfg.Proxies)
+			if err != nil {
+				b.logger.Error("failed to import proxy servers to database", "err", err)
+			} else if imported > 0 {
+				b.logger.Info("imported file proxy servers to database", "count", imported)
+			}
+		} else if len(dbProxies) > 0 {
+			b.cfg.Proxies = dbProxies
+		}
 	}
 
 	var geoMgr *geoip.Manager
@@ -747,6 +763,62 @@ func (b *Bridge) DeleteSecret(secretHex string) error {
 	b.cfg.MTProxy.Secrets = secrets
 
 	b.logger.Info("mtproxy secret deleted")
+	return nil
+}
+
+// AddProxy saves a new proxy server config to the database.
+// The bridge needs a restart to start serving the new proxy.
+func (b *Bridge) AddProxy(p config.ProxyServerConfig) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	for _, existing := range b.cfg.Proxies {
+		if existing.Name == p.Name {
+			return fmt.Errorf("proxy %q already exists", p.Name)
+		}
+	}
+
+	if err := b.statsStore.AddProxyServer(p); err != nil {
+		return fmt.Errorf("saving proxy: %w", err)
+	}
+
+	b.cfg.Proxies = append(b.cfg.Proxies, p)
+
+	b.logger.Info("proxy server added", "name", p.Name, "type", p.Type, "listen", p.Listen)
+	return nil
+}
+
+// DeleteProxy removes a proxy server config from the database.
+// The bridge needs a restart to stop the proxy.
+func (b *Bridge) DeleteProxy(name string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	found, err := b.statsStore.DeleteProxyServer(name)
+	if err != nil {
+		return fmt.Errorf("deleting proxy: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("proxy %q not found", name)
+	}
+
+	proxies := make([]config.ProxyServerConfig, 0, len(b.cfg.Proxies))
+	for _, p := range b.cfg.Proxies {
+		if p.Name != name {
+			proxies = append(proxies, p)
+		}
+	}
+	b.cfg.Proxies = proxies
+
+	b.logger.Info("proxy server deleted", "name", name)
 	return nil
 }
 

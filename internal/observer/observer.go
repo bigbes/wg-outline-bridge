@@ -86,6 +86,8 @@ type Manager interface {
 	DeletePeer(name string) error
 	AddSecret(secretType, comment string) (string, error)
 	DeleteSecret(secretHex string) error
+	AddProxy(p config.ProxyServerConfig) error
+	DeleteProxy(name string) error
 }
 
 // Observer sends periodic status updates and handles bot commands via Telegram.
@@ -133,6 +135,9 @@ func (o *Observer) registerCommands(ctx context.Context) {
 		{Command: "delpeer", Description: "Delete a WireGuard peer"},
 		{Command: "addsecret", Description: "Add a new MTProxy secret"},
 		{Command: "delsecret", Description: "Delete an MTProxy secret"},
+		{Command: "addproxy", Description: "Add a proxy server (socks5/http/https)"},
+		{Command: "delproxy", Description: "Delete a proxy server"},
+		{Command: "listproxy", Description: "List proxy servers and connection links"},
 		{Command: "help", Description: "Show available commands"},
 	}
 	if err := o.bot.SetMyCommands(ctx, commands); err != nil {
@@ -286,6 +291,28 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 		} else {
 			reply = o.handleDelSecret(args)
 		}
+	case "/addproxy":
+		if o.manager == nil {
+			reply = "⚠️ Management not available (database not configured)"
+		} else if args == "" {
+			reply = "Usage: /addproxy &lt;type&gt; &lt;listen&gt; [name] [outline] [user:pass]\n\nExamples:\n/addproxy socks5 0.0.0.0:1080\n/addproxy http 0.0.0.0:8080 my-http default user:pass\n/addproxy socks5 0.0.0.0:1080 my-socks default user:pass"
+			html = true
+		} else {
+			reply = o.handleAddProxy(args)
+			html = true
+		}
+	case "/delproxy":
+		if o.manager == nil {
+			reply = "⚠️ Management not available (database not configured)"
+		} else if args == "" {
+			reply = "Usage: /delproxy &lt;name&gt;"
+			html = true
+		} else {
+			reply = o.handleDelProxy(args)
+		}
+	case "/listproxy":
+		reply = o.handleListProxy()
+		html = true
 	case "/help", "/start":
 		reply = "Available commands:\n" +
 			"/status — show peer status, traffic, and connections\n" +
@@ -296,6 +323,9 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 			"/delpeer <name> — delete a WireGuard peer\n" +
 			"/addsecret [type] [comment] — add a new MTProxy secret\n" +
 			"/delsecret <hex> — delete an MTProxy secret\n" +
+			"/addproxy <type> <listen> [name] [outline] [user:pass] — add a proxy server\n" +
+			"/delproxy <name> — delete a proxy server\n" +
+			"/listproxy — list proxy servers and connection links\n" +
 			"/help — show this message"
 	default:
 		return
@@ -614,4 +644,118 @@ func (o *Observer) handleDelSecret(secretHex string) string {
 		return fmt.Sprintf("❌ Failed to delete secret: %s", err)
 	}
 	return fmt.Sprintf("✅ Secret deleted\n\n⚠️ Restart required for MTProxy to stop accepting this secret")
+}
+
+func (o *Observer) handleAddProxy(args string) string {
+	parts := strings.Fields(args)
+	if len(parts) < 2 {
+		return "Usage: /addproxy &lt;type&gt; &lt;listen&gt; [name] [outline] [user:pass]"
+	}
+
+	p := config.ProxyServerConfig{
+		Type:   parts[0],
+		Listen: parts[1],
+	}
+
+	switch p.Type {
+	case "socks5", "http":
+	default:
+		return fmt.Sprintf("❌ Unsupported type %q (use socks5 or http)", p.Type)
+	}
+
+	if len(parts) >= 3 {
+		p.Name = parts[2]
+	} else {
+		p.Name = fmt.Sprintf("%s-%s", p.Type, strings.ReplaceAll(p.Listen, ":", "-"))
+	}
+
+	if len(parts) >= 4 {
+		p.Outline = parts[3]
+	}
+
+	if len(parts) >= 5 {
+		if user, pass, ok := strings.Cut(parts[4], ":"); ok {
+			p.Username = user
+			p.Password = pass
+		}
+	}
+
+	if err := o.manager.AddProxy(p); err != nil {
+		return fmt.Sprintf("❌ Failed to add proxy: %s", err)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "✅ Proxy <code>%s</code> added\n\n", p.Name)
+	fmt.Fprintf(&b, "Type: %s\nListen: %s\n", p.Type, p.Listen)
+	if p.Username != "" {
+		fmt.Fprintf(&b, "Auth: %s:***\n", p.Username)
+	}
+	b.WriteString("\n⚠️ Restart required for the proxy to start")
+	return b.String()
+}
+
+func (o *Observer) handleDelProxy(name string) string {
+	if err := o.manager.DeleteProxy(name); err != nil {
+		return fmt.Sprintf("❌ Failed to delete proxy: %s", err)
+	}
+	return fmt.Sprintf("✅ Proxy %q deleted\n\n⚠️ Restart required to stop the proxy", name)
+}
+
+func (o *Observer) handleListProxy() string {
+	cfg := o.cfgProv.CurrentConfig()
+	if len(cfg.Proxies) == 0 {
+		return "No proxy servers configured"
+	}
+
+	serverIP := cfg.ServerPublicIP()
+	if serverIP == "" {
+		serverIP = "<SERVER_IP>"
+	}
+
+	var b strings.Builder
+	b.WriteString("🔌 Proxy Servers:\n\n")
+	for _, p := range cfg.Proxies {
+		fmt.Fprintf(&b, "• <b>%s</b> (%s)\n", p.Name, p.Type)
+		fmt.Fprintf(&b, "  Listen: %s\n", p.Listen)
+
+		_, port, _ := strings.Cut(p.Listen, ":")
+		if port == "" {
+			port = p.Listen
+		}
+		// Handle addresses like 0.0.0.0:port or :port
+		if strings.HasPrefix(p.Listen, "0.0.0.0:") || strings.HasPrefix(p.Listen, ":") {
+			// Use public IP
+		}
+
+		switch p.Type {
+		case "socks5":
+			if p.Username != "" {
+				fmt.Fprintf(&b, "  Link: <code>socks5://%s:%s@%s:%s</code>\n", p.Username, p.Password, serverIP, port)
+			} else {
+				fmt.Fprintf(&b, "  Link: <code>socks5://%s:%s</code>\n", serverIP, port)
+			}
+		case "http":
+			if p.Username != "" {
+				fmt.Fprintf(&b, "  Link: <code>http://%s:%s@%s:%s</code>\n", p.Username, p.Password, serverIP, port)
+			} else {
+				fmt.Fprintf(&b, "  Link: <code>http://%s:%s</code>\n", serverIP, port)
+			}
+		case "https":
+			host := serverIP
+			if p.TLS.Domain != "" {
+				host = p.TLS.Domain
+			}
+			if p.Username != "" {
+				fmt.Fprintf(&b, "  Link: <code>https://%s:%s@%s:%s</code>\n", p.Username, p.Password, host, port)
+			} else {
+				fmt.Fprintf(&b, "  Link: <code>https://%s:%s</code>\n", host, port)
+			}
+		}
+
+		if p.Outline != "" && p.Outline != "default" {
+			fmt.Fprintf(&b, "  Outline: %s\n", p.Outline)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
 }
