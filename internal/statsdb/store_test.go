@@ -102,56 +102,56 @@ func TestFlushWireGuardPeers(t *testing.T) {
 	}
 }
 
-func TestFlushMTProxyPeers(t *testing.T) {
+func TestFlushMTProxySecrets(t *testing.T) {
 	s := testStore(t)
 
-	peers := []MTPeerSnapshot{
-		{PeerKey: "1.2.3.4", LastConnectionUnix: 1000, Connections: 5, BytesC2B: 1000, BytesB2C: 2000},
+	secrets := []MTSecretSnapshot{
+		{SecretHex: "aabbccdd11223344", LastConnectionUnix: 1000, Connections: 5, BytesC2B: 1000, BytesB2C: 2000},
 	}
-	if err := s.FlushMTProxyPeers(peers); err != nil {
+	if err := s.FlushMTProxySecrets(secrets); err != nil {
 		t.Fatal(err)
 	}
 
-	recs, err := s.GetMTPeerStats()
+	recs, err := s.GetMTSecretStats()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recs["1.2.3.4"].ConnectionsTotal != 5 {
-		t.Fatalf("connections: got %d, want 5", recs["1.2.3.4"].ConnectionsTotal)
+	if recs["aabbccdd11223344"].ConnectionsTotal != 5 {
+		t.Fatalf("connections: got %d, want 5", recs["aabbccdd11223344"].ConnectionsTotal)
 	}
 
 	// Second flush: delta accumulation
-	peers[0].Connections = 8
-	peers[0].BytesC2B = 1500
-	peers[0].BytesB2C = 2500
-	peers[0].LastConnectionUnix = 2000
-	if err := s.FlushMTProxyPeers(peers); err != nil {
+	secrets[0].Connections = 8
+	secrets[0].BytesC2B = 1500
+	secrets[0].BytesB2C = 2500
+	secrets[0].LastConnectionUnix = 2000
+	if err := s.FlushMTProxySecrets(secrets); err != nil {
 		t.Fatal(err)
 	}
 
-	recs, _ = s.GetMTPeerStats()
-	if recs["1.2.3.4"].ConnectionsTotal != 8 {
-		t.Fatalf("connections: got %d, want 8", recs["1.2.3.4"].ConnectionsTotal)
+	recs, _ = s.GetMTSecretStats()
+	if recs["aabbccdd11223344"].ConnectionsTotal != 8 {
+		t.Fatalf("connections: got %d, want 8", recs["aabbccdd11223344"].ConnectionsTotal)
 	}
-	if recs["1.2.3.4"].BytesC2BTotal != 1500 {
-		t.Fatalf("bytes_c2b: got %d, want 1500", recs["1.2.3.4"].BytesC2BTotal)
+	if recs["aabbccdd11223344"].BytesC2BTotal != 1500 {
+		t.Fatalf("bytes_c2b: got %d, want 1500", recs["aabbccdd11223344"].BytesC2BTotal)
 	}
-	if recs["1.2.3.4"].LastConnectionUnix != 2000 {
-		t.Fatalf("last_connection: got %d, want 2000", recs["1.2.3.4"].LastConnectionUnix)
+	if recs["aabbccdd11223344"].LastConnectionUnix != 2000 {
+		t.Fatalf("last_connection: got %d, want 2000", recs["aabbccdd11223344"].LastConnectionUnix)
 	}
 
 	// Third flush: simulate counter reset
-	peers[0].Connections = 2
-	peers[0].BytesC2B = 100
-	peers[0].BytesB2C = 200
-	peers[0].LastConnectionUnix = 3000
-	if err := s.FlushMTProxyPeers(peers); err != nil {
+	secrets[0].Connections = 2
+	secrets[0].BytesC2B = 100
+	secrets[0].BytesB2C = 200
+	secrets[0].LastConnectionUnix = 3000
+	if err := s.FlushMTProxySecrets(secrets); err != nil {
 		t.Fatal(err)
 	}
 
-	recs, _ = s.GetMTPeerStats()
+	recs, _ = s.GetMTSecretStats()
 	// 8 + 2 (reset treats full value as delta) = 10
-	if recs["1.2.3.4"].ConnectionsTotal != 10 {
-		t.Fatalf("connections after reset: got %d, want 10", recs["1.2.3.4"].ConnectionsTotal)
+	if recs["aabbccdd11223344"].ConnectionsTotal != 10 {
+		t.Fatalf("connections after reset: got %d, want 10", recs["aabbccdd11223344"].ConnectionsTotal)
 	}
 }

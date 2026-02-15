@@ -18,23 +18,21 @@ type WGPeerRecord struct {
 	ConnectionsTotal  int64
 }
 
-// MTPeerSnapshot is the current in-memory snapshot for an MTProxy remote peer.
-type MTPeerSnapshot struct {
-	PeerKey            string
+// MTSecretSnapshot is the current in-memory snapshot for an MTProxy secret.
+type MTSecretSnapshot struct {
+	SecretHex          string
 	LastConnectionUnix int64
 	Connections        int64
 	BytesC2B           int64
 	BytesB2C           int64
-	HandshakeErrors    int64
 	BackendDialErrors  int64
 }
 
-// MTPeerRecord is the persisted cumulative record for MTProxy.
-type MTPeerRecord struct {
+// MTSecretRecord is the persisted cumulative record for an MTProxy secret.
+type MTSecretRecord struct {
 	LastConnectionUnix     int64
 	ConnectionsTotal       int64
 	BytesC2BTotal          int64
 	BytesB2CTotal          int64
-	HandshakeErrorsTotal   int64
 	BackendDialErrorsTotal int64
 }

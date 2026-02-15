@@ -85,7 +85,8 @@ type ObfuscatedHeader struct {
 }
 
 // DecryptHeader attempts to decrypt and parse the 64-byte obfuscated header
-// using the given secrets. Returns the parsed header on success.
+// using the given secrets. Returns the parsed header and the index of the
+// matched secret on success.
 //
 // Based on the C implementation in net/net-tcp-rpc-ext-server.c:1271-1367:
 //   - Derive read key: SHA256(header[8:40] + secret)
@@ -93,14 +94,14 @@ type ObfuscatedHeader struct {
 //   - Derive write key: SHA256(reverse(header[24:56]) + secret)
 //   - Write IV: reverse(header[8:24])
 //   - Decrypt header with read stream, check tag at offset 56
-func DecryptHeader(header [64]byte, secrets []Secret) (*ObfuscatedHeader, error) {
-	for _, secret := range secrets {
+func DecryptHeader(header [64]byte, secrets []Secret) (*ObfuscatedHeader, int, error) {
+	for i, secret := range secrets {
 		result, err := tryDecryptHeader(header, secret)
 		if err == nil {
-			return result, nil
+			return result, i, nil
 		}
 	}
-	return nil, fmt.Errorf("no matching secret found")
+	return nil, -1, fmt.Errorf("no matching secret found")
 }
 
 func tryDecryptHeader(header [64]byte, secret Secret) (*ObfuscatedHeader, error) {

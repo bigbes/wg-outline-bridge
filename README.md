@@ -16,7 +16,29 @@ WireGuard Client ──► WireGuard (userspace) ──► gVisor netstack ─�
 
 ## Quick Start
 
-### Build
+### Install
+
+An installation script is provided in `scripts/install.sh`. It builds the binary, creates the directory layout, generates server keys and config, and installs the systemd unit. Requires `sudo` and Go installed.
+
+```bash
+sudo ./scripts/install.sh "ss://..."               # default prefix /data
+sudo ./scripts/install.sh /opt/bridge "ss://..."    # custom prefix
+```
+
+This creates the following layout under the prefix:
+
+```
+<prefix>/
+  bin/bridge          # binary
+  etc/bridge.conf     # config (with generated server keys)
+  etc/peers/          # peer configs
+  var/log/bridge.log  # log file
+  var/lib/bridge/     # data directory (sqlite, etc.)
+```
+
+If the config file already exists, key generation is skipped.
+
+### Build (manual)
 
 ```bash
 go build ./cmd/bridge/main.go
@@ -78,6 +100,9 @@ outlines:
       target: "1.1.1.1:80"
   - name: "alt"
     transport: "ss://..."
+database:
+  path: "/var/lib/wg-outline-bridge/bridge.sqlite"  # empty or omitted = disabled
+  flush_interval: 30                                 # seconds (default: 30)
 ```
 
 ### Outline Entries
@@ -243,13 +268,13 @@ If `allowed_users` is set, the bot ignores private messages from users not in th
   Connections: 2 active, 18 session, 204 total
   Traffic: ↑5.3 MB ↓12.1 MB
   Total: ↑1.2 GB ↓3.4 GB
-  Errors: 3 handshake, 1 dial (45/12 total)
+  Errors: 3 handshake, 1 dial (1 dial total)
   TLS: 16 session
 
-  Clients:
-  • 203.0.113.5 — last 2m ago
+  Secrets:
+  • a1b2c3d4… — last 2m ago
     Conns: 12 session, 150 total | Traffic: ↑3.1 MB ↓8.0 MB (↑900.0 MB ↓2.5 GB)
-  • 198.51.100.10 — last 1h 15m ago
+  • e5f6a7b8… — last 1h 15m ago
     Conns: 6 session, 54 total | Traffic: ↑2.2 MB ↓4.1 MB (↑300.0 MB ↓900.0 MB)
 ```
 
@@ -260,8 +285,8 @@ Indicators: 🟢 active (handshake < 3 min), 🟡 stale, ⚪ never connected.
 Enable SQLite-backed persistent stats to track cumulative traffic, handshakes, and connections across daemon restarts:
 
 ```yaml
-stats:
-  db_path: /var/lib/wg-outline-bridge/stats.sqlite  # empty or omitted = disabled
+database:
+  path: /var/lib/wg-outline-bridge/bridge.sqlite  # empty or omitted = disabled
   flush_interval: 30  # seconds (default: 30)
 ```
 
@@ -281,6 +306,30 @@ kill -HUP <pid>
 ```
 
 This reloads peers (add/remove) and swaps the default Outline client if its transport URI changed.
+
+## Systemd Service
+
+A systemd unit file is provided in `configs/bridge.service`. Install it with:
+
+```bash
+sudo cp configs/bridge.service /etc/systemd/system/bridge.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now bridge   # start and enable on boot
+```
+
+Manage the service:
+
+```bash
+sudo systemctl status bridge        # check status
+sudo systemctl reload bridge        # reload config (sends SIGHUP)
+sudo systemctl stop bridge          # stop the bridge
+```
+
+Logs are written to `/data/var/log/bridge.log`. Make sure the directory exists before starting:
+
+```bash
+sudo mkdir -p /data/var/log
+```
 
 ## Commands
 

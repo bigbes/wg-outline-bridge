@@ -178,8 +178,8 @@ func (b *Bridge) Run(ctx context.Context) error {
 	b.peerMon = newPeerMonitor(b.wgDev, b.cfg.Peers, b.logger)
 	go b.peerMon.run(ctx)
 
-	if b.cfg.Stats.DBPath != "" {
-		store, err := statsdb.Open(b.cfg.Stats.DBPath, b.logger)
+	if b.cfg.Database.Path != "" {
+		store, err := statsdb.Open(b.cfg.Database.Path, b.logger)
 		if err != nil {
 			return fmt.Errorf("opening stats db: %w", err)
 		}
@@ -188,8 +188,8 @@ func (b *Bridge) Run(ctx context.Context) error {
 		if err := store.SetDaemonStartTime(time.Now()); err != nil {
 			b.logger.Error("failed to set daemon start time", "err", err)
 		}
-		go b.statsFlushLoop(ctx, time.Duration(b.cfg.Stats.FlushInterval)*time.Second)
-		b.logger.Info("stats db opened", "path", b.cfg.Stats.DBPath, "flush_interval", b.cfg.Stats.FlushInterval)
+		go b.statsFlushLoop(ctx, time.Duration(b.cfg.Database.FlushInterval)*time.Second)
+		b.logger.Info("stats db opened", "path", b.cfg.Database.Path, "flush_interval", b.cfg.Database.FlushInterval)
 	}
 
 	if b.cfg.Telegram.Enabled {
@@ -307,6 +307,7 @@ func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) err
 	serverCfg := mtproxy.ServerConfig{
 		ListenAddrs: b.cfg.MTProxy.Listen,
 		Secrets:     secrets,
+		SecretHexes: b.cfg.MTProxy.Secrets,
 	}
 	if b.cfg.MTProxy.FakeTLS.Enabled {
 		serverCfg.FakeTLS = &mtproxy.FakeTLSConfig{
@@ -403,40 +404,39 @@ func (b *Bridge) MTProxyStatus() observer.MTProxyStatus {
 		BytesB2C:          snap.BytesBackendToClient.Load(),
 	}
 
-	peerSnap := b.mtSrv.PeerStatsSnapshot()
+	secretSnap := b.mtSrv.SecretStatsSnapshot()
 
-	var dbStats map[string]statsdb.MTPeerRecord
+	var dbStats map[string]statsdb.MTSecretRecord
 	if b.statsStore != nil {
-		dbStats, _ = b.statsStore.GetMTPeerStats()
-		for _, rec := range dbStats {
-			st.ConnectionsTotal += rec.ConnectionsTotal
-			st.BytesC2BTotal += rec.BytesC2BTotal
-			st.BytesB2CTotal += rec.BytesB2CTotal
-			st.HandshakeErrorsTotal += rec.HandshakeErrorsTotal
-			st.BackendDialErrorsTotal += rec.BackendDialErrorsTotal
-		}
+		dbStats, _ = b.statsStore.GetMTSecretStats()
 	}
 
-	// Collect all known client IPs from both session and DB.
-	clientIPs := make(map[string]struct{})
-	for ip := range peerSnap {
-		clientIPs[ip] = struct{}{}
+	// Build per-secret client entries from both session and DB.
+	secretKeys := make(map[string]struct{})
+	for _, ss := range secretSnap {
+		secretKeys[ss.SecretHex] = struct{}{}
 	}
-	for ip := range dbStats {
-		clientIPs[ip] = struct{}{}
+	for key := range dbStats {
+		secretKeys[key] = struct{}{}
 	}
 
-	for ip := range clientIPs {
-		c := observer.MTProxyClient{IP: ip}
-		if ps, ok := peerSnap[ip]; ok {
-			if ps.LastConnectionUnix > 0 {
-				c.LastConnection = time.Unix(ps.LastConnectionUnix, 0)
+	// Index session snapshots by hex.
+	sessionByHex := make(map[string]mtproxy.SecretSnapshot, len(secretSnap))
+	for _, ss := range secretSnap {
+		sessionByHex[ss.SecretHex] = ss
+	}
+
+	for key := range secretKeys {
+		c := observer.MTProxyClient{Secret: key}
+		if ss, ok := sessionByHex[key]; ok {
+			if ss.LastConnectionUnix > 0 {
+				c.LastConnection = time.Unix(ss.LastConnectionUnix, 0)
 			}
-			c.Connections = ps.Connections
-			c.BytesC2B = ps.BytesC2B
-			c.BytesB2C = ps.BytesB2C
+			c.Connections = ss.Connections
+			c.BytesC2B = ss.BytesC2B
+			c.BytesB2C = ss.BytesB2C
 		}
-		if rec, ok := dbStats[ip]; ok {
+		if rec, ok := dbStats[key]; ok {
 			if c.LastConnection.IsZero() && rec.LastConnectionUnix > 0 {
 				c.LastConnection = time.Unix(rec.LastConnectionUnix, 0)
 			}
@@ -444,6 +444,10 @@ func (b *Bridge) MTProxyStatus() observer.MTProxyStatus {
 			c.BytesC2BTotal = rec.BytesC2BTotal
 			c.BytesB2CTotal = rec.BytesB2CTotal
 		}
+		st.ConnectionsTotal += c.ConnectionsTotal
+		st.BytesC2BTotal += c.BytesC2BTotal
+		st.BytesB2CTotal += c.BytesB2CTotal
+		st.BackendDialErrorsTotal += dbStats[key].BackendDialErrorsTotal
 		st.Clients = append(st.Clients, c)
 	}
 
@@ -567,22 +571,21 @@ func (b *Bridge) statsFlush() {
 	}
 
 	if b.mtSrv != nil {
-		peerSnap := b.mtSrv.PeerStatsSnapshot()
-		mtSnapshots := make([]statsdb.MTPeerSnapshot, 0, len(peerSnap))
-		for key, ps := range peerSnap {
-			mtSnapshots = append(mtSnapshots, statsdb.MTPeerSnapshot{
-				PeerKey:            key,
-				LastConnectionUnix: ps.LastConnectionUnix,
-				Connections:        ps.Connections,
-				BytesC2B:           ps.BytesC2B,
-				BytesB2C:           ps.BytesB2C,
-				HandshakeErrors:    ps.HandshakeErrors,
-				BackendDialErrors:  ps.BackendDialErrors,
+		secretSnap := b.mtSrv.SecretStatsSnapshot()
+		mtSnapshots := make([]statsdb.MTSecretSnapshot, 0, len(secretSnap))
+		for _, ss := range secretSnap {
+			mtSnapshots = append(mtSnapshots, statsdb.MTSecretSnapshot{
+				SecretHex:          ss.SecretHex,
+				LastConnectionUnix: ss.LastConnectionUnix,
+				Connections:        ss.Connections,
+				BytesC2B:           ss.BytesC2B,
+				BytesB2C:           ss.BytesB2C,
+				BackendDialErrors:  ss.BackendDialErrors,
 			})
 		}
 		if len(mtSnapshots) > 0 {
-			if err := store.FlushMTProxyPeers(mtSnapshots); err != nil {
-				b.logger.Error("stats: failed to flush mtproxy peers", "err", err)
+			if err := store.FlushMTProxySecrets(mtSnapshots); err != nil {
+				b.logger.Error("stats: failed to flush mtproxy secrets", "err", err)
 			}
 		}
 	}

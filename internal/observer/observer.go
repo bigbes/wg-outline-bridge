@@ -52,15 +52,14 @@ type MTProxyStatus struct {
 	ConnectionsTotal       int64
 	BytesC2BTotal          int64
 	BytesB2CTotal          int64
-	HandshakeErrorsTotal   int64
 	BackendDialErrorsTotal int64
 
 	Clients []MTProxyClient
 }
 
-// MTProxyClient holds per-client MTProxy stats.
+// MTProxyClient holds per-secret MTProxy stats.
 type MTProxyClient struct {
-	IP             string
+	Secret         string // hex secret string
 	LastConnection time.Time
 	Connections    int64
 	BytesC2B       int64
@@ -330,8 +329,8 @@ func formatStatus(peers []PeerStatus, daemon DaemonStatus, mt MTProxyStatus) str
 		}
 		if mt.HandshakeErrors > 0 || mt.BackendDialErrors > 0 {
 			fmt.Fprintf(&b, "  Errors: %d handshake, %d dial", mt.HandshakeErrors, mt.BackendDialErrors)
-			if mt.HandshakeErrorsTotal > 0 || mt.BackendDialErrorsTotal > 0 {
-				fmt.Fprintf(&b, " (%d/%d total)", mt.HandshakeErrorsTotal, mt.BackendDialErrorsTotal)
+			if mt.BackendDialErrorsTotal > 0 {
+				fmt.Fprintf(&b, " (%d dial total)", mt.BackendDialErrorsTotal)
 			}
 			b.WriteString("\n")
 		}
@@ -340,13 +339,14 @@ func formatStatus(peers []PeerStatus, daemon DaemonStatus, mt MTProxyStatus) str
 		}
 
 		if len(mt.Clients) > 0 {
-			b.WriteString("\n  Clients:\n")
+			b.WriteString("\n  Secrets:\n")
 			for _, c := range mt.Clients {
+				label := truncateSecret(c.Secret)
 				lastConn := "never"
 				if !c.LastConnection.IsZero() {
 					lastConn = fmt.Sprintf("%s ago", formatDuration(time.Since(c.LastConnection).Truncate(time.Second)))
 				}
-				fmt.Fprintf(&b, "  • %s — last %s\n", c.IP, lastConn)
+				fmt.Fprintf(&b, "  • %s — last %s\n", label, lastConn)
 				fmt.Fprintf(&b, "    Conns: %d session", c.Connections)
 				if c.ConnectionsTotal > 0 {
 					fmt.Fprintf(&b, ", %d total", c.ConnectionsTotal)
@@ -362,6 +362,18 @@ func formatStatus(peers []PeerStatus, daemon DaemonStatus, mt MTProxyStatus) str
 	}
 
 	return b.String()
+}
+
+func truncateSecret(hex string) string {
+	s := hex
+	// Strip known prefixes for display.
+	if len(s) == 34 && (s[:2] == "dd" || s[:2] == "ee") {
+		s = s[2:]
+	}
+	if len(s) > 8 {
+		return s[:8] + "…"
+	}
+	return s
 }
 
 func formatDuration(d time.Duration) string {

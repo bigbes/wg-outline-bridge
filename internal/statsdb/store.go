@@ -64,18 +64,16 @@ CREATE TABLE IF NOT EXISTS wg_peer_stats (
   tx_last_seen INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS mtproxy_peer_stats (
-  peer_key TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS mtproxy_secret_stats (
+  secret_hex TEXT PRIMARY KEY,
   last_connection_unix INTEGER NOT NULL DEFAULT 0,
   connections_total INTEGER NOT NULL DEFAULT 0,
   bytes_c2b_total INTEGER NOT NULL DEFAULT 0,
   bytes_b2c_total INTEGER NOT NULL DEFAULT 0,
-  handshake_errors_total INTEGER NOT NULL DEFAULT 0,
   backend_dial_errors_total INTEGER NOT NULL DEFAULT 0,
   connections_last_seen INTEGER NOT NULL DEFAULT 0,
   bytes_c2b_last_seen INTEGER NOT NULL DEFAULT 0,
   bytes_b2c_last_seen INTEGER NOT NULL DEFAULT 0,
-  handshake_errors_last_seen INTEGER NOT NULL DEFAULT 0,
   backend_dial_errors_last_seen INTEGER NOT NULL DEFAULT 0
 );`
 	if _, err := s.db.Exec(ddl); err != nil {
@@ -195,8 +193,8 @@ func (s *Store) FlushWireGuardPeers(peers []WGPeerSnapshot) error {
 	return nil
 }
 
-// FlushMTProxyPeers performs delta-accumulation for a batch of MTProxy peer snapshots.
-func (s *Store) FlushMTProxyPeers(peers []MTPeerSnapshot) error {
+// FlushMTProxySecrets performs delta-accumulation for a batch of MTProxy secret snapshots.
+func (s *Store) FlushMTProxySecrets(secrets []MTSecretSnapshot) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("statsdb: begin tx: %w", err)
@@ -205,62 +203,62 @@ func (s *Store) FlushMTProxyPeers(peers []MTPeerSnapshot) error {
 
 	selStmt, err := tx.Prepare(
 		`SELECT connections_last_seen, bytes_c2b_last_seen, bytes_b2c_last_seen,
-		        handshake_errors_last_seen, backend_dial_errors_last_seen,
+		        backend_dial_errors_last_seen,
 		        last_connection_unix, connections_total, bytes_c2b_total,
-		        bytes_b2c_total, handshake_errors_total, backend_dial_errors_total
-		 FROM mtproxy_peer_stats WHERE peer_key = ?`)
+		        bytes_b2c_total, backend_dial_errors_total
+		 FROM mtproxy_secret_stats WHERE secret_hex = ?`)
 	if err != nil {
 		return fmt.Errorf("statsdb: prepare select: %w", err)
 	}
 	defer selStmt.Close()
 
 	updStmt, err := tx.Prepare(
-		`UPDATE mtproxy_peer_stats
+		`UPDATE mtproxy_secret_stats
 		 SET last_connection_unix = ?,
 		     connections_total = ?, bytes_c2b_total = ?, bytes_b2c_total = ?,
-		     handshake_errors_total = ?, backend_dial_errors_total = ?,
+		     backend_dial_errors_total = ?,
 		     connections_last_seen = ?, bytes_c2b_last_seen = ?, bytes_b2c_last_seen = ?,
-		     handshake_errors_last_seen = ?, backend_dial_errors_last_seen = ?
-		 WHERE peer_key = ?`)
+		     backend_dial_errors_last_seen = ?
+		 WHERE secret_hex = ?`)
 	if err != nil {
 		return fmt.Errorf("statsdb: prepare update: %w", err)
 	}
 	defer updStmt.Close()
 
 	insStmt, err := tx.Prepare(
-		`INSERT INTO mtproxy_peer_stats
-		 (peer_key, last_connection_unix,
+		`INSERT INTO mtproxy_secret_stats
+		 (secret_hex, last_connection_unix,
 		  connections_total, bytes_c2b_total, bytes_b2c_total,
-		  handshake_errors_total, backend_dial_errors_total,
+		  backend_dial_errors_total,
 		  connections_last_seen, bytes_c2b_last_seen, bytes_b2c_last_seen,
-		  handshake_errors_last_seen, backend_dial_errors_last_seen)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		  backend_dial_errors_last_seen)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("statsdb: prepare insert: %w", err)
 	}
 	defer insStmt.Close()
 
-	for _, p := range peers {
-		var connLS, c2bLS, b2cLS, hsErrLS, bdErrLS int64
-		var dbLastConn, connTotal, c2bTotal, b2cTotal, hsErrTotal, bdErrTotal int64
-		err := selStmt.QueryRow(p.PeerKey).Scan(
-			&connLS, &c2bLS, &b2cLS, &hsErrLS, &bdErrLS,
-			&dbLastConn, &connTotal, &c2bTotal, &b2cTotal, &hsErrTotal, &bdErrTotal,
+	for _, p := range secrets {
+		var connLS, c2bLS, b2cLS, bdErrLS int64
+		var dbLastConn, connTotal, c2bTotal, b2cTotal, bdErrTotal int64
+		err := selStmt.QueryRow(p.SecretHex).Scan(
+			&connLS, &c2bLS, &b2cLS, &bdErrLS,
+			&dbLastConn, &connTotal, &c2bTotal, &b2cTotal, &bdErrTotal,
 		)
 		if err == sql.ErrNoRows {
 			if _, err := insStmt.Exec(
-				p.PeerKey, p.LastConnectionUnix,
+				p.SecretHex, p.LastConnectionUnix,
 				p.Connections, p.BytesC2B, p.BytesB2C,
-				p.HandshakeErrors, p.BackendDialErrors,
+				p.BackendDialErrors,
 				p.Connections, p.BytesC2B, p.BytesB2C,
-				p.HandshakeErrors, p.BackendDialErrors,
+				p.BackendDialErrors,
 			); err != nil {
-				return fmt.Errorf("statsdb: insert mt peer %s: %w", p.PeerKey, err)
+				return fmt.Errorf("statsdb: insert mt secret %s: %w", p.SecretHex, err)
 			}
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("statsdb: select mt peer %s: %w", p.PeerKey, err)
+			return fmt.Errorf("statsdb: select mt secret %s: %w", p.SecretHex, err)
 		}
 
 		delta := func(curr, lastSeen int64) int64 {
@@ -274,7 +272,6 @@ func (s *Store) FlushMTProxyPeers(peers []MTPeerSnapshot) error {
 		connDelta := delta(p.Connections, connLS)
 		c2bDelta := delta(p.BytesC2B, c2bLS)
 		b2cDelta := delta(p.BytesB2C, b2cLS)
-		hsErrDelta := delta(p.HandshakeErrors, hsErrLS)
 		bdErrDelta := delta(p.BackendDialErrors, bdErrLS)
 
 		lastConn := dbLastConn
@@ -285,12 +282,12 @@ func (s *Store) FlushMTProxyPeers(peers []MTPeerSnapshot) error {
 		if _, err := updStmt.Exec(
 			lastConn,
 			connTotal+connDelta, c2bTotal+c2bDelta, b2cTotal+b2cDelta,
-			hsErrTotal+hsErrDelta, bdErrTotal+bdErrDelta,
+			bdErrTotal+bdErrDelta,
 			p.Connections, p.BytesC2B, p.BytesB2C,
-			p.HandshakeErrors, p.BackendDialErrors,
-			p.PeerKey,
+			p.BackendDialErrors,
+			p.SecretHex,
 		); err != nil {
-			return fmt.Errorf("statsdb: update mt peer %s: %w", p.PeerKey, err)
+			return fmt.Errorf("statsdb: update mt secret %s: %w", p.SecretHex, err)
 		}
 	}
 
@@ -325,31 +322,31 @@ func (s *Store) GetWGPeerStats() (map[string]WGPeerRecord, error) {
 	return out, nil
 }
 
-// GetMTPeerStats returns all persisted MTProxy peer records keyed by peer key.
-func (s *Store) GetMTPeerStats() (map[string]MTPeerRecord, error) {
+// GetMTSecretStats returns all persisted MTProxy secret records keyed by secret hex.
+func (s *Store) GetMTSecretStats() (map[string]MTSecretRecord, error) {
 	rows, err := s.db.Query(
-		`SELECT peer_key, last_connection_unix, connections_total,
+		`SELECT secret_hex, last_connection_unix, connections_total,
 		        bytes_c2b_total, bytes_b2c_total,
-		        handshake_errors_total, backend_dial_errors_total
-		 FROM mtproxy_peer_stats`)
+		        backend_dial_errors_total
+		 FROM mtproxy_secret_stats`)
 	if err != nil {
-		return nil, fmt.Errorf("statsdb: query mt peers: %w", err)
+		return nil, fmt.Errorf("statsdb: query mt secrets: %w", err)
 	}
 	defer rows.Close()
 
-	out := make(map[string]MTPeerRecord)
+	out := make(map[string]MTSecretRecord)
 	for rows.Next() {
-		var pk string
-		var r MTPeerRecord
-		if err := rows.Scan(&pk, &r.LastConnectionUnix, &r.ConnectionsTotal,
+		var key string
+		var r MTSecretRecord
+		if err := rows.Scan(&key, &r.LastConnectionUnix, &r.ConnectionsTotal,
 			&r.BytesC2BTotal, &r.BytesB2CTotal,
-			&r.HandshakeErrorsTotal, &r.BackendDialErrorsTotal); err != nil {
-			return nil, fmt.Errorf("statsdb: scan mt peer: %w", err)
+			&r.BackendDialErrorsTotal); err != nil {
+			return nil, fmt.Errorf("statsdb: scan mt secret: %w", err)
 		}
-		out[pk] = r
+		out[key] = r
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("statsdb: iterate mt peers: %w", err)
+		return nil, fmt.Errorf("statsdb: iterate mt secrets: %w", err)
 	}
 	return out, nil
 }

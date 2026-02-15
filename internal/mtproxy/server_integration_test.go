@@ -63,11 +63,11 @@ func TestMTProxyIntegration_ReqPQ(t *testing.T) {
 	dcID := int16(2)
 	tag := mpcrypto.TagMedium
 	testHeader, _, _ := buildClientHeader(t, secret, tag, dcID)
-	parsed, err := mpcrypto.DecryptHeader(testHeader, []mpcrypto.Secret{secret})
+	parsed, secretIdx, err := mpcrypto.DecryptHeader(testHeader, []mpcrypto.Secret{secret})
 	if err != nil {
 		t.Fatalf("header roundtrip check failed: %v", err)
 	}
-	t.Logf("header roundtrip OK: tag=0x%08x dc=%d", parsed.Tag, parsed.DCID)
+	t.Logf("header roundtrip OK: tag=0x%08x dc=%d secret_idx=%d", parsed.Tag, parsed.DCID, secretIdx)
 
 	// --- Client side: connect with obfuscated2 ---
 	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)

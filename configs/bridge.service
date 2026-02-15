@@ -1,0 +1,22 @@
+[Unit]
+Description=WireGuard-Outline Bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/data/bin/bridge run -config /data/etc/bridge.conf
+ExecReload=/bin/kill -HUP $MAINPID
+StandardOutput=append:/data/var/log/bridge.log
+StandardError=append:/data/var/log/bridge.log
+Restart=no
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/data
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
