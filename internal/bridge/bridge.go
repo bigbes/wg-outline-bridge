@@ -41,6 +41,7 @@ type Bridge struct {
 	cfg           *config.Config
 	wgDev         wg.Device
 	outlineClient *outline.SwappableClient
+	outlineStats  map[string]*outline.StatsDialer
 	tracker       *proxy.ConnTracker
 	peerMon       *peerMonitor
 	mtSrv         *mtproxy.Server
@@ -70,7 +71,10 @@ func (b *Bridge) Run(ctx context.Context) error {
 	b.outlineClient = outline.NewSwappableClient(defaultClient)
 	b.logger.Info("default outline client created", "name", defaultCfg.Name, "transport", config.RedactTransport(defaultCfg.Transport))
 
-	dialers := proxy.NewDialerSet(b.outlineClient)
+	defaultStats := outline.NewStatsDialer(defaultCfg.Name, b.outlineClient)
+	b.outlineStats = map[string]*outline.StatsDialer{defaultCfg.Name: defaultStats}
+
+	dialers := proxy.NewDialerSet(defaultStats)
 	for _, o := range b.cfg.Outlines {
 		if o.Default {
 			continue
@@ -79,7 +83,9 @@ func (b *Bridge) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("creating outline client %q: %w", o.Name, err)
 		}
-		dialers.Outlines[o.Name] = c
+		sd := outline.NewStatsDialer(o.Name, c)
+		dialers.Outlines[o.Name] = sd
+		b.outlineStats[o.Name] = sd
 		b.logger.Info("outline client created", "name", o.Name)
 	}
 
@@ -87,8 +93,12 @@ func (b *Bridge) Run(ctx context.Context) error {
 		if o.HealthCheck.Enabled {
 			dialer := b.outlineClient
 			if !o.Default {
-				if d, ok := dialers.Outlines[o.Name]; ok {
-					dialer = outline.NewSwappableClient(d.(*outline.Client))
+				if _, ok := b.outlineStats[o.Name]; ok {
+					// Use raw client for health checks to avoid polluting stats.
+					c, _ := outline.NewClient(o.Transport)
+					if c != nil {
+						dialer = outline.NewSwappableClient(c)
+					}
 				}
 			}
 			go b.startHealthChecker(ctx, o.Name, dialer,
@@ -614,6 +624,29 @@ func (b *Bridge) MTProxyStatus() observer.MTProxyStatus {
 	})
 
 	return st
+}
+
+// OutlineStatuses implements observer.StatusProvider.
+func (b *Bridge) OutlineStatuses() []observer.OutlineStatus {
+	b.mu.Lock()
+	outlines := b.cfg.Outlines
+	b.mu.Unlock()
+
+	var result []observer.OutlineStatus
+	for _, o := range outlines {
+		st := observer.OutlineStatus{
+			Name:    o.Name,
+			Default: o.Default,
+		}
+		if sd, ok := b.outlineStats[o.Name]; ok {
+			snap := sd.Snapshot()
+			st.RxBytes = snap.RxBytes
+			st.TxBytes = snap.TxBytes
+			st.ActiveConnections = snap.ActiveConnections
+		}
+		result = append(result, st)
+	}
+	return result
 }
 
 // DaemonStatus implements observer.StatusProvider.

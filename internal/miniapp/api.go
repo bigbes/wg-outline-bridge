@@ -13,10 +13,11 @@ import (
 )
 
 type statusResponse struct {
-	Daemon  daemonInfo   `json:"daemon"`
-	Peers   []peerInfo   `json:"peers"`
-	MTProxy mtproxyInfo  `json:"mtproxy"`
-	Proxies []proxyInfo  `json:"proxies"`
+	Daemon   daemonInfo    `json:"daemon"`
+	Peers    []peerInfo    `json:"peers"`
+	Outlines []outlineInfo `json:"outlines"`
+	MTProxy  mtproxyInfo   `json:"mtproxy"`
+	Proxies  []proxyInfo   `json:"proxies"`
 }
 
 type daemonInfo struct {
@@ -56,6 +57,14 @@ type secretInfo struct {
 	ConnectionsTotal int64 `json:"connections_total"`
 	BytesC2B        int64  `json:"bytes_c2b"`
 	BytesB2C        int64  `json:"bytes_b2c"`
+}
+
+type outlineInfo struct {
+	Name              string `json:"name"`
+	Default           bool   `json:"default"`
+	RxBytes           int64  `json:"rx_bytes"`
+	TxBytes           int64  `json:"tx_bytes"`
+	ActiveConnections int64  `json:"active_connections"`
 }
 
 type proxyInfo struct {
@@ -108,6 +117,17 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			pi.Disabled = pc.Disabled
 		}
 		resp.Peers = append(resp.Peers, pi)
+	}
+
+	// Outlines.
+	for _, o := range s.provider.OutlineStatuses() {
+		resp.Outlines = append(resp.Outlines, outlineInfo{
+			Name:              o.Name,
+			Default:           o.Default,
+			RxBytes:           o.RxBytes,
+			TxBytes:           o.TxBytes,
+			ActiveConnections: o.ActiveConnections,
+		})
 	}
 
 	// MTProxy.

@@ -9,6 +9,24 @@ wireguard:
   public_address: ""  # server's public IP, used for client config generation
   mtu: 1420
   dns: "1.1.1.1"
+  # mode: "amneziawg"          # "wireguard" (default) or "amneziawg" (DPI-resistant)
+  # amneziawg:                 # AmneziaWG obfuscation params (only when mode: amneziawg)
+  #   jc: 4                    # junk packet count (sent before each handshake)
+  #   jmin: 50                 # minimum junk packet size
+  #   jmax: 1000               # maximum junk packet size
+  #   s1: 20                   # handshake init padding
+  #   s2: 20                   # handshake response padding
+  #   s3: 0                    # underload packet padding (AWG 2.0)
+  #   s4: 0                    # transport packet padding (AWG 2.0)
+  #   h1: "100-200"            # handshake init header (single value or range)
+  #   h2: "100-200"            # handshake response header
+  #   h3: "100-200"            # cookie message header
+  #   h4: "100-200"            # transport message header
+  #   i1: "<b 0xHEX>"          # special junk packet 1 (AWG 1.5+; hex-encoded protocol signature)
+  #   i2: ""                   # special junk packet 2
+  #   i3: ""                   # special junk packet 3
+  #   i4: ""                   # special junk packet 4
+  #   i5: ""                   # special junk packet 5
 
 # dns:                         # Built-in DNS proxy server
 #   enabled: true

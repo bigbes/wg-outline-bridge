@@ -136,6 +136,7 @@ h2 { font-size: 15px; margin: 16px 0 8px; display: flex; align-items: center; ga
 
 <div class="tabs">
   <button class="tab active" onclick="showTab('peers')">👥 Peers</button>
+  <button class="tab" onclick="showTab('outlines')">🌐 Outlines</button>
   <button class="tab" onclick="showTab('mtproxy')">📡 MTProxy</button>
   <button class="tab" onclick="showTab('proxies')">🔌 Proxies</button>
   <button class="tab" onclick="showTab('users')">🔐 Users</button>
@@ -150,6 +151,10 @@ h2 { font-size: 15px; margin: 16px 0 8px; display: flex; align-items: center; ga
     <button class="btn btn-sm" onclick="addPeer()">+ Add</button>
   </div>
   <div id="peer-msg"></div>
+</div>
+
+<div id="outlines" class="section">
+  <div id="outlines-list"></div>
 </div>
 
 <div id="mtproxy" class="section">
@@ -232,7 +237,7 @@ function api(method, path, body) {
 
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((t, i) => {
-    const sections = ['peers', 'mtproxy', 'proxies', 'users'];
+    const sections = ['peers', 'outlines', 'mtproxy', 'proxies', 'users'];
     t.classList.toggle('active', sections[i] === name);
   });
   document.querySelectorAll('.section').forEach(s => {
@@ -310,6 +315,24 @@ function render() {
           ${p.rx_total > 0 ? `<span>Total: ↓${formatBytes(p.rx_total)} ↑${formatBytes(p.tx_total)}</span>` : ''}
         </div>
         <div class="meta"><span>IP: ${p.allowed_ips || '—'}</span></div>
+      </div>
+    `).join('');
+  }
+
+  // Outlines
+  const ol = document.getElementById('outlines-list');
+  if (!data.outlines || data.outlines.length === 0) {
+    ol.innerHTML = '<div class="empty">No outlines configured</div>';
+  } else {
+    ol.innerHTML = data.outlines.map(o => `
+      <div class="card">
+        <div class="card-header">
+          <span class="name">${o.name}${o.default ? ' <span class="meta">(default)</span>' : ''}</span>
+          <span class="meta">Conns: ${o.active_connections}</span>
+        </div>
+        <div class="meta">
+          <span>↓${formatBytes(o.rx_bytes)} ↑${formatBytes(o.tx_bytes)}</span>
+        </div>
       </div>
     `).join('');
   }

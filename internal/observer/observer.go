@@ -68,11 +68,21 @@ type MTProxyClient struct {
 	BytesB2CTotal    int64
 }
 
+// OutlineStatus holds per-outline endpoint stats.
+type OutlineStatus struct {
+	Name              string
+	Default           bool
+	RxBytes           int64
+	TxBytes           int64
+	ActiveConnections int64
+}
+
 // StatusProvider supplies bridge status data to the observer.
 type StatusProvider interface {
 	PeerStatuses() []PeerStatus
 	DaemonStatus() DaemonStatus
 	MTProxyStatus() MTProxyStatus
+	OutlineStatuses() []OutlineStatus
 }
 
 // ConfigProvider supplies the current config to the observer.
