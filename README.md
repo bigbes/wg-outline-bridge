@@ -239,6 +239,23 @@ If `allowed_users` is set, the bot ignores private messages from users not in th
 
 Indicators: 🟢 active (handshake < 3 min), 🟡 stale, ⚪ never connected.
 
+## Persistent Stats
+
+Enable SQLite-backed persistent stats to track cumulative traffic, handshakes, and connections across daemon restarts:
+
+```yaml
+stats:
+  db_path: /var/lib/wg-outline-bridge/stats.sqlite  # empty or omitted = disabled
+  flush_interval: 30  # seconds (default: 30)
+```
+
+Tracked data:
+- **WireGuard peers**: cumulative rx/tx bytes, last handshake time, handshake event count
+- **MTProxy peers** (per remote IP): cumulative connections, bytes relayed, handshake/dial errors
+- **Daemon**: start time
+
+Counters survive daemon restarts via delta-accumulation (UAPI/atomic counters that reset are reconciled with stored baselines).
+
 ## Live Reload
 
 Send `SIGHUP` to reload configuration without restarting:
@@ -302,6 +319,7 @@ internal/
   outline/              Outline SDK client wrapper
   proxy/                TCP/UDP proxy with gVisor, SNI parser, routing integration
   routing/              IP/SNI routing engine, IP list downloader
+  statsdb/              SQLite-backed persistent stats storage
   telegram/             Telegram Bot API client
   wireguard/            gVisor netstack TUN device
 configs/                Example configuration files

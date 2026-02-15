@@ -22,6 +22,7 @@ import (
 	"github.com/blikh/wireguard-outline-bridge/internal/outline"
 	"github.com/blikh/wireguard-outline-bridge/internal/proxy"
 	"github.com/blikh/wireguard-outline-bridge/internal/routing"
+	"github.com/blikh/wireguard-outline-bridge/internal/statsdb"
 	tgbot "github.com/blikh/wireguard-outline-bridge/internal/telegram"
 	wg "github.com/blikh/wireguard-outline-bridge/internal/wireguard"
 	"golang.zx2c4.com/wireguard/conn"
@@ -38,6 +39,8 @@ type Bridge struct {
 	outlineClient *outline.SwappableClient
 	tracker       *proxy.ConnTracker
 	peerMon       *peerMonitor
+	mtSrv         *mtproxy.Server
+	statsStore    *statsdb.Store
 }
 
 func New(configPath string, cfg *config.Config, logger *slog.Logger) *Bridge {
@@ -172,6 +175,20 @@ func (b *Bridge) Run(ctx context.Context) error {
 	b.peerMon = newPeerMonitor(b.wgDev, b.cfg.Peers, b.logger)
 	go b.peerMon.run(ctx)
 
+	if b.cfg.Stats.DBPath != "" {
+		store, err := statsdb.Open(b.cfg.Stats.DBPath, b.logger)
+		if err != nil {
+			return fmt.Errorf("opening stats db: %w", err)
+		}
+		defer store.Close()
+		b.statsStore = store
+		if err := store.SetDaemonStartTime(time.Now()); err != nil {
+			b.logger.Error("failed to set daemon start time", "err", err)
+		}
+		go b.statsFlushLoop(ctx, time.Duration(b.cfg.Stats.FlushInterval)*time.Second)
+		b.logger.Info("stats db opened", "path", b.cfg.Stats.DBPath, "flush_interval", b.cfg.Stats.FlushInterval)
+	}
+
 	if b.cfg.Telegram.Enabled {
 		bot := tgbot.NewBot(b.cfg.Telegram.Token, b.cfg.Telegram.ChatID)
 		obs := observer.New(bot, b, b.cfg, time.Duration(b.cfg.Telegram.Interval)*time.Second, b.cfg.Telegram.ChatID, b.logger)
@@ -297,6 +314,7 @@ func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) err
 	}
 
 	srv := mtproxy.NewServer(serverCfg, dialer, endpoints, b.logger)
+	b.mtSrv = srv
 
 	if err := srv.Listen(); err != nil {
 		return fmt.Errorf("mtproxy: %w", err)
@@ -403,6 +421,77 @@ func (b *Bridge) getPeerStatuses() []peerStatus {
 		statuses = append(statuses, *current)
 	}
 	return statuses
+}
+
+func (b *Bridge) statsFlushLoop(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			b.statsFlush()
+			return
+		case <-ticker.C:
+			b.statsFlush()
+		}
+	}
+}
+
+func (b *Bridge) statsFlush() {
+	store := b.statsStore
+	if store == nil {
+		return
+	}
+
+	statuses := b.getPeerStatuses()
+	b.mu.Lock()
+	peers := b.cfg.Peers
+	b.mu.Unlock()
+
+	nameByPub := make(map[string]string, len(peers))
+	for name, peer := range peers {
+		nameByPub[peer.PublicKey] = name
+	}
+
+	snapshots := make([]statsdb.WGPeerSnapshot, 0, len(statuses))
+	for _, st := range statuses {
+		pubB64 := hexToBase64(st.publicKeyHex)
+		snapshots = append(snapshots, statsdb.WGPeerSnapshot{
+			PublicKey:        pubB64,
+			Name:             nameByPub[pubB64],
+			LastHandshakeSec: st.lastHandshakeSec,
+			RxBytes:          st.rxBytes,
+			TxBytes:          st.txBytes,
+		})
+	}
+
+	if len(snapshots) > 0 {
+		if err := store.FlushWireGuardPeers(snapshots); err != nil {
+			b.logger.Error("stats: failed to flush wg peers", "err", err)
+		}
+	}
+
+	if b.mtSrv != nil {
+		peerSnap := b.mtSrv.PeerStatsSnapshot()
+		mtSnapshots := make([]statsdb.MTPeerSnapshot, 0, len(peerSnap))
+		for key, ps := range peerSnap {
+			mtSnapshots = append(mtSnapshots, statsdb.MTPeerSnapshot{
+				PeerKey:            key,
+				LastConnectionUnix: ps.LastConnectionUnix,
+				Connections:        ps.Connections,
+				BytesC2B:           ps.BytesC2B,
+				BytesB2C:           ps.BytesB2C,
+				HandshakeErrors:    ps.HandshakeErrors,
+				BackendDialErrors:  ps.BackendDialErrors,
+			})
+		}
+		if len(mtSnapshots) > 0 {
+			if err := store.FlushMTProxyPeers(mtSnapshots); err != nil {
+				b.logger.Error("stats: failed to flush mtproxy peers", "err", err)
+			}
+		}
+	}
 }
 
 func peerAllowedIPs(peer config.PeerConfig) []netip.Addr {

@@ -24,6 +24,7 @@ type Config struct {
 	DNS       DNSConfig             `yaml:"dns"`
 	MTProxy   MTProxyConfig         `yaml:"mtproxy"`
 	Telegram  TelegramConfig        `yaml:"telegram"`
+	Stats     StatsConfig           `yaml:"stats"`
 	Outlines  []OutlineConfig       `yaml:"outlines"`
 	Routing   RoutingConfig         `yaml:"routing"`
 	GeoIP     []GeoIPConfig         `yaml:"geoip"`
@@ -148,6 +149,11 @@ type TelegramConfig struct {
 	AllowedUsers []int64 `yaml:"allowed_users"` // user IDs allowed in private chats
 }
 
+type StatsConfig struct {
+	DBPath        string `yaml:"db_path"`
+	FlushInterval int    `yaml:"flush_interval"`
+}
+
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -235,6 +241,10 @@ func Load(path string) (*Config, error) {
 		if cfg.GeoIP[i].Refresh == 0 {
 			cfg.GeoIP[i].Refresh = 86400
 		}
+	}
+
+	if cfg.Stats.FlushInterval == 0 {
+		cfg.Stats.FlushInterval = 30
 	}
 
 	if cfg.MTProxy.Enabled {
