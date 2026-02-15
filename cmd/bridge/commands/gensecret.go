@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
+	"github.com/blikh/wireguard-outline-bridge/internal/statsdb"
 )
 
 func GenSecret(args []string, logger *slog.Logger) {
@@ -44,21 +45,38 @@ func GenSecret(args []string, logger *slog.Logger) {
 		os.Exit(1)
 	}
 
-	secretsFile := cfg.MTProxy.SecretsFile
-	if secretsFile == "" {
-		secretsFile = filepath.Join(filepath.Dir(*configPath), "mtproxy.secrets")
-	}
+	if cfg.Database.Path != "" {
+		store, err := statsdb.Open(cfg.Database.Path, logger)
+		if err != nil {
+			logger.Error("failed to open database", "err", err)
+			os.Exit(1)
+		}
+		defer store.Close()
 
-	line := secretHex
-	if *comment != "" {
-		line += "  # " + *comment
-	}
+		if err := store.AddSecret(secretHex, *comment); err != nil {
+			logger.Error("failed to save secret to database", "err", err)
+			os.Exit(1)
+		}
 
-	if err := config.AppendSecret(secretsFile, line); err != nil {
-		logger.Error("failed to save secret", "err", err)
-		os.Exit(1)
-	}
+		fmt.Printf("Secret:  %s\n", secretHex)
+		fmt.Println("Saved to: database")
+	} else {
+		secretsFile := cfg.MTProxy.SecretsFile
+		if secretsFile == "" {
+			secretsFile = filepath.Join(filepath.Dir(*configPath), "mtproxy.secrets")
+		}
 
-	fmt.Printf("Secret:  %s\n", secretHex)
-	fmt.Printf("Saved to: %s\n", secretsFile)
+		line := secretHex
+		if *comment != "" {
+			line += "  # " + *comment
+		}
+
+		if err := config.AppendSecret(secretsFile, line); err != nil {
+			logger.Error("failed to save secret", "err", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Secret:  %s\n", secretHex)
+		fmt.Printf("Saved to: %s\n", secretsFile)
+	}
 }

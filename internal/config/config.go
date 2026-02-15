@@ -1,6 +1,7 @@
 package config
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/crypto/curve25519"
 	"gopkg.in/yaml.v3"
 )
 
@@ -161,7 +163,9 @@ func Load(path string) (*Config, error) {
 	}
 
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	dec := yaml.NewDecoder(strings.NewReader(string(data)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parsing config file: %w", err)
 	}
 
@@ -311,7 +315,9 @@ func LoadPeers(dir string) (map[string]PeerConfig, error) {
 			return nil, fmt.Errorf("reading peer %q: %w", name, err)
 		}
 		var peer PeerConfig
-		if err := yaml.Unmarshal(data, &peer); err != nil {
+		peerDec := yaml.NewDecoder(strings.NewReader(string(data)))
+		peerDec.KnownFields(true)
+		if err := peerDec.Decode(&peer); err != nil {
 			return nil, fmt.Errorf("parsing peer %q: %w", name, err)
 		}
 		peers[name] = peer
@@ -658,4 +664,79 @@ func AppendSecret(path, secret string) error {
 		return fmt.Errorf("writing secret: %w", err)
 	}
 	return nil
+}
+
+// GenerateKeyPair generates a WireGuard private/public key pair,
+// returning both as base64-encoded strings.
+func GenerateKeyPair() (privateKeyB64, publicKeyB64 string, err error) {
+	var privateKey [32]byte
+	if _, err = rand.Read(privateKey[:]); err != nil {
+		return "", "", fmt.Errorf("generating random bytes: %w", err)
+	}
+
+	privateKey[0] &= 248
+	privateKey[31] &= 127
+	privateKey[31] |= 64
+
+	publicKey, err := curve25519.X25519(privateKey[:], curve25519.Basepoint)
+	if err != nil {
+		return "", "", fmt.Errorf("computing public key: %w", err)
+	}
+
+	return base64.StdEncoding.EncodeToString(privateKey[:]),
+		base64.StdEncoding.EncodeToString(publicKey), nil
+}
+
+// GeneratePresharedKey generates a random 32-byte preshared key,
+// returning it as a base64-encoded string.
+func GeneratePresharedKey() (string, error) {
+	var key [32]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		return "", fmt.Errorf("generating random bytes: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(key[:]), nil
+}
+
+// DerivePublicKey derives a WireGuard public key from a base64-encoded private key.
+func DerivePublicKey(privateKeyB64 string) (string, error) {
+	raw, err := base64.StdEncoding.DecodeString(privateKeyB64)
+	if err != nil {
+		return "", err
+	}
+	if len(raw) != 32 {
+		return "", fmt.Errorf("invalid private key length: %d", len(raw))
+	}
+	pub, err := curve25519.X25519(raw, curve25519.Basepoint)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(pub), nil
+}
+
+// NextPeerIP finds the next available IP address for a new peer
+// based on the server address and existing peer allocations.
+func NextPeerIP(cfg *Config) (string, error) {
+	addr, _, err := cfg.WireGuard.ParseAddress()
+	if err != nil {
+		return "", err
+	}
+
+	used := make(map[netip.Addr]bool)
+	used[addr] = true
+	for _, peer := range cfg.Peers {
+		ip := strings.Split(peer.AllowedIPs, "/")[0]
+		if a, err := netip.ParseAddr(ip); err == nil {
+			used[a] = true
+		}
+	}
+
+	candidate := addr.Next()
+	for i := 0; i < 253; i++ {
+		if !used[candidate] {
+			return candidate.String(), nil
+		}
+		candidate = candidate.Next()
+	}
+
+	return "", fmt.Errorf("no available IPs in subnet")
 }

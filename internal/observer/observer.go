@@ -2,14 +2,11 @@ package observer
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
 	"time"
-
-	"golang.org/x/crypto/curve25519"
 
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
 	"github.com/blikh/wireguard-outline-bridge/internal/telegram"
@@ -78,11 +75,25 @@ type StatusProvider interface {
 	MTProxyStatus() MTProxyStatus
 }
 
+// ConfigProvider supplies the current config to the observer.
+type ConfigProvider interface {
+	CurrentConfig() *config.Config
+}
+
+// Manager provides runtime peer and secret management operations.
+type Manager interface {
+	AddPeer(name string) (config.PeerConfig, error)
+	DeletePeer(name string) error
+	AddSecret(secretType, comment string) (string, error)
+	DeleteSecret(secretHex string) error
+}
+
 // Observer sends periodic status updates and handles bot commands via Telegram.
 type Observer struct {
 	bot      *telegram.Bot
 	provider StatusProvider
-	cfg      *config.Config
+	cfgProv  ConfigProvider
+	manager  Manager
 	interval time.Duration
 	chatID   int64
 	logger   *slog.Logger
@@ -90,11 +101,12 @@ type Observer struct {
 
 // New creates a new Observer. If chatID is 0, periodic push notifications
 // are disabled but the bot still responds to incoming commands.
-func New(bot *telegram.Bot, provider StatusProvider, cfg *config.Config, interval time.Duration, chatID int64, logger *slog.Logger) *Observer {
+func New(bot *telegram.Bot, provider StatusProvider, cfgProv ConfigProvider, manager Manager, interval time.Duration, chatID int64, logger *slog.Logger) *Observer {
 	return &Observer{
 		bot:      bot,
 		provider: provider,
-		cfg:      cfg,
+		cfgProv:  cfgProv,
+		manager:  manager,
 		interval: interval,
 		chatID:   chatID,
 		logger:   logger,
@@ -117,6 +129,10 @@ func (o *Observer) registerCommands(ctx context.Context) {
 		{Command: "proxy", Description: "Show Telegram proxy links"},
 		{Command: "listconf", Description: "List all peers"},
 		{Command: "showconf", Description: "Show WireGuard client config for a peer"},
+		{Command: "addpeer", Description: "Add a new WireGuard peer"},
+		{Command: "delpeer", Description: "Delete a WireGuard peer"},
+		{Command: "addsecret", Description: "Add a new MTProxy secret"},
+		{Command: "delsecret", Description: "Delete an MTProxy secret"},
 		{Command: "help", Description: "Show available commands"},
 	}
 	if err := o.bot.SetMyCommands(ctx, commands); err != nil {
@@ -171,7 +187,7 @@ func (o *Observer) pollLoop(ctx context.Context) {
 }
 
 func (o *Observer) isAllowed(msg *telegram.Message) bool {
-	allowedUsers := o.cfg.Telegram.AllowedUsers
+	allowedUsers := o.cfgProv.CurrentConfig().Telegram.AllowedUsers
 	if len(allowedUsers) == 0 {
 		return true
 	}
@@ -214,7 +230,7 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 		mt := o.provider.MTProxyStatus()
 		reply = formatStatus(peers, daemon, mt)
 	case "/proxy":
-		links := config.ProxyLinks(o.cfg)
+		links := config.ProxyLinks(o.cfgProv.CurrentConfig())
 		if len(links) == 0 {
 			reply = "No proxy links available (MTProxy not configured or no secrets)"
 		} else {
@@ -235,12 +251,51 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 			reply = o.formatShowConf(args)
 			html = true
 		}
+	case "/addpeer":
+		if o.manager == nil {
+			reply = "⚠️ Management not available (database not configured)"
+		} else if args == "" {
+			reply = "Usage: /addpeer &lt;peer-name&gt;"
+			html = true
+		} else {
+			reply = o.handleAddPeer(args)
+			html = true
+		}
+	case "/delpeer":
+		if o.manager == nil {
+			reply = "⚠️ Management not available (database not configured)"
+		} else if args == "" {
+			reply = "Usage: /delpeer &lt;peer-name&gt;"
+			html = true
+		} else {
+			reply = o.handleDelPeer(args)
+		}
+	case "/addsecret":
+		if o.manager == nil {
+			reply = "⚠️ Management not available (database not configured)"
+		} else {
+			reply = o.handleAddSecret(args)
+			html = true
+		}
+	case "/delsecret":
+		if o.manager == nil {
+			reply = "⚠️ Management not available (database not configured)"
+		} else if args == "" {
+			reply = "Usage: /delsecret &lt;secret-hex&gt;"
+			html = true
+		} else {
+			reply = o.handleDelSecret(args)
+		}
 	case "/help", "/start":
 		reply = "Available commands:\n" +
 			"/status — show peer status, traffic, and connections\n" +
 			"/proxy — show Telegram proxy links\n" +
 			"/listconf — list all peers\n" +
 			"/showconf <name> — show WireGuard client config for a peer\n" +
+			"/addpeer <name> — add a new WireGuard peer\n" +
+			"/delpeer <name> — delete a WireGuard peer\n" +
+			"/addsecret [type] [comment] — add a new MTProxy secret\n" +
+			"/delsecret <hex> — delete an MTProxy secret\n" +
 			"/help — show this message"
 	default:
 		return
@@ -390,7 +445,7 @@ func formatDuration(d time.Duration) string {
 }
 
 func (o *Observer) formatPeerList() string {
-	peers := o.cfg.Peers
+	peers := o.cfgProv.CurrentConfig().Peers
 	if len(peers) == 0 {
 		return "No peers configured"
 	}
@@ -410,21 +465,23 @@ func (o *Observer) formatPeerList() string {
 }
 
 func (o *Observer) formatShowConf(name string) string {
-	peer, ok := o.cfg.Peers[name]
+	cfg := o.cfgProv.CurrentConfig()
+
+	peer, ok := cfg.Peers[name]
 	if !ok {
 		return fmt.Sprintf("Peer %q not found", name)
 	}
 
 	clientIP := strings.Split(peer.AllowedIPs, "/")[0]
 
-	serverIP := o.cfg.ServerPublicIP()
-	endpoint := fmt.Sprintf("<SERVER_IP>:%d", o.cfg.WireGuard.ListenPort)
+	serverIP := cfg.ServerPublicIP()
+	endpoint := fmt.Sprintf("<SERVER_IP>:%d", cfg.WireGuard.ListenPort)
 	if serverIP != "" {
-		endpoint = fmt.Sprintf("%s:%d", serverIP, o.cfg.WireGuard.ListenPort)
+		endpoint = fmt.Sprintf("%s:%d", serverIP, cfg.WireGuard.ListenPort)
 	}
 
 	allowedIPs := "0.0.0.0/0"
-	cidrRules, err := config.ParseCIDRRules(o.cfg.Routing.CIDRs)
+	cidrRules, err := config.ParseCIDRRules(cfg.Routing.CIDRs)
 	if err == nil {
 		if computed := config.ComputeAllowedIPs(cidrRules, serverIP); computed != "" {
 			allowedIPs = computed
@@ -436,10 +493,10 @@ func (o *Observer) formatShowConf(name string) string {
 	fmt.Fprintf(&b, "[Interface]\n")
 	fmt.Fprintf(&b, "PrivateKey = %s\n", peer.PrivateKey)
 	fmt.Fprintf(&b, "Address = %s/24\n", clientIP)
-	fmt.Fprintf(&b, "DNS = %s\n", o.cfg.WireGuard.DNS)
+	fmt.Fprintf(&b, "DNS = %s\n", cfg.WireGuard.DNS)
 	fmt.Fprintf(&b, "\n[Peer]\n")
 
-	if serverPublicKey, err := derivePublicKey(o.cfg.WireGuard.PrivateKey); err == nil {
+	if serverPublicKey, err := config.DerivePublicKey(cfg.WireGuard.PrivateKey); err == nil {
 		fmt.Fprintf(&b, "PublicKey = %s\n", serverPublicKey)
 	} else {
 		fmt.Fprintf(&b, "PublicKey = &lt;failed to derive&gt;\n")
@@ -455,21 +512,6 @@ func (o *Observer) formatShowConf(name string) string {
 	return b.String()
 }
 
-func derivePublicKey(privateKeyB64 string) (string, error) {
-	raw, err := base64.StdEncoding.DecodeString(privateKeyB64)
-	if err != nil {
-		return "", err
-	}
-	if len(raw) != 32 {
-		return "", fmt.Errorf("invalid private key length: %d", len(raw))
-	}
-	pub, err := curve25519.X25519(raw, curve25519.Basepoint)
-	if err != nil {
-		return "", err
-	}
-	return base64.StdEncoding.EncodeToString(pub), nil
-}
-
 func formatBytes(b int64) string {
 	switch {
 	case b >= 1<<30:
@@ -481,4 +523,95 @@ func formatBytes(b int64) string {
 	default:
 		return fmt.Sprintf("%d B", b)
 	}
+}
+
+func (o *Observer) handleAddPeer(name string) string {
+	peer, err := o.manager.AddPeer(name)
+	if err != nil {
+		return fmt.Sprintf("❌ Failed to add peer: %s", err)
+	}
+
+	cfg := o.cfgProv.CurrentConfig()
+	clientIP := strings.Split(peer.AllowedIPs, "/")[0]
+
+	serverIP := cfg.ServerPublicIP()
+	endpoint := fmt.Sprintf("&lt;SERVER_IP&gt;:%d", cfg.WireGuard.ListenPort)
+	if serverIP != "" {
+		endpoint = fmt.Sprintf("%s:%d", serverIP, cfg.WireGuard.ListenPort)
+	}
+
+	allowedIPs := "0.0.0.0/0"
+	cidrRules, err := config.ParseCIDRRules(cfg.Routing.CIDRs)
+	if err == nil {
+		if computed := config.ComputeAllowedIPs(cidrRules, serverIP); computed != "" {
+			allowedIPs = computed
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "✅ Peer <code>%s</code> added (IP: %s)\n\n", name, clientIP)
+	fmt.Fprintf(&b, "<pre>")
+	fmt.Fprintf(&b, "[Interface]\n")
+	fmt.Fprintf(&b, "PrivateKey = %s\n", peer.PrivateKey)
+	fmt.Fprintf(&b, "Address = %s/24\n", clientIP)
+	fmt.Fprintf(&b, "DNS = %s\n", cfg.WireGuard.DNS)
+	fmt.Fprintf(&b, "\n[Peer]\n")
+	if serverPublicKey, err := config.DerivePublicKey(cfg.WireGuard.PrivateKey); err == nil {
+		fmt.Fprintf(&b, "PublicKey = %s\n", serverPublicKey)
+	} else {
+		fmt.Fprintf(&b, "PublicKey = &lt;failed to derive&gt;\n")
+	}
+	if peer.PresharedKey != "" {
+		fmt.Fprintf(&b, "PresharedKey = %s\n", peer.PresharedKey)
+	}
+	fmt.Fprintf(&b, "Endpoint = %s\n", endpoint)
+	fmt.Fprintf(&b, "AllowedIPs = %s\n", allowedIPs)
+	fmt.Fprintf(&b, "PersistentKeepalive = 25\n")
+	fmt.Fprintf(&b, "</pre>")
+
+	return b.String()
+}
+
+func (o *Observer) handleDelPeer(name string) string {
+	if err := o.manager.DeletePeer(name); err != nil {
+		return fmt.Sprintf("❌ Failed to delete peer: %s", err)
+	}
+	return fmt.Sprintf("✅ Peer %q deleted", name)
+}
+
+func (o *Observer) handleAddSecret(args string) string {
+	secretType := "faketls"
+	comment := ""
+	if args != "" {
+		parts := strings.SplitN(args, " ", 2)
+		secretType = parts[0]
+		if len(parts) > 1 {
+			comment = parts[1]
+		}
+	}
+
+	secretHex, err := o.manager.AddSecret(secretType, comment)
+	if err != nil {
+		return fmt.Sprintf("❌ Failed to add secret: %s", err)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "✅ Secret added\n\n")
+	fmt.Fprintf(&b, "Secret: <code>%s</code>\n", secretHex)
+
+	cfg := o.cfgProv.CurrentConfig()
+	links := config.ProxyLinks(cfg)
+	if len(links) > 0 {
+		fmt.Fprintf(&b, "\n🔗 %s", links[len(links)-1])
+	}
+	fmt.Fprintf(&b, "\n\n⚠️ Restart required for MTProxy to accept this secret")
+
+	return b.String()
+}
+
+func (o *Observer) handleDelSecret(secretHex string) string {
+	if err := o.manager.DeleteSecret(secretHex); err != nil {
+		return fmt.Sprintf("❌ Failed to delete secret: %s", err)
+	}
+	return fmt.Sprintf("✅ Secret deleted\n\n⚠️ Restart required for MTProxy to stop accepting this secret")
 }

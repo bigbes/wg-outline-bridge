@@ -3,16 +3,25 @@ package commands
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 
 	"github.com/blikh/wireguard-outline-bridge/internal/bridge"
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
 )
 
-func RunBridge(args []string, logger *slog.Logger) {
+const logo = `
+ __      _____    ___  _   _ _____ 
+ \ \    / / __|  / _ \| | | |_   _|
+  \ \/\/ / (_ | | (_) | |_| | | |  
+   \_/\_/ \___|  \___/ \___/  |_|  
+   ~~ wireguard-outline-bridge ~~`
+
+func RunBridge(args []string, logger *slog.Logger, version string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	configPath := fs.String("config", "configs/bridge.yaml", "path to config file")
 	watch := fs.Bool("watch", false, "watch for binary updates and auto-restart")
@@ -31,6 +40,21 @@ func RunBridge(args []string, logger *slog.Logger) {
 	}
 
 	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.ParseLogLevel()}))
+
+	fmt.Println(logo)
+	logger.Info("starting wireguard-outline-bridge", "version", version)
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		var buildAttrs []any
+		for _, s := range bi.Settings {
+			switch s.Key {
+			case "vcs", "vcs.revision", "vcs.time", "vcs.modified":
+				buildAttrs = append(buildAttrs, s.Key, s.Value)
+			}
+		}
+		if len(buildAttrs) > 0 {
+			logger.Info("build info", buildAttrs...)
+		}
+	}
 
 	b := bridge.New(*configPath, cfg, logger)
 

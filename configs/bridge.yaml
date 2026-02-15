@@ -4,9 +4,8 @@ wireguard:
   address: "10.100.0.1/24"
   mtu: 1420
   dns: "1.1.1.1"
-  peers:
-    # mary
-    - public_key: "ROUZfb8GqrKRKH8lfPSzWMFww1fYTgfa2UqUawJ7QVQ="
-      allowed_ips: "10.100.0.2/32"
-outline:
-  transport: "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpQQUZkeGt6cHVocHp3bDhhTDVxYzBn@168.222.254.99:51041"
+
+outlines:
+  - name: "default"
+    transport: "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpQQUZkeGt6cHVocHp3bDhhTDVxYzBn@168.222.254.99:51041"
+    default: true

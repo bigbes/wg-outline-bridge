@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
+	"github.com/blikh/wireguard-outline-bridge/internal/statsdb"
 )
 
 func ShowProxy(args []string, logger *slog.Logger) {
@@ -18,6 +19,24 @@ func ShowProxy(args []string, logger *slog.Logger) {
 	if err != nil {
 		logger.Error("failed to load config", "err", err)
 		os.Exit(1)
+	}
+
+	if cfg.Database.Path != "" {
+		store, err := statsdb.Open(cfg.Database.Path, logger)
+		if err != nil {
+			logger.Error("failed to open database", "err", err)
+			os.Exit(1)
+		}
+		defer store.Close()
+
+		dbSecrets, err := store.ListSecrets()
+		if err != nil {
+			logger.Error("failed to load secrets from database", "err", err)
+			os.Exit(1)
+		}
+		if len(dbSecrets) > 0 {
+			cfg.MTProxy.Secrets = dbSecrets
+		}
 	}
 
 	if !cfg.MTProxy.Enabled {

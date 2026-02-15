@@ -3,6 +3,8 @@ package bridge
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/netip"
@@ -107,6 +109,60 @@ func (b *Bridge) Run(ctx context.Context) error {
 
 	b.tracker = proxy.NewConnTracker()
 
+	if b.cfg.Database.Path != "" {
+		store, err := statsdb.Open(b.cfg.Database.Path, b.logger)
+		if err != nil {
+			return fmt.Errorf("opening stats db: %w", err)
+		}
+		b.statsStore = store
+		if err := store.SetDaemonStartTime(time.Now()); err != nil {
+			b.logger.Error("failed to set daemon start time", "err", err)
+		}
+		var statsWg sync.WaitGroup
+		statsWg.Add(1)
+		go func() {
+			defer statsWg.Done()
+			b.statsFlushLoop(ctx, time.Duration(b.cfg.Database.FlushInterval)*time.Second)
+		}()
+		defer func() {
+			statsWg.Wait()
+			store.Close()
+		}()
+		b.logger.Info("stats db opened", "path", b.cfg.Database.Path, "flush_interval", b.cfg.Database.FlushInterval)
+
+		// Import file-based peers into DB if DB is empty
+		dbPeers, err := store.ListPeers()
+		if err != nil {
+			b.logger.Error("failed to list db peers", "err", err)
+		}
+		if len(dbPeers) == 0 && len(b.cfg.Peers) > 0 {
+			imported, err := store.ImportPeers(b.cfg.Peers)
+			if err != nil {
+				b.logger.Error("failed to import peers to database", "err", err)
+			} else if imported > 0 {
+				b.logger.Info("imported file peers to database", "count", imported)
+			}
+		} else if len(dbPeers) > 0 {
+			b.cfg.Peers = dbPeers
+		}
+
+		// Import file-based secrets into DB if DB is empty
+		dbSecrets, err := store.ListSecrets()
+		if err != nil {
+			b.logger.Error("failed to list db secrets", "err", err)
+		}
+		if len(dbSecrets) == 0 && len(b.cfg.MTProxy.Secrets) > 0 {
+			imported, err := store.ImportSecrets(b.cfg.MTProxy.Secrets)
+			if err != nil {
+				b.logger.Error("failed to import secrets to database", "err", err)
+			} else if imported > 0 {
+				b.logger.Info("imported file secrets to database", "count", imported)
+			}
+		} else if len(dbSecrets) > 0 {
+			b.cfg.MTProxy.Secrets = dbSecrets
+		}
+	}
+
 	var geoMgr *geoip.Manager
 	if len(b.cfg.GeoIP) > 0 {
 		entries := make([]geoip.GeoIPEntry, len(b.cfg.GeoIP))
@@ -178,23 +234,9 @@ func (b *Bridge) Run(ctx context.Context) error {
 	b.peerMon = newPeerMonitor(b.wgDev, b.cfg.Peers, b.logger)
 	go b.peerMon.run(ctx)
 
-	if b.cfg.Database.Path != "" {
-		store, err := statsdb.Open(b.cfg.Database.Path, b.logger)
-		if err != nil {
-			return fmt.Errorf("opening stats db: %w", err)
-		}
-		defer store.Close()
-		b.statsStore = store
-		if err := store.SetDaemonStartTime(time.Now()); err != nil {
-			b.logger.Error("failed to set daemon start time", "err", err)
-		}
-		go b.statsFlushLoop(ctx, time.Duration(b.cfg.Database.FlushInterval)*time.Second)
-		b.logger.Info("stats db opened", "path", b.cfg.Database.Path, "flush_interval", b.cfg.Database.FlushInterval)
-	}
-
 	if b.cfg.Telegram.Enabled {
 		bot := tgbot.NewBot(b.cfg.Telegram.Token, b.cfg.Telegram.ChatID)
-		obs := observer.New(bot, b, b.cfg, time.Duration(b.cfg.Telegram.Interval)*time.Second, b.cfg.Telegram.ChatID, b.logger)
+		obs := observer.New(bot, b, b, b, time.Duration(b.cfg.Telegram.Interval)*time.Second, b.cfg.Telegram.ChatID, b.logger)
 		go obs.Run(ctx)
 		b.logger.Info("telegram observer started", "interval", b.cfg.Telegram.Interval)
 	}
@@ -218,6 +260,22 @@ func (b *Bridge) Reload() error {
 	newCfg, err := config.Load(b.configPath)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
+	}
+
+	// If DB is available, load peers and secrets from it
+	if b.statsStore != nil {
+		dbPeers, err := b.statsStore.ListPeers()
+		if err != nil {
+			b.logger.Error("failed to load peers from database", "err", err)
+		} else if len(dbPeers) > 0 {
+			newCfg.Peers = dbPeers
+		}
+		dbSecrets, err := b.statsStore.ListSecrets()
+		if err != nil {
+			b.logger.Error("failed to load secrets from database", "err", err)
+		} else if len(dbSecrets) > 0 {
+			newCfg.MTProxy.Secrets = dbSecrets
+		}
 	}
 
 	newDefault := newCfg.DefaultOutline()
@@ -468,6 +526,184 @@ func (b *Bridge) DaemonStatus() observer.DaemonStatus {
 		return observer.DaemonStatus{StartTime: b.startTime}
 	}
 	return observer.DaemonStatus{StartTime: t}
+}
+
+// CurrentConfig returns the current config (thread-safe).
+func (b *Bridge) CurrentConfig() *config.Config {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.cfg
+}
+
+// AddPeer generates a new WireGuard peer, saves it to the database, and applies it to the running device.
+func (b *Bridge) AddPeer(name string) (config.PeerConfig, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return config.PeerConfig{}, fmt.Errorf("database not configured")
+	}
+
+	if _, exists := b.cfg.Peers[name]; exists {
+		return config.PeerConfig{}, fmt.Errorf("peer %q already exists", name)
+	}
+
+	privateKey, publicKey, err := config.GenerateKeyPair()
+	if err != nil {
+		return config.PeerConfig{}, fmt.Errorf("generating keys: %w", err)
+	}
+
+	presharedKey, err := config.GeneratePresharedKey()
+	if err != nil {
+		return config.PeerConfig{}, fmt.Errorf("generating preshared key: %w", err)
+	}
+
+	clientIP, err := config.NextPeerIP(b.cfg)
+	if err != nil {
+		return config.PeerConfig{}, fmt.Errorf("allocating IP: %w", err)
+	}
+
+	peer := config.PeerConfig{
+		PrivateKey:   privateKey,
+		PublicKey:    publicKey,
+		PresharedKey: presharedKey,
+		AllowedIPs:   clientIP + "/32",
+	}
+
+	if err := b.statsStore.UpsertPeer(name, peer); err != nil {
+		return config.PeerConfig{}, fmt.Errorf("saving peer: %w", err)
+	}
+
+	if b.wgDev != nil {
+		uapi, err := config.PeerUAPIAdd(peer)
+		if err != nil {
+			b.statsStore.DeletePeer(name)
+			return config.PeerConfig{}, fmt.Errorf("generating UAPI: %w", err)
+		}
+		if err := b.wgDev.IpcSet(uapi); err != nil {
+			b.statsStore.DeletePeer(name)
+			return config.PeerConfig{}, fmt.Errorf("applying to wireguard: %w", err)
+		}
+	}
+
+	b.cfg.Peers[name] = peer
+	if b.peerMon != nil {
+		b.peerMon.updatePeers(b.cfg.Peers)
+	}
+
+	b.logger.Info("peer added", "name", name, "public_key", publicKey, "allowed_ips", peer.AllowedIPs)
+	return peer, nil
+}
+
+// DeletePeer removes a peer from the database and the running device.
+func (b *Bridge) DeletePeer(name string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	peer, exists := b.cfg.Peers[name]
+	if !exists {
+		return fmt.Errorf("peer %q not found", name)
+	}
+
+	if _, _, err := b.statsStore.DeletePeer(name); err != nil {
+		return fmt.Errorf("deleting from database: %w", err)
+	}
+
+	if b.wgDev != nil && !peer.Disabled {
+		uapi, err := config.PeerUAPIRemove(peer.PublicKey)
+		if err != nil {
+			b.logger.Error("failed to generate remove UAPI", "name", name, "err", err)
+		} else if err := b.wgDev.IpcSet(uapi); err != nil {
+			b.logger.Error("failed to remove peer from wireguard", "name", name, "err", err)
+		}
+	}
+
+	peerIPs := peerAllowedIPs(peer)
+	for _, ip := range peerIPs {
+		closed := b.tracker.CloseBySource(ip)
+		if closed > 0 {
+			b.logger.Info("closed connections for removed peer", "ip", ip, "count", closed)
+		}
+	}
+
+	delete(b.cfg.Peers, name)
+	if b.peerMon != nil {
+		b.peerMon.updatePeers(b.cfg.Peers)
+	}
+
+	b.logger.Info("peer deleted", "name", name)
+	return nil
+}
+
+// AddSecret generates a new MTProxy secret, saves it to the database.
+// The MTProxy server needs a restart to pick up new secrets.
+func (b *Bridge) AddSecret(secretType, comment string) (string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return "", fmt.Errorf("database not configured")
+	}
+
+	var secret [16]byte
+	if _, err := rand.Read(secret[:]); err != nil {
+		return "", fmt.Errorf("generating random bytes: %w", err)
+	}
+
+	secretHex := hex.EncodeToString(secret[:])
+	switch secretType {
+	case "faketls", "ee", "":
+		secretHex = "ee" + secretHex
+	case "padded", "dd":
+		secretHex = "dd" + secretHex
+	case "default":
+		// no prefix
+	default:
+		return "", fmt.Errorf("unknown secret type: %s", secretType)
+	}
+
+	if err := b.statsStore.AddSecret(secretHex, comment); err != nil {
+		return "", fmt.Errorf("saving secret: %w", err)
+	}
+
+	b.cfg.MTProxy.Secrets = append(b.cfg.MTProxy.Secrets, secretHex)
+
+	b.logger.Info("mtproxy secret added", "type", secretType)
+	return secretHex, nil
+}
+
+// DeleteSecret removes an MTProxy secret from the database.
+// The MTProxy server needs a restart to stop accepting the deleted secret.
+func (b *Bridge) DeleteSecret(secretHex string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	ok, err := b.statsStore.DeleteSecret(secretHex)
+	if err != nil {
+		return fmt.Errorf("deleting secret: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("secret not found")
+	}
+
+	secrets := make([]string, 0, len(b.cfg.MTProxy.Secrets))
+	for _, s := range b.cfg.MTProxy.Secrets {
+		if s != secretHex {
+			secrets = append(secrets, s)
+		}
+	}
+	b.cfg.MTProxy.Secrets = secrets
+
+	b.logger.Info("mtproxy secret deleted")
+	return nil
 }
 
 // getPeerStatuses reads peer status from the WireGuard device via IPC.

@@ -7,6 +7,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/blikh/wireguard-outline-bridge/internal/config"
 )
 
 // Store is a SQLite-backed persistent stats store.
@@ -75,6 +77,24 @@ CREATE TABLE IF NOT EXISTS mtproxy_secret_stats (
   bytes_c2b_last_seen INTEGER NOT NULL DEFAULT 0,
   bytes_b2c_last_seen INTEGER NOT NULL DEFAULT 0,
   backend_dial_errors_last_seen INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS wg_peers (
+  name TEXT PRIMARY KEY,
+  private_key TEXT NOT NULL,
+  public_key TEXT NOT NULL UNIQUE,
+  preshared_key TEXT NOT NULL DEFAULT '',
+  allowed_ips TEXT NOT NULL,
+  disabled INTEGER NOT NULL DEFAULT 0,
+  created_unix INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_unix INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE TABLE IF NOT EXISTS mtproxy_secrets (
+  secret_hex TEXT PRIMARY KEY,
+  disabled INTEGER NOT NULL DEFAULT 0,
+  comment TEXT NOT NULL DEFAULT '',
+  created_unix INTEGER NOT NULL DEFAULT (unixepoch())
 );`
 	if _, err := s.db.Exec(ddl); err != nil {
 		return fmt.Errorf("statsdb: init schema: %w", err)
@@ -349,4 +369,206 @@ func (s *Store) GetMTSecretStats() (map[string]MTSecretRecord, error) {
 		return nil, fmt.Errorf("statsdb: iterate mt secrets: %w", err)
 	}
 	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Peer CRUD
+// ---------------------------------------------------------------------------
+
+// ListPeers returns all peers from the database keyed by name.
+func (s *Store) ListPeers() (map[string]config.PeerConfig, error) {
+	rows, err := s.db.Query(
+		`SELECT name, private_key, public_key, preshared_key, allowed_ips, disabled
+		 FROM wg_peers`)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list peers: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]config.PeerConfig)
+	for rows.Next() {
+		var name string
+		var p config.PeerConfig
+		var disabled int
+		if err := rows.Scan(&name, &p.PrivateKey, &p.PublicKey, &p.PresharedKey, &p.AllowedIPs, &disabled); err != nil {
+			return nil, fmt.Errorf("statsdb: scan peer: %w", err)
+		}
+		p.Disabled = disabled != 0
+		out[name] = p
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("statsdb: iterate peers: %w", err)
+	}
+	return out, nil
+}
+
+// GetPeer returns a single peer by name.
+func (s *Store) GetPeer(name string) (config.PeerConfig, bool, error) {
+	var p config.PeerConfig
+	var disabled int
+	err := s.db.QueryRow(
+		`SELECT private_key, public_key, preshared_key, allowed_ips, disabled
+		 FROM wg_peers WHERE name = ?`, name,
+	).Scan(&p.PrivateKey, &p.PublicKey, &p.PresharedKey, &p.AllowedIPs, &disabled)
+	if err == sql.ErrNoRows {
+		return config.PeerConfig{}, false, nil
+	}
+	if err != nil {
+		return config.PeerConfig{}, false, fmt.Errorf("statsdb: get peer %q: %w", name, err)
+	}
+	p.Disabled = disabled != 0
+	return p, true, nil
+}
+
+// UpsertPeer inserts or updates a peer.
+func (s *Store) UpsertPeer(name string, peer config.PeerConfig) error {
+	disabled := 0
+	if peer.Disabled {
+		disabled = 1
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO wg_peers (name, private_key, public_key, preshared_key, allowed_ips, disabled)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(name) DO UPDATE SET
+		   private_key = excluded.private_key,
+		   public_key = excluded.public_key,
+		   preshared_key = excluded.preshared_key,
+		   allowed_ips = excluded.allowed_ips,
+		   disabled = excluded.disabled,
+		   updated_unix = unixepoch()`,
+		name, peer.PrivateKey, peer.PublicKey, peer.PresharedKey, peer.AllowedIPs, disabled,
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: upsert peer %q: %w", name, err)
+	}
+	return nil
+}
+
+// DeletePeer deletes a peer by name, returning the deleted config.
+func (s *Store) DeletePeer(name string) (config.PeerConfig, bool, error) {
+	p, found, err := s.GetPeer(name)
+	if err != nil {
+		return config.PeerConfig{}, false, err
+	}
+	if !found {
+		return config.PeerConfig{}, false, nil
+	}
+	if _, err := s.db.Exec(`DELETE FROM wg_peers WHERE name = ?`, name); err != nil {
+		return config.PeerConfig{}, false, fmt.Errorf("statsdb: delete peer %q: %w", name, err)
+	}
+	return p, true, nil
+}
+
+// ImportPeers inserts peers from a map, skipping names that already exist.
+func (s *Store) ImportPeers(peers map[string]config.PeerConfig) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(
+		`INSERT OR IGNORE INTO wg_peers (name, private_key, public_key, preshared_key, allowed_ips, disabled)
+		 VALUES (?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: prepare import peers: %w", err)
+	}
+	defer stmt.Close()
+
+	var count int
+	for name, p := range peers {
+		disabled := 0
+		if p.Disabled {
+			disabled = 1
+		}
+		res, err := stmt.Exec(name, p.PrivateKey, p.PublicKey, p.PresharedKey, p.AllowedIPs, disabled)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: import peer %q: %w", name, err)
+		}
+		n, _ := res.RowsAffected()
+		count += int(n)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("statsdb: commit import peers: %w", err)
+	}
+	return count, nil
+}
+
+// ---------------------------------------------------------------------------
+// Secret CRUD
+// ---------------------------------------------------------------------------
+
+// ListSecrets returns all non-disabled secret hex strings.
+func (s *Store) ListSecrets() ([]string, error) {
+	rows, err := s.db.Query(`SELECT secret_hex FROM mtproxy_secrets WHERE disabled = 0`)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list secrets: %w", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var hex string
+		if err := rows.Scan(&hex); err != nil {
+			return nil, fmt.Errorf("statsdb: scan secret: %w", err)
+		}
+		out = append(out, hex)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("statsdb: iterate secrets: %w", err)
+	}
+	return out, nil
+}
+
+// AddSecret inserts a new secret. Returns error if it already exists.
+func (s *Store) AddSecret(secretHex, comment string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO mtproxy_secrets (secret_hex, comment) VALUES (?, ?)`,
+		secretHex, comment,
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: add secret: %w", err)
+	}
+	return nil
+}
+
+// DeleteSecret deletes a secret by hex string.
+func (s *Store) DeleteSecret(secretHex string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM mtproxy_secrets WHERE secret_hex = ?`, secretHex)
+	if err != nil {
+		return false, fmt.Errorf("statsdb: delete secret: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ImportSecrets inserts secrets from a list, skipping those that already exist.
+func (s *Store) ImportSecrets(secrets []string) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO mtproxy_secrets (secret_hex) VALUES (?)`)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: prepare import secrets: %w", err)
+	}
+	defer stmt.Close()
+
+	var count int
+	for _, hex := range secrets {
+		res, err := stmt.Exec(hex)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: import secret %q: %w", hex, err)
+		}
+		n, _ := res.RowsAffected()
+		count += int(n)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("statsdb: commit import secrets: %w", err)
+	}
+	return count, nil
 }

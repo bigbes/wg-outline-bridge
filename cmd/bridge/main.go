@@ -8,6 +8,9 @@ import (
 	"github.com/blikh/wireguard-outline-bridge/cmd/bridge/commands"
 )
 
+// Version is set at build time via -ldflags.
+var Version = "dev"
+
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
@@ -18,7 +21,7 @@ func main() {
 
 	switch os.Args[1] {
 	case "run":
-		commands.RunBridge(os.Args[2:], logger)
+		commands.RunBridge(os.Args[2:], logger, Version)
 	case "watch":
 		commands.Watch(os.Args[2:], logger)
 	case "genconf":

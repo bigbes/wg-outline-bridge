@@ -244,7 +244,13 @@ If `allowed_users` is set, the bot ignores private messages from users not in th
 | `/proxy` | Show Telegram proxy links (MTProxy) |
 | `/listconf` | List all configured peers |
 | `/showconf <name>` | Show WireGuard client config for a peer |
+| `/addpeer <name>` | Add a new WireGuard peer (requires database) |
+| `/delpeer <name>` | Delete a WireGuard peer (requires database) |
+| `/addsecret [type] [comment]` | Add a new MTProxy secret (requires database) |
+| `/delsecret <hex>` | Delete an MTProxy secret (requires database) |
 | `/help` | List available commands |
+
+The management commands (`/addpeer`, `/delpeer`, `/addsecret`, `/delsecret`) require `database.path` to be configured. Peer changes are applied immediately to the running WireGuard device. MTProxy secret changes require a restart to take effect.
 
 ### Status Output
 
@@ -280,9 +286,9 @@ If `allowed_users` is set, the bot ignores private messages from users not in th
 
 Indicators: 🟢 active (handshake < 3 min), 🟡 stale, ⚪ never connected.
 
-## Persistent Stats
+## Database
 
-Enable SQLite-backed persistent stats to track cumulative traffic, handshakes, and connections across daemon restarts:
+Enable SQLite-backed storage for persistent stats and peer/secret management:
 
 ```yaml
 database:
@@ -290,9 +296,13 @@ database:
   flush_interval: 30  # seconds (default: 30)
 ```
 
-Tracked data:
+When the database is enabled:
+- **Peers and MTProxy secrets** are stored in SQLite, enabling management via Telegram bot commands (`/addpeer`, `/delpeer`, `/addsecret`, `/delsecret`) and CLI commands. On first run, existing file-based peers and secrets are automatically imported into the database.
+- **Persistent stats** track cumulative traffic, handshakes, and connections across daemon restarts.
+
+Tracked stats:
 - **WireGuard peers**: cumulative rx/tx bytes, last handshake time, handshake event count
-- **MTProxy peers** (per remote IP): cumulative connections, bytes relayed, handshake/dial errors
+- **MTProxy secrets**: cumulative connections, bytes relayed, handshake/dial errors
 - **Daemon**: start time
 
 Counters survive daemon restarts via delta-accumulation (UAPI/atomic counters that reset are reconciled with stored baselines).
@@ -341,7 +351,7 @@ sudo mkdir -p /data/var/log
 | `genconf` | Generate a client keypair and add to config |
 | `listconf` | List all configured peers |
 | `showconf` | Print WireGuard client config for a peer |
-| `gensecret` | Generate a new MTProxy secret and save to secrets file |
+| `gensecret` | Generate a new MTProxy secret and save to database (or secrets file) |
 | `showproxy` | Print Telegram proxy links for all MTProxy secrets |
 
 ### MTProxy Secrets File
@@ -384,7 +394,7 @@ internal/
   outline/              Outline SDK client wrapper
   proxy/                TCP/UDP proxy with gVisor, SNI parser, routing integration
   routing/              IP/SNI routing engine, IP list downloader
-  statsdb/              SQLite-backed persistent stats storage
+  statsdb/              SQLite-backed persistent stats and peer/secret storage
   telegram/             Telegram Bot API client
   wireguard/            gVisor netstack TUN device
 configs/                Example configuration files

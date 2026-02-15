@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/blikh/wireguard-outline-bridge/internal/config"
 )
 
 func testStore(t *testing.T) *Store {
@@ -153,5 +155,226 @@ func TestFlushMTProxySecrets(t *testing.T) {
 	// 8 + 2 (reset treats full value as delta) = 10
 	if recs["aabbccdd11223344"].ConnectionsTotal != 10 {
 		t.Fatalf("connections after reset: got %d, want 10", recs["aabbccdd11223344"].ConnectionsTotal)
+	}
+}
+
+func TestPeerCRUD(t *testing.T) {
+	s := testStore(t)
+
+	// Empty list initially
+	peers, err := s.ListPeers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(peers) != 0 {
+		t.Fatalf("expected 0 peers, got %d", len(peers))
+	}
+
+	// GetPeer on missing name
+	_, found, err := s.GetPeer("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found {
+		t.Fatal("expected not found")
+	}
+
+	// UpsertPeer (insert)
+	alice := config.PeerConfig{
+		PrivateKey:   "alice-priv",
+		PublicKey:    "alice-pub",
+		PresharedKey: "alice-psk",
+		AllowedIPs:   "10.0.0.2/32",
+		Disabled:     false,
+	}
+	if err := s.UpsertPeer("alice", alice); err != nil {
+		t.Fatal(err)
+	}
+
+	got, found, err := s.GetPeer("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("expected found")
+	}
+	if got != alice {
+		t.Fatalf("got %+v, want %+v", got, alice)
+	}
+
+	// UpsertPeer (update)
+	alice.Disabled = true
+	alice.AllowedIPs = "10.0.0.3/32"
+	if err := s.UpsertPeer("alice", alice); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ = s.GetPeer("alice")
+	if got != alice {
+		t.Fatalf("after update: got %+v, want %+v", got, alice)
+	}
+
+	// Add second peer and list
+	bob := config.PeerConfig{
+		PrivateKey: "bob-priv",
+		PublicKey:  "bob-pub",
+		AllowedIPs: "10.0.0.4/32",
+	}
+	if err := s.UpsertPeer("bob", bob); err != nil {
+		t.Fatal(err)
+	}
+	peers, err = s.ListPeers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(peers) != 2 {
+		t.Fatalf("expected 2 peers, got %d", len(peers))
+	}
+
+	// DeletePeer
+	deleted, found, err := s.DeletePeer("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("expected found on delete")
+	}
+	if deleted != alice {
+		t.Fatalf("deleted config mismatch: got %+v, want %+v", deleted, alice)
+	}
+
+	// Delete again returns not found
+	_, found, err = s.DeletePeer("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found {
+		t.Fatal("expected not found on second delete")
+	}
+
+	peers, _ = s.ListPeers()
+	if len(peers) != 1 {
+		t.Fatalf("expected 1 peer after delete, got %d", len(peers))
+	}
+}
+
+func TestSecretCRUD(t *testing.T) {
+	s := testStore(t)
+
+	// Empty list initially
+	secrets, err := s.ListSecrets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets) != 0 {
+		t.Fatalf("expected 0 secrets, got %d", len(secrets))
+	}
+
+	// AddSecret
+	if err := s.AddSecret("aabb", "test comment"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddSecret("ccdd", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	secrets, err = s.ListSecrets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets) != 2 {
+		t.Fatalf("expected 2 secrets, got %d", len(secrets))
+	}
+
+	// AddSecret duplicate returns error
+	if err := s.AddSecret("aabb", "dup"); err == nil {
+		t.Fatal("expected error on duplicate add")
+	}
+
+	// DeleteSecret
+	ok, err := s.DeleteSecret("aabb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected true from delete")
+	}
+
+	// Delete non-existent
+	ok, err = s.DeleteSecret("aabb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("expected false from second delete")
+	}
+
+	secrets, _ = s.ListSecrets()
+	if len(secrets) != 1 {
+		t.Fatalf("expected 1 secret after delete, got %d", len(secrets))
+	}
+}
+
+func TestImportPeers(t *testing.T) {
+	s := testStore(t)
+
+	batch := map[string]config.PeerConfig{
+		"alice": {PrivateKey: "a-priv", PublicKey: "a-pub", AllowedIPs: "10.0.0.2/32"},
+		"bob":   {PrivateKey: "b-priv", PublicKey: "b-pub", AllowedIPs: "10.0.0.3/32"},
+	}
+
+	n, err := s.ImportPeers(batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("imported %d, want 2", n)
+	}
+
+	// Import again with overlap + new
+	batch2 := map[string]config.PeerConfig{
+		"alice":   {PrivateKey: "a-priv2", PublicKey: "a-pub2", AllowedIPs: "10.0.0.2/32"},
+		"charlie": {PrivateKey: "c-priv", PublicKey: "c-pub", AllowedIPs: "10.0.0.4/32"},
+	}
+	n, err = s.ImportPeers(batch2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("imported %d, want 1 (alice skipped)", n)
+	}
+
+	peers, _ := s.ListPeers()
+	if len(peers) != 3 {
+		t.Fatalf("expected 3 peers, got %d", len(peers))
+	}
+	// alice should retain original values
+	if peers["alice"].PublicKey != "a-pub" {
+		t.Fatalf("alice should not be overwritten, got pub key %q", peers["alice"].PublicKey)
+	}
+}
+
+func TestImportSecrets(t *testing.T) {
+	s := testStore(t)
+
+	n, err := s.ImportSecrets([]string{"aa", "bb", "cc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("imported %d, want 3", n)
+	}
+
+	// Import with overlap
+	n, err = s.ImportSecrets([]string{"bb", "cc", "dd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("imported %d, want 1 (bb,cc skipped)", n)
+	}
+
+	secrets, _ := s.ListSecrets()
+	if len(secrets) != 4 {
+		t.Fatalf("expected 4 secrets, got %d", len(secrets))
 	}
 }

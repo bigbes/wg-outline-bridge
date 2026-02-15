@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
+	"github.com/blikh/wireguard-outline-bridge/internal/statsdb"
 )
 
 func ShowConf(args []string, logger *slog.Logger) {
@@ -26,6 +27,24 @@ func ShowConf(args []string, logger *slog.Logger) {
 	if err != nil {
 		logger.Error("failed to load config", "err", err)
 		os.Exit(1)
+	}
+
+	if cfg.Database.Path != "" {
+		store, err := statsdb.Open(cfg.Database.Path, logger)
+		if err != nil {
+			logger.Error("failed to open database", "err", err)
+			os.Exit(1)
+		}
+		defer store.Close()
+
+		dbPeers, err := store.ListPeers()
+		if err != nil {
+			logger.Error("failed to load peers from database", "err", err)
+			os.Exit(1)
+		}
+		if len(dbPeers) > 0 {
+			cfg.Peers = dbPeers
+		}
 	}
 
 	peer, ok := cfg.Peers[*name]
@@ -62,7 +81,7 @@ func ShowConf(args []string, logger *slog.Logger) {
 	fmt.Printf("DNS = %s\n", cfg.WireGuard.DNS)
 	fmt.Println()
 	fmt.Println("[Peer]")
-	if serverPublicKey, err := derivePublicKey(cfg.WireGuard.PrivateKey); err == nil {
+	if serverPublicKey, err := config.DerivePublicKey(cfg.WireGuard.PrivateKey); err == nil {
 		fmt.Printf("PublicKey = %s\n", serverPublicKey)
 	} else {
 		fmt.Println("PublicKey = <failed to derive, check server private key>")

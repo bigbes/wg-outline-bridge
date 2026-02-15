@@ -1,7 +1,6 @@
 ---
 log_level: "info"
 # cache_dir: "/var/cache/wg-outline-bridge"  # cache for downloaded files (default: ~/.cache/wg-outline-bridge)
-# peers_dir: "peers"  # directory for peer config files (default: peers/ next to config file)
 
 wireguard:
   private_key: "CHANGE_ME_BASE64_PRIVATE_KEY"
@@ -58,6 +57,10 @@ wireguard:
 #   endpoints:                 # override Telegram DC endpoints (optional)
 #     1: ["149.154.175.50:443"]
 #     2: ["149.154.167.51:443"]
+
+# database:                                         # SQLite database for persistent stats + peer/secret management
+#   path: "/var/lib/wg-outline-bridge/bridge.sqlite"  # empty or omitted = disabled
+#   flush_interval: 30                                # seconds (default: 30)
 
 # telegram:                     # Telegram bot for observation & commands
 #   enabled: true

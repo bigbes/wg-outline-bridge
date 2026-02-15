@@ -1,18 +1,13 @@
 package commands
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"flag"
 	"fmt"
 	"log/slog"
-	"net/netip"
 	"os"
-	"strings"
-
-	"golang.org/x/crypto/curve25519"
 
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
+	"github.com/blikh/wireguard-outline-bridge/internal/statsdb"
 )
 
 func GenConf(args []string, logger *slog.Logger) {
@@ -33,19 +28,37 @@ func GenConf(args []string, logger *slog.Logger) {
 		os.Exit(1)
 	}
 
-	privateKey, publicKey, err := generateKeyPair()
+	if cfg.Database.Path != "" {
+		store, err := statsdb.Open(cfg.Database.Path, logger)
+		if err != nil {
+			logger.Error("failed to open database", "err", err)
+			os.Exit(1)
+		}
+		defer store.Close()
+
+		dbPeers, err := store.ListPeers()
+		if err != nil {
+			logger.Error("failed to load peers from database", "err", err)
+			os.Exit(1)
+		}
+		if len(dbPeers) > 0 {
+			cfg.Peers = dbPeers
+		}
+	}
+
+	privateKey, publicKey, err := config.GenerateKeyPair()
 	if err != nil {
 		logger.Error("failed to generate keys", "err", err)
 		os.Exit(1)
 	}
 
-	presharedKey, err := generatePresharedKey()
+	presharedKey, err := config.GeneratePresharedKey()
 	if err != nil {
 		logger.Error("failed to generate preshared key", "err", err)
 		os.Exit(1)
 	}
 
-	clientIP, err := nextPeerIP(cfg)
+	clientIP, err := config.NextPeerIP(cfg)
 	if err != nil {
 		logger.Error("failed to determine client IP", "err", err)
 		os.Exit(1)
@@ -57,9 +70,23 @@ func GenConf(args []string, logger *slog.Logger) {
 		PresharedKey: presharedKey,
 		AllowedIPs:   clientIP + "/32",
 	}
-	if err := config.SavePeer(cfg.PeersDir, *name, peer); err != nil {
-		logger.Error("failed to save peer", "err", err)
-		os.Exit(1)
+	if cfg.Database.Path != "" {
+		store, err := statsdb.Open(cfg.Database.Path, logger)
+		if err != nil {
+			logger.Error("failed to open database", "err", err)
+			os.Exit(1)
+		}
+		defer store.Close()
+
+		if err := store.UpsertPeer(*name, peer); err != nil {
+			logger.Error("failed to save peer to database", "err", err)
+			os.Exit(1)
+		}
+	} else {
+		if err := config.SavePeer(cfg.PeersDir, *name, peer); err != nil {
+			logger.Error("failed to save peer", "err", err)
+			os.Exit(1)
+		}
 	}
 
 	fmt.Println("=== Peer added to config ===")
@@ -91,7 +118,7 @@ func GenConf(args []string, logger *slog.Logger) {
 	fmt.Printf("DNS = %s\n", cfg.WireGuard.DNS)
 	fmt.Println()
 	fmt.Println("[Peer]")
-	if serverPublicKey, err := derivePublicKey(cfg.WireGuard.PrivateKey); err == nil {
+	if serverPublicKey, err := config.DerivePublicKey(cfg.WireGuard.PrivateKey); err == nil {
 		fmt.Printf("PublicKey = %s\n", serverPublicKey)
 	} else {
 		fmt.Println("PublicKey = <failed to derive, check server private key>")
@@ -100,72 +127,4 @@ func GenConf(args []string, logger *slog.Logger) {
 	fmt.Printf("Endpoint = %s\n", endpoint)
 	fmt.Printf("AllowedIPs = %s\n", allowedIPs)
 	fmt.Println("PersistentKeepalive = 25")
-}
-
-func generatePresharedKey() (string, error) {
-	var key [32]byte
-	if _, err := rand.Read(key[:]); err != nil {
-		return "", fmt.Errorf("generating random bytes: %w", err)
-	}
-	return base64.StdEncoding.EncodeToString(key[:]), nil
-}
-
-func generateKeyPair() (privateKeyB64, publicKeyB64 string, err error) {
-	var privateKey [32]byte
-	if _, err = rand.Read(privateKey[:]); err != nil {
-		return "", "", fmt.Errorf("generating random bytes: %w", err)
-	}
-
-	privateKey[0] &= 248
-	privateKey[31] &= 127
-	privateKey[31] |= 64
-
-	publicKey, err := curve25519.X25519(privateKey[:], curve25519.Basepoint)
-	if err != nil {
-		return "", "", fmt.Errorf("computing public key: %w", err)
-	}
-
-	return base64.StdEncoding.EncodeToString(privateKey[:]),
-		base64.StdEncoding.EncodeToString(publicKey), nil
-}
-
-func derivePublicKey(privateKeyB64 string) (string, error) {
-	raw, err := base64.StdEncoding.DecodeString(privateKeyB64)
-	if err != nil {
-		return "", err
-	}
-	if len(raw) != 32 {
-		return "", fmt.Errorf("invalid private key length: %d", len(raw))
-	}
-	pub, err := curve25519.X25519(raw, curve25519.Basepoint)
-	if err != nil {
-		return "", err
-	}
-	return base64.StdEncoding.EncodeToString(pub), nil
-}
-
-func nextPeerIP(cfg *config.Config) (string, error) {
-	addr, _, err := cfg.WireGuard.ParseAddress()
-	if err != nil {
-		return "", err
-	}
-
-	used := make(map[netip.Addr]bool)
-	used[addr] = true
-	for _, peer := range cfg.Peers {
-		ip := strings.Split(peer.AllowedIPs, "/")[0]
-		if a, err := netip.ParseAddr(ip); err == nil {
-			used[a] = true
-		}
-	}
-
-	candidate := addr.Next()
-	for i := 0; i < 253; i++ {
-		if !used[candidate] {
-			return candidate.String(), nil
-		}
-		candidate = candidate.Next()
-	}
-
-	return "", fmt.Errorf("no available IPs in subnet")
 }

@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+
+	"github.com/blikh/wireguard-outline-bridge/internal/config"
 )
 
 func Init(args []string, logger *slog.Logger) {
@@ -22,7 +24,7 @@ func Init(args []string, logger *slog.Logger) {
 		os.Exit(1)
 	}
 
-	privateKey, publicKey, err := generateKeyPair()
+	privateKey, publicKey, err := config.GenerateKeyPair()
 	if err != nil {
 		logger.Error("failed to generate server keys", "err", err)
 		os.Exit(1)

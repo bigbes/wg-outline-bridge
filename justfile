@@ -14,13 +14,17 @@ remote_log := env("REMOTE_LOG", "/data/var/log/bridge.log")
 local_bin := "main"
 local_config := "configs/example.yaml"
 
+# Version from git describe (tag + commits since tag + short hash)
+version := `git describe --tags --long --always 2>/dev/null || echo "dev"`
+ldflags := "-X main.Version=" + version
+
 # Build the bridge binary (uses GOOS/GOARCH/CGO_ENABLED from .env)
 build:
-    go build -o {{ local_bin }} ./cmd/bridge/main.go
+    go build -ldflags '{{ ldflags }}' -o {{ local_bin }} ./cmd/bridge/main.go
 
 # Build for the local platform (ignores .env cross-compile settings)
 build-local:
-    GOOS="" GOARCH="" CGO_ENABLED="" go build -o {{ local_bin }} ./cmd/bridge/main.go
+    GOOS="" GOARCH="" CGO_ENABLED="" go build -ldflags '{{ ldflags }}' -o {{ local_bin }} ./cmd/bridge/main.go
 
 # Run all tests
 test:

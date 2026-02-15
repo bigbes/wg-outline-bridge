@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
+	"github.com/blikh/wireguard-outline-bridge/internal/statsdb"
 )
 
 func ListConf(args []string, logger *slog.Logger) {
@@ -19,6 +20,24 @@ func ListConf(args []string, logger *slog.Logger) {
 	if err != nil {
 		logger.Error("failed to load config", "err", err)
 		os.Exit(1)
+	}
+
+	if cfg.Database.Path != "" {
+		store, err := statsdb.Open(cfg.Database.Path, logger)
+		if err != nil {
+			logger.Error("failed to open database", "err", err)
+			os.Exit(1)
+		}
+		defer store.Close()
+
+		dbPeers, err := store.ListPeers()
+		if err != nil {
+			logger.Error("failed to load peers from database", "err", err)
+			os.Exit(1)
+		}
+		if len(dbPeers) > 0 {
+			cfg.Peers = dbPeers
+		}
 	}
 
 	if len(cfg.Peers) == 0 {
