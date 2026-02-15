@@ -3,6 +3,7 @@ package mtproxy
 import (
 	"context"
 	"crypto/cipher"
+	"errors"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -123,6 +124,8 @@ func (s *Server) closeListeners() {
 	}
 }
 
+
+
 // ReplayCacheSize returns the current number of entries in the replay cache.
 func (s *Server) ReplayCacheSize() int {
 	s.replayMu.Lock()
@@ -147,13 +150,11 @@ func (s *Server) acceptLoop(ctx context.Context, ln net.Listener) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			select {
-			case <-ctx.Done():
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return
-			default:
-				s.logger.Error("accept error", "err", err)
-				continue
 			}
+			s.logger.Error("accept error", "err", err)
+			continue
 		}
 		go s.handleConnection(ctx, conn)
 	}
@@ -258,27 +259,6 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	}
 	defer backendConn.Close()
 
-	// Send transport preamble to the backend (plaintext, no obfuscation)
-	var preamble []byte
-	switch parsed.Tag {
-	case mpcrypto.TagCompact:
-		preamble = []byte{0xef}
-	case mpcrypto.TagMedium:
-		preamble = []byte{0xee, 0xee, 0xee, 0xee}
-	case mpcrypto.TagMediumPadded:
-		preamble = []byte{0xdd, 0xdd, 0xdd, 0xdd}
-	}
-	if _, err := backendConn.Write(preamble); err != nil {
-		s.logger.Error("failed to send backend preamble", "backend", backendAddr, "err", err)
-		return
-	}
-
-	// Bidirectional relay:
-	// Client -> Backend: decrypt from client, send plaintext to backend
-	// Backend -> Client: read plaintext from backend, encrypt for client
-	var relayWg sync.WaitGroup
-	relayWg.Add(2)
-
 	// Determine the actual reader/writer for the client side
 	var clientReader io.Reader
 	var clientWriter io.Writer
@@ -290,14 +270,32 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 		clientWriter = conn
 	}
 
+	// Send obfuscated2 header to the backend (per mtg approach)
+	backendHeader, backendEncrypt, backendDecrypt, err := mpcrypto.GenerateBackendHeader(parsed.Tag, parsed.DCID)
+	if err != nil {
+		s.logger.Error("failed to generate backend header", "err", err)
+		return
+	}
+	if _, err := backendConn.Write(backendHeader[:]); err != nil {
+		s.logger.Error("failed to send backend header", "backend", backendAddr, "err", err)
+		return
+	}
+
+	var backendReader io.Reader = &cipher.StreamReader{S: backendDecrypt, R: backendConn}
+	var backendWriter io.Writer = &cipher.StreamWriter{S: backendEncrypt, W: backendConn}
+
+	// Bidirectional relay
+	var relayWg sync.WaitGroup
+	relayWg.Add(2)
+
 	var bytesUp, bytesDown int64
 	var closeReason string
 
-	// Client -> Backend (decrypt from client, forward plaintext)
+	// Client -> Backend (decrypt from client, forward to backend)
 	go func() {
 		defer relayWg.Done()
 		sr := &cipher.StreamReader{S: parsed.Decrypt, R: clientReader}
-		n, err := io.Copy(backendConn, sr)
+		n, err := io.Copy(backendWriter, sr)
 		bytesUp = n
 		if err != nil {
 			closeReason = fmt.Sprintf("client->backend: %v", err)
@@ -306,11 +304,11 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 		}
 	}()
 
-	// Backend -> Client (read plaintext, encrypt for client)
+	// Backend -> Client (read from backend, encrypt for client)
 	go func() {
 		defer relayWg.Done()
 		sw := &cipher.StreamWriter{S: parsed.Encrypt, W: clientWriter}
-		n, err := io.Copy(sw, backendConn)
+		n, err := io.Copy(sw, backendReader)
 		bytesDown = n
 		if err != nil {
 			closeReason = fmt.Sprintf("backend->client: %v", err)

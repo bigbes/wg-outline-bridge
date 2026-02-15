@@ -41,7 +41,7 @@ func TestMTProxyIntegration_ReqPQ(t *testing.T) {
 	defer cancel()
 
 	logger := slog.Default()
-	endpoints := telegram.NewEndpointManager(nil) // use defaults
+	endpoints := telegram.NewEndpointManager(nil)
 	srv := NewServer(ServerConfig{
 		ListenAddrs: []string{"127.0.0.1:0"},
 		Secrets:     []mpcrypto.Secret{secret},
@@ -383,3 +383,5 @@ func TestMTProxyIntegration_WrongSecret(t *testing.T) {
 	}
 	t.Logf("correctly rejected: %v", err)
 }
+
+

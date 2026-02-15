@@ -15,7 +15,7 @@ import (
 func GenSecret(args []string, logger *slog.Logger) {
 	fs := flag.NewFlagSet("gensecret", flag.ExitOnError)
 	configPath := fs.String("config", "configs/bridge.yaml", "path to config file")
-	padding := fs.Bool("dd", false, "generate dd-prefix secret (padding mode)")
+	secretType := fs.String("type", "faketls", "secret type: faketls/ee (ee-prefix), padded/dd (dd-prefix), default (no prefix)")
 	comment := fs.String("comment", "", "comment to add after the secret")
 	fs.Parse(args)
 
@@ -32,8 +32,16 @@ func GenSecret(args []string, logger *slog.Logger) {
 	}
 
 	secretHex := hex.EncodeToString(secret[:])
-	if *padding {
+	switch *secretType {
+	case "faketls", "ee":
+		secretHex = "ee" + secretHex
+	case "padded", "dd":
 		secretHex = "dd" + secretHex
+	case "default":
+		// no prefix
+	default:
+		logger.Error("unknown secret type, must be faketls/ee, padded/dd, or default", "type", *secretType)
+		os.Exit(1)
 	}
 
 	secretsFile := cfg.MTProxy.SecretsFile

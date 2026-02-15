@@ -168,83 +168,75 @@ func tryDecryptHeader(header [64]byte, secret Secret) (*ObfuscatedHeader, error)
 	}, nil
 }
 
-// GenerateHeader creates a new 64-byte obfuscated2 header for a backend connection
-// (no secret involved). Returns the header to send, plus encrypt/decrypt streams
-// for the backend leg.
+// GenerateBackendHeader creates a 64-byte obfuscated2 header for a backend
+// connection to a Telegram DC (following the mtg/mtglib approach).
 //
-// The receiver (Telegram DC) derives keys from the wire bytes, so we:
-//  1. Generate random bytes for header[0:56] (these go on the wire as-is)
-//  2. Derive key/IV from those wire bytes
-//  3. Construct header[56:64] by XORing tag/dcID with the keystream at offset 56
+// The frame layout is: noise(8) + key(32) + iv(16) + connType(4) + dc(2) + noise(2).
+// Keys are derived directly from the raw frame bytes (no SHA256, no secret).
+// The entire frame is encrypted with its own encrypt stream, then key+iv bytes
+// are restored from the plaintext copy so the receiver can derive the same keys.
 //
-// Encrypt: used to encrypt data sent to the backend (continues from position 64).
-// Decrypt: used to decrypt data received from the backend (starts at position 0).
-func GenerateHeader(tag uint32, dcID int16) (header [64]byte, encrypt cipher.Stream, decrypt cipher.Stream, err error) {
+// Returns the header to send, plus encrypt/decrypt streams for the backend leg.
+func GenerateBackendHeader(tag uint32, dcID int16) (header [64]byte, encrypt cipher.Stream, decrypt cipher.Stream, err error) {
 	for {
-		if _, err = rand.Read(header[:56]); err != nil {
+		if _, err = rand.Read(header[:]); err != nil {
 			return header, nil, nil, fmt.Errorf("generating random header: %w", err)
 		}
 
-		// Ensure first bytes don't look like known protocols
-		first := header[0]
-		if first == 0xef || first == 0x48 || first == 0x44 ||
-			first == 0x50 || first == 0x47 || first == 0x16 || first == 0x14 {
+		if header[0] == 0xef {
 			continue
 		}
 		first4 := binary.LittleEndian.Uint32(header[:4])
-		if first4 == 0x00000000 || first4 == TagCompact || first4 == TagMedium || first4 == TagMediumPadded {
+		if first4 == 0x44414548 || first4 == 0x54534f50 ||
+			first4 == 0x20544547 || first4 == 0x4954504f ||
+			first4 == TagMedium {
+			continue
+		}
+		if header[4]|header[5]|header[6]|header[7] == 0 {
 			continue
 		}
 		break
 	}
 
-	// Derive encrypt key from wire bytes: SHA256(header[8:40]), IV = header[40:56]
-	encKey := sha256.Sum256(header[8:40])
-	var encIV [16]byte
-	copy(encIV[:], header[40:56])
+	// Set connection type and DC ID
+	binary.LittleEndian.PutUint32(header[56:60], tag)
+	binary.LittleEndian.PutUint16(header[60:62], uint16(dcID))
 
-	encBlock, err := aes.NewCipher(encKey[:])
+	// Save plaintext key+iv before encrypting the frame
+	var savedKeyIV [48]byte
+	copy(savedKeyIV[:], header[8:56])
+
+	// Derive encrypt key: raw header[8:40], IV: header[40:56]
+	encBlock, err := aes.NewCipher(header[8:40])
 	if err != nil {
 		return header, nil, nil, fmt.Errorf("creating encrypt cipher: %w", err)
 	}
-	encStream := cipher.NewCTR(encBlock, encIV[:])
+	encStream := cipher.NewCTR(encBlock, header[40:56])
 
-	// Advance the encrypt stream by 56 bytes to reach the tag position
-	var skip [56]byte
-	encStream.XORKeyStream(skip[:], skip[:])
-
-	// Construct the plaintext for positions 56-63: tag(4) + dcID(2) + padding(2)
-	var plain [8]byte
-	binary.LittleEndian.PutUint32(plain[0:4], tag)
-	binary.LittleEndian.PutUint16(plain[4:6], uint16(dcID))
-	// plain[6:8] stays zero (padding)
-
-	// XOR with keystream to produce wire bytes at header[56:64]
-	encStream.XORKeyStream(header[56:], plain[:])
-
-	// encStream is now at position 64, ready for payload
-
-	// Ensure the final header[0:4] still passes the first-byte checks after
-	// we set [56:64]. Re-check first4 against encrypted tag values — but
-	// header[0:56] is unchanged, so no re-check needed.
-
-	// Derive decrypt key (for data we receive): SHA256(reverse(header[24:56])),
-	// IV = reverse(header[8:24])
-	var decKeyInput [32]byte
-	for i := 0; i < 32; i++ {
-		decKeyInput[i] = header[55-i]
-	}
-	decKey := sha256.Sum256(decKeyInput[:])
+	// Derive decrypt key from inverted key+iv section.
+	// Inversion reverses the 48 bytes at positions [8:56] as a whole block:
+	//   inverted[8+i] = original[55-i] for i in 0..47
+	// Decrypt key = inverted[8:40], decrypt IV = inverted[40:56]
+	var decKey [32]byte
 	var decIV [16]byte
-	for i := 0; i < 16; i++ {
-		decIV[i] = header[23-i]
+	for i := 0; i < 32; i++ {
+		decKey[i] = savedKeyIV[47-i] // savedKeyIV[47-i] == original header[55-i]
 	}
-
+	for i := 0; i < 16; i++ {
+		decIV[i] = savedKeyIV[47-32-i] // savedKeyIV[15-i] == original header[23-i]
+	}
 	decBlock, err := aes.NewCipher(decKey[:])
 	if err != nil {
 		return header, nil, nil, fmt.Errorf("creating decrypt cipher: %w", err)
 	}
 	decStream := cipher.NewCTR(decBlock, decIV[:])
 
+	// Encrypt the entire frame in-place
+	encStream.XORKeyStream(header[:], header[:])
+
+	// Restore plaintext key+iv so the receiver can derive the same keys
+	copy(header[8:56], savedKeyIV[:])
+
+	// encStream is now at position 64, ready for payload
 	return header, encStream, decStream, nil
 }

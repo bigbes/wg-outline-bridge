@@ -294,6 +294,7 @@ func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) err
 	}
 
 	srv := mtproxy.NewServer(serverCfg, dialer, endpoints, b.logger)
+
 	if err := srv.Listen(); err != nil {
 		return fmt.Errorf("mtproxy: %w", err)
 	}
