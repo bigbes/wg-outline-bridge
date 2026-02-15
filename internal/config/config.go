@@ -28,8 +28,8 @@ type Config struct {
 	Outlines  []OutlineConfig       `yaml:"outlines"`
 	Routing   RoutingConfig         `yaml:"routing"`
 	GeoIP     []GeoIPConfig         `yaml:"geoip"`
+	PeersDir  string                `yaml:"peers_dir"`
 	Peers     map[string]PeerConfig `yaml:"-"`
-	PeersDir  string                `yaml:"-"`
 }
 
 type WireGuardConfig struct {
@@ -279,7 +279,9 @@ func Load(path string) (*Config, error) {
 		}
 	}
 
-	cfg.PeersDir = filepath.Join(filepath.Dir(path), "peers")
+	if cfg.PeersDir == "" {
+		cfg.PeersDir = filepath.Join(filepath.Dir(path), "peers")
+	}
 	peers, err := LoadPeers(cfg.PeersDir)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("loading peers: %w", err)

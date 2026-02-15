@@ -41,9 +41,9 @@ If the config file already exists, key generation is skipped.
 ### Build (manual)
 
 ```bash
-go build ./cmd/bridge/main.go
+go build -o main ./cmd/bridge/main.go
 # or
-make build
+just build
 ```
 
 ### Initialize Config

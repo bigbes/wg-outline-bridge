@@ -1,6 +1,7 @@
 ---
 log_level: "info"
 # cache_dir: "/var/cache/wg-outline-bridge"  # cache for downloaded files (default: ~/.cache/wg-outline-bridge)
+# peers_dir: "peers"  # directory for peer config files (default: peers/ next to config file)
 
 wireguard:
   private_key: "CHANGE_ME_BASE64_PRIVATE_KEY"
