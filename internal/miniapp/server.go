@@ -13,6 +13,8 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/blikh/wireguard-outline-bridge/internal/observer"
+	"github.com/blikh/wireguard-outline-bridge/internal/statsdb"
+	tgbot "github.com/blikh/wireguard-outline-bridge/internal/telegram"
 )
 
 // Server serves the Telegram Mini App web interface and JSON API.
@@ -20,6 +22,8 @@ type Server struct {
 	provider     observer.StatusProvider
 	cfgProv      observer.ConfigProvider
 	manager      observer.Manager
+	bot          *tgbot.Bot
+	store        *statsdb.Store
 	botToken     string
 	allowedUsers []int64
 	listen       string
@@ -34,6 +38,8 @@ func New(
 	provider observer.StatusProvider,
 	cfgProv observer.ConfigProvider,
 	manager observer.Manager,
+	bot *tgbot.Bot,
+	store *statsdb.Store,
 	botToken string,
 	allowedUsers []int64,
 	listen string,
@@ -46,6 +52,8 @@ func New(
 		provider:     provider,
 		cfgProv:      cfgProv,
 		manager:      manager,
+		bot:          bot,
+		store:        store,
 		botToken:     botToken,
 		allowedUsers: allowedUsers,
 		listen:       listen,
@@ -77,6 +85,8 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/secrets/", s.authMiddleware(s.handleDeleteSecret))
 	mux.HandleFunc("/api/proxies", s.authMiddleware(s.handleAddProxy))
 	mux.HandleFunc("/api/proxies/", s.authMiddleware(s.handleDeleteProxy))
+	mux.HandleFunc("/api/users", s.authMiddleware(s.handleUsers))
+	mux.HandleFunc("/api/users/", s.authMiddleware(s.handleDeleteUser))
 
 	// Static files (SPA).
 	mux.HandleFunc("/", s.handleStatic)
@@ -182,6 +192,11 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			if uid == userID {
 				allowed = true
 				break
+			}
+		}
+		if !allowed && s.store != nil {
+			if ok, err := s.store.IsAllowedUser(userID); err == nil && ok {
+				allowed = true
 			}
 		}
 		if !allowed {

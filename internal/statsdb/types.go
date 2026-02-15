@@ -36,3 +36,13 @@ type MTSecretRecord struct {
 	BytesB2CTotal          int64
 	BackendDialErrorsTotal int64
 }
+
+// AllowedUser represents an authorized Telegram user stored in the database.
+type AllowedUser struct {
+	UserID    int64
+	Username  string
+	FirstName string
+	LastName  string
+	PhotoURL  string
+	CreatedAt int64
+}

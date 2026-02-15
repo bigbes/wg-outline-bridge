@@ -138,6 +138,7 @@ h2 { font-size: 15px; margin: 16px 0 8px; display: flex; align-items: center; ga
   <button class="tab active" onclick="showTab('peers')">👥 Peers</button>
   <button class="tab" onclick="showTab('mtproxy')">📡 MTProxy</button>
   <button class="tab" onclick="showTab('proxies')">🔌 Proxies</button>
+  <button class="tab" onclick="showTab('users')">🔐 Users</button>
 </div>
 
 <div id="loading" class="loading">Loading...</div>
@@ -184,6 +185,16 @@ h2 { font-size: 15px; margin: 16px 0 8px; display: flex; align-items: center; ga
   </div>
   <div id="proxy-msg"></div>
 </div>
+
+<div id="users" class="section">
+  <div id="users-list"></div>
+  <h2>Grant Access</h2>
+  <div class="input-row">
+    <input class="input" id="new-user" placeholder="@username or user ID">
+    <button class="btn btn-sm" onclick="addUser()">+ Add</button>
+  </div>
+  <div id="user-msg"></div>
+</div>
 </div>
 
 <script>
@@ -221,12 +232,13 @@ function api(method, path, body) {
 
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((t, i) => {
-    const sections = ['peers', 'mtproxy', 'proxies'];
+    const sections = ['peers', 'mtproxy', 'proxies', 'users'];
     t.classList.toggle('active', sections[i] === name);
   });
   document.querySelectorAll('.section').forEach(s => {
     s.classList.toggle('active', s.id === name);
   });
+  if (name === 'users' && !usersLoaded) refreshUsers();
 }
 
 function formatBytes(b) {
@@ -455,6 +467,65 @@ function deleteProxy(name) {
       if (d.error) { showMsg('proxy-msg', d.error, true); return; }
       showMsg('proxy-msg', 'Proxy deleted (restart required)', false);
       refresh();
+    });
+  });
+}
+
+// Users
+let usersLoaded = false;
+let usersData = [];
+
+function refreshUsers() {
+  api('GET', '/api/users').then(d => {
+    usersData = d;
+    usersLoaded = true;
+    renderUsers();
+  });
+}
+
+function renderUsers() {
+  const ul = document.getElementById('users-list');
+  if (!usersData || usersData.length === 0) {
+    ul.innerHTML = '<div class="empty">No additional users granted access</div>';
+    return;
+  }
+  ul.innerHTML = usersData.map(u => {
+    const name = [u.first_name, u.last_name].filter(Boolean).join(' ') || (u.is_admin ? 'Admin (ID: '+u.user_id+')' : 'Unknown');
+    const avatar = u.photo_url
+      ? `<img src="${u.photo_url}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">`
+      : `<div style="width:36px;height:36px;border-radius:50%;background:var(--btn);display:flex;align-items:center;justify-content:center;font-size:16px;color:var(--btn-text)">${(u.first_name||'?')[0]}</div>`;
+    const adminBadge = u.is_admin ? '<span style="background:var(--btn);color:var(--btn-text);font-size:10px;padding:1px 6px;border-radius:4px;margin-left:6px">admin</span>' : '';
+    const deleteBtn = u.is_admin ? '' : `<button class="btn btn-sm btn-danger" onclick="deleteUser(${u.user_id},'${name.replace(/'/g,"\\'")}')">✕</button>`;
+    return `
+      <div class="card" style="display:flex;align-items:center;gap:10px">
+        ${avatar}
+        <div style="flex:1;min-width:0">
+          <div class="name">${name}${adminBadge}</div>
+          <div class="meta">${u.username ? '@'+u.username : ''} · ID: ${u.user_id}</div>
+        </div>
+        ${deleteBtn}
+      </div>`;
+  }).join('');
+}
+
+function addUser() {
+  const input = document.getElementById('new-user').value.trim();
+  if (!input) return;
+  api('POST', '/api/users', { user: input }).then(d => {
+    if (d.error) { showMsg('user-msg', d.error, true); return; }
+    document.getElementById('new-user').value = '';
+    showMsg('user-msg', 'User added', false);
+    refreshUsers();
+  });
+}
+
+function deleteUser(id, name) {
+  tg.showConfirm('Revoke access for "' + name + '"?', (ok) => {
+    if (!ok) return;
+    api('DELETE', '/api/users/' + id).then(d => {
+      if (d.error) { showMsg('user-msg', d.error, true); return; }
+      showMsg('user-msg', 'Access revoked', false);
+      refreshUsers();
     });
   });
 }

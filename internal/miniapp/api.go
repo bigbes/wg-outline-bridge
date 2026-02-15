@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
+	"github.com/blikh/wireguard-outline-bridge/internal/statsdb"
 )
 
 type statusResponse struct {
@@ -316,6 +318,188 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleListUsers(w, r)
+	case http.MethodPost:
+		s.handleAddUser(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) isConfigAdmin(userID int64) bool {
+	for _, uid := range s.allowedUsers {
+		if uid == userID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	type userResp struct {
+		UserID    int64  `json:"user_id"`
+		Username  string `json:"username"`
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+		PhotoURL  string `json:"photo_url"`
+		CreatedAt int64  `json:"created_at"`
+		IsAdmin   bool   `json:"is_admin"`
+	}
+
+	var out []userResp
+
+	// Config admins are always listed first and cannot be deleted.
+	configAdminSet := make(map[int64]bool)
+	for _, uid := range s.allowedUsers {
+		configAdminSet[uid] = true
+		out = append(out, userResp{
+			UserID:  uid,
+			IsAdmin: true,
+		})
+	}
+
+	// Resolve profile info for config admins from the DB if available.
+	if s.store != nil {
+		users, err := s.store.ListAllowedUsers()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		for _, u := range users {
+			if configAdminSet[u.UserID] {
+				// Update the config admin entry with profile info.
+				for i := range out {
+					if out[i].UserID == u.UserID {
+						out[i].Username = u.Username
+						out[i].FirstName = u.FirstName
+						out[i].LastName = u.LastName
+						out[i].PhotoURL = u.PhotoURL
+						out[i].CreatedAt = u.CreatedAt
+						break
+					}
+				}
+				continue
+			}
+			out = append(out, userResp{
+				UserID:    u.UserID,
+				Username:  u.Username,
+				FirstName: u.FirstName,
+				LastName:  u.LastName,
+				PhotoURL:  u.PhotoURL,
+				CreatedAt: u.CreatedAt,
+			})
+		}
+	}
+
+	if out == nil {
+		out = []userResp{}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleAddUser(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil || s.bot == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "not configured"})
+		return
+	}
+
+	var req struct {
+		User string `json:"user"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.User == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "user is required (@username or numeric ID)"})
+		return
+	}
+
+	chatID := req.User
+	if !strings.HasPrefix(chatID, "@") {
+		if _, err := strconv.ParseInt(chatID, 10, 64); err != nil {
+			chatID = "@" + chatID
+		}
+	}
+
+	info, err := s.bot.GetChat(r.Context(), chatID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("user not found: %v", err)})
+		return
+	}
+
+	var photoURL string
+	if info.Photo != nil && info.Photo.SmallFileID != "" {
+		if u, err := s.bot.GetFileURL(r.Context(), info.Photo.SmallFileID); err == nil {
+			photoURL = u
+		}
+	}
+
+	u := statsdb.AllowedUser{
+		UserID:    info.ID,
+		Username:  info.Username,
+		FirstName: info.FirstName,
+		LastName:  info.LastName,
+		PhotoURL:  photoURL,
+	}
+	if err := s.store.AddAllowedUser(u); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"user_id":    info.ID,
+		"username":   info.Username,
+		"first_name": info.FirstName,
+		"last_name":  info.LastName,
+		"photo_url":  photoURL,
+	})
+}
+
+func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/users/")
+	if idStr == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "user ID is required"})
+		return
+	}
+
+	userID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid user ID"})
+		return
+	}
+
+	if s.isConfigAdmin(userID) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cannot delete main admin user"})
+		return
+	}
+
+	if s.store == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "not configured"})
+		return
+	}
+
+	deleted, err := s.store.DeleteAllowedUser(userID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !deleted {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func buildProxyLink(p config.ProxyServerConfig, serverIP string) string {

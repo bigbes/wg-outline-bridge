@@ -109,6 +109,15 @@ CREATE TABLE IF NOT EXISTS proxy_servers (
   tls_domain TEXT NOT NULL DEFAULT '',
   tls_acme_email TEXT NOT NULL DEFAULT '',
   created_unix INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE TABLE IF NOT EXISTS allowed_users (
+  user_id INTEGER PRIMARY KEY,
+  username TEXT NOT NULL DEFAULT '',
+  first_name TEXT NOT NULL DEFAULT '',
+  last_name TEXT NOT NULL DEFAULT '',
+  photo_url TEXT NOT NULL DEFAULT '',
+  created_unix INTEGER NOT NULL DEFAULT (unixepoch())
 );`
 	if _, err := s.db.Exec(ddl); err != nil {
 		return fmt.Errorf("statsdb: init schema: %w", err)
@@ -675,4 +684,70 @@ func (s *Store) ImportProxyServers(proxies []config.ProxyServerConfig) (int, err
 		return 0, fmt.Errorf("statsdb: commit import proxy servers: %w", err)
 	}
 	return count, nil
+}
+
+// ---------------------------------------------------------------------------
+// Allowed Users CRUD
+// ---------------------------------------------------------------------------
+
+// ListAllowedUsers returns all authorized Telegram users.
+func (s *Store) ListAllowedUsers() ([]AllowedUser, error) {
+	rows, err := s.db.Query(
+		`SELECT user_id, username, first_name, last_name, photo_url, created_unix
+		 FROM allowed_users ORDER BY created_unix DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list allowed users: %w", err)
+	}
+	defer rows.Close()
+
+	var out []AllowedUser
+	for rows.Next() {
+		var u AllowedUser
+		if err := rows.Scan(&u.UserID, &u.Username, &u.FirstName, &u.LastName, &u.PhotoURL, &u.CreatedAt); err != nil {
+			return nil, fmt.Errorf("statsdb: scan allowed user: %w", err)
+		}
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("statsdb: iterate allowed users: %w", err)
+	}
+	return out, nil
+}
+
+// AddAllowedUser adds a new authorized user. Upserts to update profile info.
+func (s *Store) AddAllowedUser(u AllowedUser) error {
+	_, err := s.db.Exec(
+		`INSERT INTO allowed_users (user_id, username, first_name, last_name, photo_url)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(user_id) DO UPDATE SET
+		   username = excluded.username,
+		   first_name = excluded.first_name,
+		   last_name = excluded.last_name,
+		   photo_url = excluded.photo_url`,
+		u.UserID, u.Username, u.FirstName, u.LastName, u.PhotoURL,
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: add allowed user %d: %w", u.UserID, err)
+	}
+	return nil
+}
+
+// DeleteAllowedUser removes an authorized user by ID.
+func (s *Store) DeleteAllowedUser(userID int64) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM allowed_users WHERE user_id = ?`, userID)
+	if err != nil {
+		return false, fmt.Errorf("statsdb: delete allowed user %d: %w", userID, err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// IsAllowedUser checks if a user ID exists in the allowed_users table.
+func (s *Store) IsAllowedUser(userID int64) (bool, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM allowed_users WHERE user_id = ?`, userID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("statsdb: check allowed user %d: %w", userID, err)
+	}
+	return count > 0, nil
 }

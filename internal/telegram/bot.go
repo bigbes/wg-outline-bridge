@@ -35,6 +35,20 @@ type Chat struct {
 	Type string `json:"type"`
 }
 
+// ChatPhoto represents a Telegram chat photo.
+type ChatPhoto struct {
+	SmallFileID string `json:"small_file_id"`
+}
+
+// ChatInfo is the result of getChat, containing profile information.
+type ChatInfo struct {
+	ID        int64      `json:"id"`
+	FirstName string     `json:"first_name"`
+	LastName  string     `json:"last_name"`
+	Username  string     `json:"username"`
+	Photo     *ChatPhoto `json:"photo"`
+}
+
 // Bot is a minimal Telegram Bot API client.
 type Bot struct {
 	token  string
@@ -253,4 +267,97 @@ func (b *Bot) GetUpdates(ctx context.Context, offset int64, timeout int) ([]Upda
 	}
 
 	return result.Result, nil
+}
+
+// GetChat retrieves chat/user info by numeric ID or @username.
+func (b *Bot) GetChat(ctx context.Context, chatID string) (*ChatInfo, error) {
+	payload := struct {
+		ChatID string `json:"chat_id"`
+	}{ChatID: chatID}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling request: %w", err)
+	}
+
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/getChat", b.token)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("getting chat: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("telegram API error: status %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		OK     bool     `json:"ok"`
+		Result ChatInfo `json:"result"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("parsing response: %w", err)
+	}
+	if !result.OK {
+		return nil, fmt.Errorf("telegram API returned ok=false")
+	}
+
+	return &result.Result, nil
+}
+
+// GetFileURL returns the download URL for a file_id.
+func (b *Bot) GetFileURL(ctx context.Context, fileID string) (string, error) {
+	payload := struct {
+		FileID string `json:"file_id"`
+	}{FileID: fileID}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshaling request: %w", err)
+	}
+
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/getFile", b.token)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("getting file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("telegram API error: status %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			FilePath string `json:"file_path"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", fmt.Errorf("parsing response: %w", err)
+	}
+
+	return fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", b.token, result.Result.FilePath), nil
 }
