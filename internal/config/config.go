@@ -18,17 +18,17 @@ import (
 )
 
 type Config struct {
-	LogLevel    string                `yaml:"log_level"`
-	CacheDir    string                `yaml:"cache_dir"`
-	WireGuard   WireGuardConfig       `yaml:"wireguard"`
-	DNS         DNSConfig             `yaml:"dns"`
-	MTProxy     MTProxyConfig         `yaml:"mtproxy"`
-	Telegram    TelegramConfig        `yaml:"telegram"`
-	Outlines    []OutlineConfig       `yaml:"outlines"`
-	Routing     RoutingConfig         `yaml:"routing"`
-	GeoIP       []GeoIPConfig         `yaml:"geoip"`
-	Peers       map[string]PeerConfig `yaml:"-"`
-	PeersDir    string                `yaml:"-"`
+	LogLevel  string                `yaml:"log_level"`
+	CacheDir  string                `yaml:"cache_dir"`
+	WireGuard WireGuardConfig       `yaml:"wireguard"`
+	DNS       DNSConfig             `yaml:"dns"`
+	MTProxy   MTProxyConfig         `yaml:"mtproxy"`
+	Telegram  TelegramConfig        `yaml:"telegram"`
+	Outlines  []OutlineConfig       `yaml:"outlines"`
+	Routing   RoutingConfig         `yaml:"routing"`
+	GeoIP     []GeoIPConfig         `yaml:"geoip"`
+	Peers     map[string]PeerConfig `yaml:"-"`
+	PeersDir  string                `yaml:"-"`
 }
 
 type WireGuardConfig struct {
@@ -77,9 +77,9 @@ type PeerConfig struct {
 }
 
 type RoutingConfig struct {
-	ExcludeCIDRs []string        `yaml:"exclude_cidrs"`
-	IPRules      []IPRuleConfig  `yaml:"ip_rules"`
-	SNIRules     []SNIRuleConfig `yaml:"sni_rules"`
+	CIDRs    []string        `yaml:"cidrs"`
+	IPRules  []IPRuleConfig  `yaml:"ip_rules"`
+	SNIRules []SNIRuleConfig `yaml:"sni_rules"`
 }
 
 type IPRuleConfig struct {
@@ -167,11 +167,7 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.DNS.Enabled {
 		if cfg.DNS.Listen == "" {
-			addr, _, err := cfg.WireGuard.ParseAddress()
-			if err != nil {
-				return nil, fmt.Errorf("parsing wireguard address for dns listen default: %w", err)
-			}
-			cfg.DNS.Listen = addr.String() + ":53"
+			cfg.DNS.Listen = "127.0.0.1:15353"
 		}
 		if cfg.DNS.Upstream == "" {
 			cfg.DNS.Upstream = cfg.WireGuard.DNS
@@ -179,8 +175,11 @@ func Load(path string) (*Config, error) {
 		if !strings.Contains(cfg.DNS.Upstream, ":") {
 			cfg.DNS.Upstream = cfg.DNS.Upstream + ":53"
 		}
-		listenHost, _, _ := strings.Cut(cfg.DNS.Listen, ":")
-		cfg.WireGuard.DNS = listenHost
+		// Point WireGuard clients at the virtual address for DNS.
+		addr, _, err := cfg.WireGuard.ParseAddress()
+		if err == nil {
+			cfg.WireGuard.DNS = addr.String()
+		}
 	}
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"

@@ -126,19 +126,12 @@ func (b *Bridge) Run(ctx context.Context) error {
 	tcpProxy.SetupForwarder(tunDev.Stack)
 
 	udpProxy := proxy.NewUDPProxy(router, dialers, b.tracker, b.logger)
+	if b.cfg.DNS.Enabled {
+		udpProxy.SetDNSTarget(b.cfg.DNS.Listen)
+	}
 	udpProxy.SetupForwarder(tunDev.Stack)
 
 	b.logger.Info("proxies configured on gVisor stack")
-
-	if b.cfg.DNS.Enabled {
-		records := buildDNSRecords(b.cfg.DNS)
-		rules := buildDNSRules(b.cfg.DNS, b.logger)
-		dnsServer := dns.New(b.cfg.DNS.Listen, b.cfg.DNS.Upstream, records, rules, b.logger)
-		if err := dnsServer.Start(ctx); err != nil {
-			return fmt.Errorf("starting dns server: %w", err)
-		}
-		defer dnsServer.Stop()
-	}
 
 	if b.cfg.MTProxy.Enabled {
 		if err := b.startMTProxy(ctx, dialers); err != nil {
@@ -164,6 +157,16 @@ func (b *Bridge) Run(ctx context.Context) error {
 
 	if err := b.wgDev.Up(); err != nil {
 		return fmt.Errorf("bringing up wireguard: %w", err)
+	}
+
+	if b.cfg.DNS.Enabled {
+		records := buildDNSRecords(b.cfg.DNS)
+		rules := buildDNSRules(b.cfg.DNS, b.logger)
+		dnsServer := dns.New(b.cfg.DNS.Listen, b.cfg.DNS.Upstream, records, rules, b.logger)
+		if err := dnsServer.Start(ctx); err != nil {
+			return fmt.Errorf("starting dns server: %w", err)
+		}
+		defer dnsServer.Stop()
 	}
 
 	b.peerMon = newPeerMonitor(b.wgDev, b.cfg.Peers, b.logger)

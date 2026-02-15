@@ -74,34 +74,13 @@ func GenConf(args []string, logger *slog.Logger) {
 	}
 
 	allowedIPs := "0.0.0.0/0"
-	excludes := cfg.Routing.ExcludeCIDRs
-	if serverIP != "" {
-		if addr, err := netip.ParseAddr(serverIP); err == nil {
-			bits := 32
-			if addr.Is6() {
-				bits = 128
-			}
-			excludes = append(excludes, netip.PrefixFrom(addr, bits).String())
-		}
+	cidrRules, err := config.ParseCIDRRules(cfg.Routing.CIDRs)
+	if err != nil {
+		logger.Error("failed to parse CIDR rules", "err", err)
+		os.Exit(1)
 	}
-	if len(excludes) > 0 {
-		var exPrefixes []netip.Prefix
-		for _, cidr := range excludes {
-			if p, err := netip.ParsePrefix(cidr); err == nil {
-				exPrefixes = append(exPrefixes, p)
-			} else {
-				logger.Warn("invalid exclude CIDR, skipping", "cidr", cidr, "err", err)
-			}
-		}
-		if len(exPrefixes) > 0 {
-			base := []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}
-			remaining := config.ExcludePrefixes(base, exPrefixes)
-			parts := make([]string, len(remaining))
-			for i, p := range remaining {
-				parts[i] = p.String()
-			}
-			allowedIPs = strings.Join(parts, ", ")
-		}
+	if computed := config.ComputeAllowedIPs(cidrRules, serverIP); computed != "" {
+		allowedIPs = computed
 	}
 
 	fmt.Println("=== Client WireGuard config ===")
@@ -190,4 +169,3 @@ func nextPeerIP(cfg *config.Config) (string, error) {
 
 	return "", fmt.Errorf("no available IPs in subnet")
 }
-

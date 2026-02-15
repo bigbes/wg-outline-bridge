@@ -73,6 +73,49 @@ func (b *Bot) SendMessageTo(ctx context.Context, chatID int64, text string) erro
 	return b.sendMessageTo(ctx, chatID, text, "")
 }
 
+// SendMessageHTML sends a text message with HTML parse mode.
+func (b *Bot) SendMessageHTML(ctx context.Context, chatID int64, text string) error {
+	return b.sendMessageTo(ctx, chatID, text, "HTML")
+}
+
+// BotCommand represents a bot command for setMyCommands.
+type BotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+}
+
+// SetMyCommands registers command autocompletion with Telegram.
+func (b *Bot) SetMyCommands(ctx context.Context, commands []BotCommand) error {
+	payload := struct {
+		Commands []BotCommand `json:"commands"`
+	}{Commands: commands}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshaling request: %w", err)
+	}
+
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/setMyCommands", b.token)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("setting commands: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("telegram API error: status %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
 func (b *Bot) sendMessageTo(ctx context.Context, chatID int64, text, parseMode string) error {
 	reqBody := sendMessageRequest{
 		ChatID:    chatID,

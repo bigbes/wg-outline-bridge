@@ -3,11 +3,11 @@ package mtproxy
 import (
 	"context"
 	"crypto/cipher"
-	"errors"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -123,8 +123,6 @@ func (s *Server) closeListeners() {
 		ln.Close()
 	}
 }
-
-
 
 // ReplayCacheSize returns the current number of entries in the replay cache.
 func (s *Server) ReplayCacheSize() int {

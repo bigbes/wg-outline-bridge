@@ -1,9 +1,167 @@
 package config
 
 import (
+	"fmt"
 	"net/netip"
 	"sort"
+	"strings"
 )
+
+// CIDRRule is a single allow/disallow rule.
+type CIDRRule struct {
+	Action   string // "allow" or "disallow"
+	Prefix   netip.Prefix
+	Wildcard bool
+}
+
+// CIDRRules is an ordered list of CIDR rules evaluated top-to-bottom
+// (first match wins).
+type CIDRRules struct {
+	Rules []CIDRRule
+}
+
+// ParseCIDRRules parses CIDR rule strings with the following formats:
+//   - "allow:<range>" or "a:<range>" — allow a CIDR range
+//   - "disallow:<range>" or "d:<range>" — disallow a CIDR range
+//   - "a:*" — allow all (0.0.0.0/0)
+//   - "d:*" — disallow all (0.0.0.0/0)
+//
+// Rules are evaluated top-to-bottom; the first matching rule wins.
+// A bare CIDR without a prefix (e.g. "192.168.0.0/16") is treated as "disallow"
+// for backward compatibility. Wildcard rules ("a:*" / "d:*") are always placed
+// last regardless of position.
+func ParseCIDRRules(rules []string) (*CIDRRules, error) {
+	result := &CIDRRules{}
+	var wildcard *CIDRRule
+	for _, rule := range rules {
+		rule = strings.TrimSpace(rule)
+		if rule == "" {
+			continue
+		}
+
+		action, value, err := parseCIDRRule(rule)
+		if err != nil {
+			return nil, fmt.Errorf("invalid CIDR rule %q: %w", rule, err)
+		}
+
+		if value == "*" {
+			wildcard = &CIDRRule{
+				Action:   action,
+				Wildcard: true,
+				Prefix:   netip.MustParsePrefix("0.0.0.0/0"),
+			}
+			continue
+		}
+
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid CIDR rule %q: %w", rule, err)
+		}
+
+		result.Rules = append(result.Rules, CIDRRule{
+			Action: action,
+			Prefix: prefix.Masked(),
+		})
+	}
+	// Wildcard is always last.
+	if wildcard != nil {
+		result.Rules = append(result.Rules, *wildcard)
+	}
+	return result, nil
+}
+
+// parseCIDRRule parses a single rule string and returns (action, value).
+func parseCIDRRule(rule string) (string, string, error) {
+	for _, prefix := range []struct {
+		short, long, action string
+	}{
+		{"a:", "allow:", "allow"},
+		{"d:", "disallow:", "disallow"},
+	} {
+		if strings.HasPrefix(rule, prefix.long) {
+			return prefix.action, strings.TrimSpace(rule[len(prefix.long):]), nil
+		}
+		if strings.HasPrefix(rule, prefix.short) {
+			return prefix.action, strings.TrimSpace(rule[len(prefix.short):]), nil
+		}
+	}
+
+	// Bare CIDR without prefix — treat as disallow for backward compatibility.
+	if _, err := netip.ParsePrefix(rule); err == nil {
+		return "disallow", rule, nil
+	}
+
+	return "", "", fmt.Errorf("unknown format, expected 'a:<cidr>', 'd:<cidr>', 'allow:<cidr>', or 'disallow:<cidr>'")
+}
+
+// ComputeAllowedIPs computes the WireGuard AllowedIPs string from CIDR rules
+// and an optional server IP to exclude.
+//
+// Rules are evaluated top-to-bottom (first match wins). For each rule, only the
+// portion not yet decided by earlier rules takes effect. Allow rules add their
+// undecided portion to the result; disallow rules simply mark it as decided.
+func ComputeAllowedIPs(rules *CIDRRules, serverIP string) string {
+	if len(rules.Rules) == 0 {
+		// No rules: default to allow all.
+		allowed := []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}
+		allowed = excludeServerIP(allowed, serverIP)
+		return joinPrefixes(allowed)
+	}
+
+	var decided []netip.Prefix
+	var allowed []netip.Prefix
+
+	for _, rule := range rules.Rules {
+		ruleRange := []netip.Prefix{rule.Prefix}
+		// Compute the undecided portion of this rule's range.
+		effective := ExcludePrefixes(ruleRange, decided)
+		if rule.Action == "allow" {
+			allowed = append(allowed, effective...)
+		}
+		// Mark the entire rule range as decided.
+		decided = append(decided, rule.Prefix)
+	}
+
+	allowed = excludeServerIP(allowed, serverIP)
+	sortPrefixes(allowed)
+	return joinPrefixes(allowed)
+}
+
+func sortPrefixes(p []netip.Prefix) {
+	sort.Slice(p, func(i, j int) bool {
+		ai, aj := p[i].Addr(), p[j].Addr()
+		if ai != aj {
+			return ai.Less(aj)
+		}
+		return p[i].Bits() < p[j].Bits()
+	})
+}
+
+func excludeServerIP(prefixes []netip.Prefix, serverIP string) []netip.Prefix {
+	if serverIP == "" {
+		return prefixes
+	}
+	addr, err := netip.ParseAddr(serverIP)
+	if err != nil {
+		return prefixes
+	}
+	bits := 32
+	if addr.Is6() {
+		bits = 128
+	}
+	return ExcludePrefixes(prefixes, []netip.Prefix{netip.PrefixFrom(addr, bits)})
+}
+
+func joinPrefixes(prefixes []netip.Prefix) string {
+	if len(prefixes) == 0 {
+		return ""
+	}
+	parts := make([]string, len(prefixes))
+	for i, p := range prefixes {
+		parts[i] = p.String()
+	}
+	return strings.Join(parts, ", ")
+}
 
 // ExcludePrefixes removes exclude prefixes from base prefixes and returns the
 // remaining set. For example, excluding 10.0.0.0/8 from 0.0.0.0/0 returns a

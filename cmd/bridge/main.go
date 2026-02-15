@@ -25,6 +25,8 @@ func main() {
 		commands.GenConf(os.Args[2:], logger)
 	case "init":
 		commands.Init(os.Args[2:], logger)
+	case "listconf":
+		commands.ListConf(os.Args[2:], logger)
 	case "showconf":
 		commands.ShowConf(os.Args[2:], logger)
 	case "gensecret":
@@ -46,6 +48,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  watch     Run with auto-restart on binary update (wrapper)")
 	fmt.Fprintln(os.Stderr, "  genconf   Generate a new peer keypair and add to config")
 	fmt.Fprintln(os.Stderr, "  init      Generate a new server config with fresh keys")
+	fmt.Fprintln(os.Stderr, "  listconf  List all configured peers")
 	fmt.Fprintln(os.Stderr, "  showconf  Print WireGuard client config for a peer")
 	fmt.Fprintln(os.Stderr, "  gensecret Generate a new MTProxy secret")
 	fmt.Fprintln(os.Stderr, "  showproxy Print Telegram proxy links")

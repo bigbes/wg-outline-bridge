@@ -101,3 +101,187 @@ func TestExcludePrefixes(t *testing.T) {
 		})
 	}
 }
+
+func TestParseCIDRRules(t *testing.T) {
+	tests := []struct {
+		name    string
+		rules   []string
+		want    []CIDRRule
+		wantErr bool
+	}{
+		{
+			name:  "disallow with d: prefix",
+			rules: []string{"d:192.168.0.0/16"},
+			want: []CIDRRule{
+				{Action: "disallow", Prefix: netip.MustParsePrefix("192.168.0.0/16")},
+			},
+		},
+		{
+			name:  "allow with a: prefix",
+			rules: []string{"a:10.0.0.0/8"},
+			want: []CIDRRule{
+				{Action: "allow", Prefix: netip.MustParsePrefix("10.0.0.0/8")},
+			},
+		},
+		{
+			name:  "full prefixes",
+			rules: []string{"allow:10.0.0.0/8", "disallow:192.168.0.0/16"},
+			want: []CIDRRule{
+				{Action: "allow", Prefix: netip.MustParsePrefix("10.0.0.0/8")},
+				{Action: "disallow", Prefix: netip.MustParsePrefix("192.168.0.0/16")},
+			},
+		},
+		{
+			name:  "wildcard placed last",
+			rules: []string{"a:*", "d:10.0.0.0/8"},
+			want: []CIDRRule{
+				{Action: "disallow", Prefix: netip.MustParsePrefix("10.0.0.0/8")},
+				{Action: "allow", Prefix: netip.MustParsePrefix("0.0.0.0/0"), Wildcard: true},
+			},
+		},
+		{
+			name:  "bare CIDR treated as disallow",
+			rules: []string{"192.168.0.0/16"},
+			want: []CIDRRule{
+				{Action: "disallow", Prefix: netip.MustParsePrefix("192.168.0.0/16")},
+			},
+		},
+		{
+			name:  "order preserved with wildcard last",
+			rules: []string{"a:10.100.0.0/24", "d:10.0.0.0/8", "d:192.168.0.0/16", "a:*"},
+			want: []CIDRRule{
+				{Action: "allow", Prefix: netip.MustParsePrefix("10.100.0.0/24")},
+				{Action: "disallow", Prefix: netip.MustParsePrefix("10.0.0.0/8")},
+				{Action: "disallow", Prefix: netip.MustParsePrefix("192.168.0.0/16")},
+				{Action: "allow", Prefix: netip.MustParsePrefix("0.0.0.0/0"), Wildcard: true},
+			},
+		},
+		{
+			name:    "invalid rule",
+			rules:   []string{"x:something"},
+			wantErr: true,
+		},
+		{
+			name:    "invalid CIDR",
+			rules:   []string{"d:not-a-cidr"},
+			wantErr: true,
+		},
+		{
+			name: "empty rules",
+		},
+		{
+			name:  "non-canonical prefix is masked",
+			rules: []string{"a:10.0.0.1/24"},
+			want: []CIDRRule{
+				{Action: "allow", Prefix: netip.MustParsePrefix("10.0.0.0/24")},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseCIDRRules(tt.rules)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if len(got.Rules) != len(tt.want) {
+				t.Fatalf("got %d rules, want %d", len(got.Rules), len(tt.want))
+			}
+			for i, r := range got.Rules {
+				w := tt.want[i]
+				if r.Action != w.Action || r.Prefix != w.Prefix || r.Wildcard != w.Wildcard {
+					t.Errorf("rule %d: got {%s %s wildcard=%v}, want {%s %s wildcard=%v}",
+						i, r.Action, r.Prefix, r.Wildcard, w.Action, w.Prefix, w.Wildcard)
+				}
+			}
+		})
+	}
+}
+
+func TestComputeAllowedIPs(t *testing.T) {
+	tests := []struct {
+		name     string
+		rules    []string
+		serverIP string
+		want     string
+	}{
+		{
+			name: "no rules defaults to allow all",
+			want: "0.0.0.0/0",
+		},
+		{
+			name:  "disallow only (implicit deny rest)",
+			rules: []string{"d:10.0.0.0/8"},
+			want:  "",
+		},
+		{
+			name:  "disallow then allow all",
+			rules: []string{"d:10.0.0.0/8", "a:*"},
+			want: "0.0.0.0/5, 8.0.0.0/7, 11.0.0.0/8, 12.0.0.0/6, " +
+				"16.0.0.0/4, 32.0.0.0/3, 64.0.0.0/2, 128.0.0.0/1",
+		},
+		{
+			name:  "allow subnet then disallow parent then allow all",
+			rules: []string{"a:10.100.0.0/24", "d:10.0.0.0/8", "d:127.0.0.0/8", "d:172.16.0.0/12", "d:192.168.0.0/16", "a:*"},
+			want: "0.0.0.0/5, 8.0.0.0/7, 10.100.0.0/24, 11.0.0.0/8, 12.0.0.0/6, " +
+				"16.0.0.0/4, 32.0.0.0/3, " +
+				"64.0.0.0/3, 96.0.0.0/4, 112.0.0.0/5, 120.0.0.0/6, 124.0.0.0/7, 126.0.0.0/8, " +
+				"128.0.0.0/3, 160.0.0.0/5, 168.0.0.0/6, " +
+				"172.0.0.0/12, 172.32.0.0/11, 172.64.0.0/10, 172.128.0.0/9, " +
+				"173.0.0.0/8, 174.0.0.0/7, 176.0.0.0/4, " +
+				"192.0.0.0/9, 192.128.0.0/11, 192.160.0.0/13, " +
+				"192.169.0.0/16, 192.170.0.0/15, 192.172.0.0/14, " +
+				"192.176.0.0/12, 192.192.0.0/10, " +
+				"193.0.0.0/8, 194.0.0.0/7, 196.0.0.0/6, " +
+				"200.0.0.0/5, 208.0.0.0/4, 224.0.0.0/3",
+		},
+		{
+			name:  "only explicit allows",
+			rules: []string{"a:10.0.0.0/8", "a:192.168.0.0/16"},
+			want:  "10.0.0.0/8, 192.168.0.0/16",
+		},
+		{
+			name:     "server IP excluded",
+			rules:    []string{"a:203.0.113.0/24"},
+			serverIP: "203.0.113.1",
+			want: "203.0.113.0/32, 203.0.113.2/31, 203.0.113.4/30, " +
+				"203.0.113.8/29, 203.0.113.16/28, 203.0.113.32/27, " +
+				"203.0.113.64/26, 203.0.113.128/25",
+		},
+		{
+			name:  "disallow all",
+			rules: []string{"d:*"},
+			want:  "",
+		},
+		{
+			name:  "bare CIDR backward compat with allow all",
+			rules: []string{"192.168.0.0/16", "a:*"},
+			want: "0.0.0.0/1, 128.0.0.0/2, " +
+				"192.0.0.0/9, 192.128.0.0/11, 192.160.0.0/13, " +
+				"192.169.0.0/16, 192.170.0.0/15, 192.172.0.0/14, " +
+				"192.176.0.0/12, 192.192.0.0/10, " +
+				"193.0.0.0/8, 194.0.0.0/7, 196.0.0.0/6, " +
+				"200.0.0.0/5, 208.0.0.0/4, 224.0.0.0/3",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rules, err := ParseCIDRRules(tt.rules)
+			if err != nil {
+				t.Fatalf("ParseCIDRRules: %v", err)
+			}
+			got := ComputeAllowedIPs(rules, tt.serverIP)
+			if got != tt.want {
+				t.Errorf("got  %q\nwant %q", got, tt.want)
+			}
+		})
+	}
+}

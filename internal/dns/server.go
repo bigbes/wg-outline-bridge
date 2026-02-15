@@ -232,5 +232,3 @@ func (s *Server) forward(w dnspkg.ResponseWriter, r *dnspkg.Msg, upstream, ruleN
 		s.logger.Error("dns: failed to write response", "err", err)
 	}
 }
-
-

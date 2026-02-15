@@ -97,23 +97,33 @@ Traffic routing is decided per-connection with three levels:
 
 | Level | Scope | Description |
 |-------|-------|-------------|
-| **Exclude CIDRs** | Client-side | Traffic never enters the WireGuard tunnel (handled via `AllowedIPs` in client config) |
+| **CIDR rules** | Client-side | Traffic never enters the WireGuard tunnel (handled via `AllowedIPs` in client config) |
 | **IP rules** | Server-side | Match destination IP against CIDR lists → `direct`, `outline`, or `default` |
 | **SNI rules** | Server-side | Match TLS SNI (port 443 only) against domain patterns → `direct`, `outline`, or `default` |
 
 Evaluation order: IP rules → SNI rules (TLS only) → default outline.
 
-### Exclude CIDRs (Really Direct)
+### CIDR Rules (Client AllowedIPs)
 
-CIDRs listed in `routing.exclude_cidrs` are excluded from the client's WireGuard `AllowedIPs` during `genkeys`. This means the client's OS routes that traffic directly, never entering the WireGuard tunnel. The server's `public_address` is automatically excluded as well.
+The `routing.cidrs` list controls which CIDRs end up in the client's WireGuard `AllowedIPs`. Each entry is a rule with an action prefix:
+
+| Format | Description |
+|--------|-------------|
+| `allow:<range>` or `a:<range>` | Include CIDR in AllowedIPs |
+| `disallow:<range>` or `d:<range>` | Exclude CIDR from AllowedIPs |
+| `a:*` | Allow all (base 0.0.0.0/0) |
+| `d:*` | Disallow all |
+| bare CIDR (e.g. `192.168.0.0/16`) | Treated as disallow (backward compat) |
+
+When no explicit allow rules are given, the base is `0.0.0.0/0`. The server's `public_address` is automatically excluded.
 
 ```yaml
 wireguard:
   public_address: "203.0.113.1"
 
 routing:
-  exclude_cidrs:
-    - "192.168.0.0/16"   # local network
+  cidrs:
+    - "d:192.168.0.0/16"   # local network goes direct
 ```
 
 ### IP Rules
@@ -207,6 +217,8 @@ If `allowed_users` is set, the bot ignores private messages from users not in th
 |---------|-------------|
 | `/status` | Show peer status, traffic, and active connections |
 | `/proxy` | Show Telegram proxy links (MTProxy) |
+| `/listconf` | List all configured peers |
+| `/showconf <name>` | Show WireGuard client config for a peer |
 | `/help` | List available commands |
 
 ### Status Output
@@ -245,6 +257,7 @@ This reloads peers (add/remove) and swaps the default Outline client if its tran
 | `watch` | Run with auto-restart on binary update |
 | `init` | Generate a new server config with fresh keys |
 | `genconf` | Generate a client keypair and add to config |
+| `listconf` | List all configured peers |
 | `showconf` | Print WireGuard client config for a peer |
 | `gensecret` | Generate a new MTProxy secret and save to secrets file |
 | `showproxy` | Print Telegram proxy links for all MTProxy secrets |

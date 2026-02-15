@@ -12,7 +12,7 @@ wireguard:
 
 # dns:                         # Built-in DNS proxy server
 #   enabled: true
-#   listen: "10.100.0.1:53"    # defaults to wireguard address :53
+#   listen: "127.0.0.1:15353"  # defaults to 127.0.0.1:15353; port-53 traffic from WG clients is intercepted by gVisor
 #   upstream: "1.1.1.1:53"     # defaults to wireguard dns :53
 #   records:                   # static local records (highest priority)
 #     myhost.internal:
@@ -82,8 +82,15 @@ outlines:
 #     refresh: 604800
 
 # routing:
-#   exclude_cidrs:          # CIDRs excluded from client WireGuard AllowedIPs
-#     - "192.168.0.0/16"    # (traffic goes direct, never enters WG tunnel)
+#   cidrs:                    # CIDR rules for client WireGuard AllowedIPs
+#     - "a:*"                 # allow all (default base: 0.0.0.0/0)
+#     - "d:192.168.0.0/16"    # disallow local network (traffic goes direct)
+#     # Supported formats:
+#     #   allow:<range>  or  a:<range>   — include CIDR in AllowedIPs
+#     #   disallow:<range> or d:<range>  — exclude CIDR from AllowedIPs
+#     #   a:*  — allow all (0.0.0.0/0)
+#     #   d:*  — disallow all
+#     #   bare CIDR (e.g. "192.168.0.0/16") — treated as disallow
 #
 #   ip_rules:
 #     - name: "private-networks"

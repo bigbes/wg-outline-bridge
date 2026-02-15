@@ -383,5 +383,3 @@ func TestMTProxyIntegration_WrongSecret(t *testing.T) {
 	}
 	t.Logf("correctly rejected: %v", err)
 }
-
-
