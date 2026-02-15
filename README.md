@@ -225,16 +225,32 @@ If `allowed_users` is set, the bot ignores private messages from users not in th
 
 ```
 📊 Bridge Status
+⏱ Uptime: 2d 5h 30m
 
 🟢 alice
   Handshake: 45s ago
   Traffic: ↓12.3 MB ↑1.2 MB
-  Connections: 3
+  Total: ↓1.5 GB ↑256.0 MB
+  Connections: 3 active, 42 total
 
 🟡 bob
   Handshake: 5m30s ago
   Traffic: ↓45.6 MB ↑8.9 MB
-  Connections: 0
+  Total: ↓3.2 GB ↑512.0 MB
+  Connections: 0 active, 15 total
+
+📡 MTProxy
+  Connections: 2 active, 18 session, 204 total
+  Traffic: ↑5.3 MB ↓12.1 MB
+  Total: ↑1.2 GB ↓3.4 GB
+  Errors: 3 handshake, 1 dial (45/12 total)
+  TLS: 16 session
+
+  Clients:
+  • 203.0.113.5 — last 2m ago
+    Conns: 12 session, 150 total | Traffic: ↑3.1 MB ↓8.0 MB (↑900.0 MB ↓2.5 GB)
+  • 198.51.100.10 — last 1h 15m ago
+    Conns: 6 session, 54 total | Traffic: ↑2.2 MB ↓4.1 MB (↑300.0 MB ↓900.0 MB)
 ```
 
 Indicators: 🟢 active (handshake < 3 min), 🟡 stale, ⚪ never connected.

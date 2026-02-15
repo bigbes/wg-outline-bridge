@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ import (
 type Bridge struct {
 	configPath string
 	logger     *slog.Logger
+	startTime  time.Time
 
 	mu            sync.Mutex
 	cfg           *config.Config
@@ -48,6 +50,7 @@ func New(configPath string, cfg *config.Config, logger *slog.Logger) *Bridge {
 		configPath: configPath,
 		cfg:        cfg,
 		logger:     logger,
+		startTime:  time.Now(),
 	}
 }
 
@@ -347,6 +350,11 @@ func (b *Bridge) PeerStatuses() []observer.PeerStatus {
 		statusMap[pubB64] = st
 	}
 
+	var dbStats map[string]statsdb.WGPeerRecord
+	if b.statsStore != nil {
+		dbStats, _ = b.statsStore.GetWGPeerStats()
+	}
+
 	var result []observer.PeerStatus
 	for name, peer := range peers {
 		if peer.Disabled {
@@ -363,6 +371,11 @@ func (b *Bridge) PeerStatuses() []observer.PeerStatus {
 			ps.RxBytes = st.rxBytes
 			ps.TxBytes = st.txBytes
 		}
+		if rec, ok := dbStats[peer.PublicKey]; ok {
+			ps.RxTotal = rec.RxTotal
+			ps.TxTotal = rec.TxTotal
+			ps.ConnectionsTotal = rec.ConnectionsTotal
+		}
 		peerIPs := peerAllowedIPs(peer)
 		for _, ip := range peerIPs {
 			ps.ActiveConnections += b.tracker.CountBySource(ip)
@@ -370,6 +383,87 @@ func (b *Bridge) PeerStatuses() []observer.PeerStatus {
 		result = append(result, ps)
 	}
 	return result
+}
+
+// MTProxyStatus implements observer.StatusProvider.
+func (b *Bridge) MTProxyStatus() observer.MTProxyStatus {
+	if b.mtSrv == nil {
+		return observer.MTProxyStatus{}
+	}
+
+	snap := b.mtSrv.StatsSnapshot()
+	st := observer.MTProxyStatus{
+		Enabled:           true,
+		Connections:       snap.Connections.Load(),
+		ActiveConnections: snap.ActiveConnections.Load(),
+		TLSConnections:    snap.TLSConnections.Load(),
+		HandshakeErrors:   snap.HandshakeErrors.Load(),
+		BackendDialErrors: snap.BackendDialErrors.Load(),
+		BytesC2B:          snap.BytesClientToBackend.Load(),
+		BytesB2C:          snap.BytesBackendToClient.Load(),
+	}
+
+	peerSnap := b.mtSrv.PeerStatsSnapshot()
+
+	var dbStats map[string]statsdb.MTPeerRecord
+	if b.statsStore != nil {
+		dbStats, _ = b.statsStore.GetMTPeerStats()
+		for _, rec := range dbStats {
+			st.ConnectionsTotal += rec.ConnectionsTotal
+			st.BytesC2BTotal += rec.BytesC2BTotal
+			st.BytesB2CTotal += rec.BytesB2CTotal
+			st.HandshakeErrorsTotal += rec.HandshakeErrorsTotal
+			st.BackendDialErrorsTotal += rec.BackendDialErrorsTotal
+		}
+	}
+
+	// Collect all known client IPs from both session and DB.
+	clientIPs := make(map[string]struct{})
+	for ip := range peerSnap {
+		clientIPs[ip] = struct{}{}
+	}
+	for ip := range dbStats {
+		clientIPs[ip] = struct{}{}
+	}
+
+	for ip := range clientIPs {
+		c := observer.MTProxyClient{IP: ip}
+		if ps, ok := peerSnap[ip]; ok {
+			if ps.LastConnectionUnix > 0 {
+				c.LastConnection = time.Unix(ps.LastConnectionUnix, 0)
+			}
+			c.Connections = ps.Connections
+			c.BytesC2B = ps.BytesC2B
+			c.BytesB2C = ps.BytesB2C
+		}
+		if rec, ok := dbStats[ip]; ok {
+			if c.LastConnection.IsZero() && rec.LastConnectionUnix > 0 {
+				c.LastConnection = time.Unix(rec.LastConnectionUnix, 0)
+			}
+			c.ConnectionsTotal = rec.ConnectionsTotal
+			c.BytesC2BTotal = rec.BytesC2BTotal
+			c.BytesB2CTotal = rec.BytesB2CTotal
+		}
+		st.Clients = append(st.Clients, c)
+	}
+
+	sort.Slice(st.Clients, func(i, j int) bool {
+		return st.Clients[i].LastConnection.After(st.Clients[j].LastConnection)
+	})
+
+	return st
+}
+
+// DaemonStatus implements observer.StatusProvider.
+func (b *Bridge) DaemonStatus() observer.DaemonStatus {
+	if b.statsStore == nil {
+		return observer.DaemonStatus{StartTime: b.startTime}
+	}
+	t, err := b.statsStore.GetDaemonStartTime()
+	if err != nil {
+		return observer.DaemonStatus{StartTime: b.startTime}
+	}
+	return observer.DaemonStatus{StartTime: t}
 }
 
 // getPeerStatuses reads peer status from the WireGuard device via IPC.

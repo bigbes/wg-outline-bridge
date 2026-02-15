@@ -23,11 +23,60 @@ type PeerStatus struct {
 	RxBytes           int64
 	TxBytes           int64
 	ActiveConnections int
+
+	// Cumulative stats from SQLite (zero when stats DB is disabled).
+	RxTotal          int64
+	TxTotal          int64
+	ConnectionsTotal int64
+}
+
+// DaemonStatus holds daemon-level information.
+type DaemonStatus struct {
+	StartTime time.Time
+}
+
+// MTProxyStatus holds MTProxy server stats.
+type MTProxyStatus struct {
+	Enabled bool
+
+	// Session (since last restart).
+	Connections       int64
+	ActiveConnections int64
+	TLSConnections    int64
+	HandshakeErrors   int64
+	BackendDialErrors int64
+	BytesC2B          int64
+	BytesB2C          int64
+
+	// Cumulative from SQLite (zero when stats DB is disabled).
+	ConnectionsTotal       int64
+	BytesC2BTotal          int64
+	BytesB2CTotal          int64
+	HandshakeErrorsTotal   int64
+	BackendDialErrorsTotal int64
+
+	Clients []MTProxyClient
+}
+
+// MTProxyClient holds per-client MTProxy stats.
+type MTProxyClient struct {
+	IP             string
+	LastConnection time.Time
+	Connections    int64
+	BytesC2B       int64
+	BytesB2C       int64
+
+	// Cumulative from SQLite.
+	ConnectionsTotal int64
+	BytesC2BTotal    int64
+	BytesB2CTotal    int64
 }
 
 // StatusProvider supplies bridge status data to the observer.
 type StatusProvider interface {
 	PeerStatuses() []PeerStatus
+	DaemonStatus() DaemonStatus
+	MTProxyStatus() MTProxyStatus
 }
 
 // Observer sends periodic status updates and handles bot commands via Telegram.
@@ -162,7 +211,9 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 	switch cmd {
 	case "/status":
 		peers := o.provider.PeerStatuses()
-		reply = formatStatus(peers)
+		daemon := o.provider.DaemonStatus()
+		mt := o.provider.MTProxyStatus()
+		reply = formatStatus(peers, daemon, mt)
 	case "/proxy":
 		links := config.ProxyLinks(o.cfg)
 		if len(links) == 0 {
@@ -209,7 +260,9 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 
 func (o *Observer) sendStatus(ctx context.Context) {
 	peers := o.provider.PeerStatuses()
-	msg := formatStatus(peers)
+	daemon := o.provider.DaemonStatus()
+	mt := o.provider.MTProxyStatus()
+	msg := formatStatus(peers, daemon, mt)
 	o.send(ctx, msg)
 }
 
@@ -219,41 +272,109 @@ func (o *Observer) send(ctx context.Context, text string) {
 	}
 }
 
-func formatStatus(peers []PeerStatus) string {
+func formatStatus(peers []PeerStatus, daemon DaemonStatus, mt MTProxyStatus) string {
 	var b strings.Builder
-	b.WriteString("📊 Bridge Status\n\n")
+	b.WriteString("📊 Bridge Status\n")
+
+	if !daemon.StartTime.IsZero() {
+		uptime := time.Since(daemon.StartTime).Truncate(time.Second)
+		fmt.Fprintf(&b, "⏱ Uptime: %s\n", formatDuration(uptime))
+	}
+	b.WriteString("\n")
 
 	if len(peers) == 0 {
 		b.WriteString("No peers configured\n")
-		return b.String()
+	} else {
+		for _, p := range peers {
+			status := "⚪"
+			handshake := "never"
+			if !p.LastHandshake.IsZero() {
+				ago := time.Since(p.LastHandshake).Truncate(time.Second)
+				handshake = fmt.Sprintf("%s ago", ago)
+				if ago < 3*time.Minute {
+					status = "🟢"
+				} else {
+					status = "🟡"
+				}
+			}
+
+			name := p.Name
+			if name == "" {
+				name = p.PublicKey[:8] + "..."
+			}
+
+			fmt.Fprintf(&b, "%s %s\n", status, name)
+			fmt.Fprintf(&b, "  Handshake: %s\n", handshake)
+			fmt.Fprintf(&b, "  Traffic: ↓%s ↑%s\n", formatBytes(p.RxBytes), formatBytes(p.TxBytes))
+			if p.RxTotal > 0 || p.TxTotal > 0 {
+				fmt.Fprintf(&b, "  Total: ↓%s ↑%s\n", formatBytes(p.RxTotal), formatBytes(p.TxTotal))
+			}
+			fmt.Fprintf(&b, "  Connections: %d active", p.ActiveConnections)
+			if p.ConnectionsTotal > 0 {
+				fmt.Fprintf(&b, ", %d total", p.ConnectionsTotal)
+			}
+			b.WriteString("\n\n")
+		}
 	}
 
-	for _, p := range peers {
-		status := "⚪"
-		handshake := "never"
-		if !p.LastHandshake.IsZero() {
-			ago := time.Since(p.LastHandshake).Truncate(time.Second)
-			handshake = fmt.Sprintf("%s ago", ago)
-			if ago < 3*time.Minute {
-				status = "🟢"
-			} else {
-				status = "🟡"
+	if mt.Enabled {
+		b.WriteString("📡 MTProxy\n")
+		fmt.Fprintf(&b, "  Connections: %d active, %d session", mt.ActiveConnections, mt.Connections)
+		if mt.ConnectionsTotal > 0 {
+			fmt.Fprintf(&b, ", %d total", mt.ConnectionsTotal)
+		}
+		b.WriteString("\n")
+		fmt.Fprintf(&b, "  Traffic: ↑%s ↓%s\n", formatBytes(mt.BytesC2B), formatBytes(mt.BytesB2C))
+		if mt.BytesC2BTotal > 0 || mt.BytesB2CTotal > 0 {
+			fmt.Fprintf(&b, "  Total: ↑%s ↓%s\n", formatBytes(mt.BytesC2BTotal), formatBytes(mt.BytesB2CTotal))
+		}
+		if mt.HandshakeErrors > 0 || mt.BackendDialErrors > 0 {
+			fmt.Fprintf(&b, "  Errors: %d handshake, %d dial", mt.HandshakeErrors, mt.BackendDialErrors)
+			if mt.HandshakeErrorsTotal > 0 || mt.BackendDialErrorsTotal > 0 {
+				fmt.Fprintf(&b, " (%d/%d total)", mt.HandshakeErrorsTotal, mt.BackendDialErrorsTotal)
+			}
+			b.WriteString("\n")
+		}
+		if mt.TLSConnections > 0 {
+			fmt.Fprintf(&b, "  TLS: %d session\n", mt.TLSConnections)
+		}
+
+		if len(mt.Clients) > 0 {
+			b.WriteString("\n  Clients:\n")
+			for _, c := range mt.Clients {
+				lastConn := "never"
+				if !c.LastConnection.IsZero() {
+					lastConn = fmt.Sprintf("%s ago", formatDuration(time.Since(c.LastConnection).Truncate(time.Second)))
+				}
+				fmt.Fprintf(&b, "  • %s — last %s\n", c.IP, lastConn)
+				fmt.Fprintf(&b, "    Conns: %d session", c.Connections)
+				if c.ConnectionsTotal > 0 {
+					fmt.Fprintf(&b, ", %d total", c.ConnectionsTotal)
+				}
+				fmt.Fprintf(&b, " | Traffic: ↑%s ↓%s", formatBytes(c.BytesC2B), formatBytes(c.BytesB2C))
+				if c.BytesC2BTotal > 0 || c.BytesB2CTotal > 0 {
+					fmt.Fprintf(&b, " (↑%s ↓%s)", formatBytes(c.BytesC2BTotal), formatBytes(c.BytesB2CTotal))
+				}
+				b.WriteString("\n")
 			}
 		}
-
-		name := p.Name
-		if name == "" {
-			name = p.PublicKey[:8] + "..."
-		}
-
-		fmt.Fprintf(&b, "%s %s\n", status, name)
-		fmt.Fprintf(&b, "  Handshake: %s\n", handshake)
-		fmt.Fprintf(&b, "  Traffic: ↓%s ↑%s\n", formatBytes(p.RxBytes), formatBytes(p.TxBytes))
-		fmt.Fprintf(&b, "  Connections: %d\n", p.ActiveConnections)
 		b.WriteString("\n")
 	}
 
 	return b.String()
+}
+
+func formatDuration(d time.Duration) string {
+	days := int(d.Hours()) / 24
+	hours := int(d.Hours()) % 24
+	minutes := int(d.Minutes()) % 60
+	if days > 0 {
+		return fmt.Sprintf("%dd %dh %dm", days, hours, minutes)
+	}
+	if hours > 0 {
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	}
+	return fmt.Sprintf("%dm", minutes)
 }
 
 func (o *Observer) formatPeerList() string {
