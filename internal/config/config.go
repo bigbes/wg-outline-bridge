@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +18,8 @@ import (
 
 	"golang.org/x/crypto/curve25519"
 	"gopkg.in/yaml.v3"
+
+	"github.com/blikh/wireguard-outline-bridge/internal/upstream"
 )
 
 type Config struct {
@@ -30,6 +33,7 @@ type Config struct {
 	MiniApp   MiniAppConfig         `yaml:"miniapp"`
 	Database  DatabaseConfig        `yaml:"database"`
 	Outlines  []OutlineConfig       `yaml:"outlines"`
+	Upstreams []UpstreamConfig      `yaml:"upstreams"`
 	Routing   RoutingConfig         `yaml:"routing"`
 	GeoIP     []GeoIPConfig         `yaml:"geoip"`
 	PeersDir  string                `yaml:"peers_dir"`
@@ -109,12 +113,13 @@ type RoutingConfig struct {
 }
 
 type IPRuleConfig struct {
-	Name    string         `yaml:"name"`
-	Action  string         `yaml:"action"`
-	Outline string         `yaml:"outline"`
-	CIDRs   []string       `yaml:"cidrs"`
-	ASNs    []int          `yaml:"asns"`
-	Lists   []IPListConfig `yaml:"lists"`
+	Name          string         `yaml:"name"`
+	Action        string         `yaml:"action"`
+	Outline       string         `yaml:"outline"`
+	UpstreamGroup string         `yaml:"upstream_group"`
+	CIDRs         []string       `yaml:"cidrs"`
+	ASNs          []int          `yaml:"asns"`
+	Lists         []IPListConfig `yaml:"lists"`
 }
 
 type IPListConfig struct {
@@ -123,10 +128,11 @@ type IPListConfig struct {
 }
 
 type SNIRuleConfig struct {
-	Name    string   `yaml:"name"`
-	Action  string   `yaml:"action"`
-	Outline string   `yaml:"outline"`
-	Domains []string `yaml:"domains"`
+	Name          string   `yaml:"name"`
+	Action        string   `yaml:"action"`
+	Outline       string   `yaml:"outline"`
+	UpstreamGroup string   `yaml:"upstream_group"`
+	Domains       []string `yaml:"domains"`
 }
 
 type OutlineConfig struct {
@@ -134,6 +140,25 @@ type OutlineConfig struct {
 	Transport   string            `yaml:"transport"`
 	Default     bool              `yaml:"default"`
 	HealthCheck HealthCheckConfig `yaml:"health_check"`
+}
+
+// UpstreamConfig describes a generic upstream endpoint.
+type UpstreamConfig struct {
+	Name        string            `yaml:"name"`
+	Type        string            `yaml:"type"` // "outline"
+	Enabled     *bool             `yaml:"enabled,omitempty"`
+	Default     bool              `yaml:"default"`
+	Groups      []string          `yaml:"groups,omitempty"`
+	Transport   string            `yaml:"transport,omitempty"`
+	HealthCheck HealthCheckConfig `yaml:"health_check"`
+}
+
+// IsEnabled returns whether the upstream is enabled (defaults to true).
+func (u *UpstreamConfig) IsEnabled() bool {
+	if u.Enabled == nil {
+		return true
+	}
+	return *u.Enabled
 }
 
 type HealthCheckConfig struct {
@@ -149,14 +174,15 @@ type GeoIPConfig struct {
 }
 
 type MTProxyConfig struct {
-	Enabled     bool             `yaml:"enabled"`
-	Listen      []string         `yaml:"listen"`
-	Outline     string           `yaml:"outline"`
-	Secrets     []string         `yaml:"secrets"`
-	SecretsFile string           `yaml:"secrets_file"`
-	StatsAddr   string           `yaml:"stats_addr"`
-	FakeTLS     FakeTLSConfig    `yaml:"fake_tls"`
-	Endpoints   map[int][]string `yaml:"endpoints"`
+	Enabled       bool             `yaml:"enabled"`
+	Listen        []string         `yaml:"listen"`
+	Outline       string           `yaml:"outline"`
+	UpstreamGroup string           `yaml:"upstream_group"`
+	Secrets       []string         `yaml:"secrets"`
+	SecretsFile   string           `yaml:"secrets_file"`
+	StatsAddr     string           `yaml:"stats_addr"`
+	FakeTLS       FakeTLSConfig    `yaml:"fake_tls"`
+	Endpoints     map[int][]string `yaml:"endpoints"`
 }
 
 type FakeTLSConfig struct {
@@ -167,13 +193,14 @@ type FakeTLSConfig struct {
 }
 
 type ProxyServerConfig struct {
-	Name     string         `yaml:"name"`
-	Type     string         `yaml:"type"` // "socks5", "http", "https"
-	Listen   string         `yaml:"listen"`
-	Outline  string         `yaml:"outline"`  // optional named outline, default = default
-	Username string         `yaml:"username"` // optional auth
-	Password string         `yaml:"password"`
-	TLS      ProxyTLSConfig `yaml:"tls"` // for https type only
+	Name          string         `yaml:"name"`
+	Type          string         `yaml:"type"` // "socks5", "http", "https"
+	Listen        string         `yaml:"listen"`
+	Outline       string         `yaml:"outline"`  // optional named outline, default = default
+	UpstreamGroup string         `yaml:"upstream_group"`
+	Username      string         `yaml:"username"` // optional auth
+	Password      string         `yaml:"password"`
+	TLS           ProxyTLSConfig `yaml:"tls"` // for https type only
 }
 
 type ProxyTLSConfig struct {
@@ -254,8 +281,8 @@ func Load(path string) (*Config, error) {
 			cfg.CacheDir = filepath.Join(userCache, "wg-outline-bridge")
 		}
 	}
-	if len(cfg.Outlines) == 0 {
-		return nil, fmt.Errorf("at least one outline entry is required")
+	if len(cfg.Outlines) == 0 && len(cfg.Upstreams) == 0 {
+		return nil, fmt.Errorf("at least one outline or upstream entry is required")
 	}
 	hasDefault := false
 	for i := range cfg.Outlines {
@@ -278,8 +305,46 @@ func Load(path string) (*Config, error) {
 			cfg.Outlines[i].HealthCheck.Target = "1.1.1.1:80"
 		}
 	}
-	if !hasDefault {
+	if !hasDefault && len(cfg.Upstreams) == 0 {
 		return nil, fmt.Errorf("no default outline configured: set default: true on one outline entry")
+	}
+
+	// Normalize outlines → upstreams for backward compatibility.
+	if len(cfg.Upstreams) == 0 && len(cfg.Outlines) > 0 {
+		for _, o := range cfg.Outlines {
+			u := UpstreamConfig{
+				Name:        o.Name,
+				Type:        "outline",
+				Default:     o.Default,
+				Transport:   o.Transport,
+				HealthCheck: o.HealthCheck,
+			}
+			cfg.Upstreams = append(cfg.Upstreams, u)
+		}
+	}
+
+	// Normalize outline → upstream_group in routing rules.
+	for i := range cfg.Routing.IPRules {
+		if cfg.Routing.IPRules[i].UpstreamGroup == "" && cfg.Routing.IPRules[i].Outline != "" {
+			cfg.Routing.IPRules[i].UpstreamGroup = "upstream:" + cfg.Routing.IPRules[i].Outline
+		}
+	}
+	for i := range cfg.Routing.SNIRules {
+		if cfg.Routing.SNIRules[i].UpstreamGroup == "" && cfg.Routing.SNIRules[i].Outline != "" {
+			cfg.Routing.SNIRules[i].UpstreamGroup = "upstream:" + cfg.Routing.SNIRules[i].Outline
+		}
+	}
+
+	// Normalize outline → upstream_group in mtproxy.
+	if cfg.MTProxy.UpstreamGroup == "" && cfg.MTProxy.Outline != "" {
+		cfg.MTProxy.UpstreamGroup = "upstream:" + cfg.MTProxy.Outline
+	}
+
+	// Normalize outline → upstream_group in proxy servers.
+	for i := range cfg.Proxies {
+		if cfg.Proxies[i].UpstreamGroup == "" && cfg.Proxies[i].Outline != "" {
+			cfg.Proxies[i].UpstreamGroup = "upstream:" + cfg.Proxies[i].Outline
+		}
 	}
 
 	for i := range cfg.Routing.IPRules {
@@ -469,6 +534,39 @@ func Migrate(path string) (*Config, bool, error) {
 		}
 	}
 
+	// Migrate outlines → upstreams
+	if outlinesRaw, ok := raw["outlines"]; ok {
+		if _, hasUpstreams := raw["upstreams"]; !hasUpstreams {
+			outlinesList, _ := outlinesRaw.([]any)
+			if len(outlinesList) > 0 {
+				upstreamsList := make([]any, 0, len(outlinesList))
+				for _, o := range outlinesList {
+					om, _ := o.(map[string]any)
+					if om == nil {
+						continue
+					}
+					u := map[string]any{
+						"name": om["name"],
+						"type": "outline",
+					}
+					if t, ok := om["transport"]; ok {
+						u["transport"] = t
+					}
+					if d, ok := om["default"]; ok {
+						u["default"] = d
+					}
+					if hc, ok := om["health_check"]; ok {
+						u["health_check"] = hc
+					}
+					upstreamsList = append(upstreamsList, u)
+				}
+				raw["upstreams"] = upstreamsList
+				delete(raw, "outlines")
+				modified = true
+			}
+		}
+	}
+
 	if modified {
 		newData, err := yaml.Marshal(raw)
 		if err != nil {
@@ -493,6 +591,43 @@ func (c *Config) DefaultOutline() *OutlineConfig {
 		}
 	}
 	return nil
+}
+
+// DefaultUpstream returns the default upstream config, or nil if none.
+func (c *Config) DefaultUpstream() *UpstreamConfig {
+	for i := range c.Upstreams {
+		if c.Upstreams[i].Default {
+			return &c.Upstreams[i]
+		}
+	}
+	return nil
+}
+
+// ToUpstreamSpecs converts configured upstreams to upstream.Spec slice.
+func (c *Config) ToUpstreamSpecs() []upstream.Spec {
+	specs := make([]upstream.Spec, 0, len(c.Upstreams))
+	for _, u := range c.Upstreams {
+		spec := upstream.Spec{
+			Name:    u.Name,
+			Type:    upstream.Type(u.Type),
+			Enabled: u.IsEnabled(),
+			Default: u.Default,
+			Groups:  u.Groups,
+			HealthCheck: upstream.HealthCheckConfig{
+				Enabled:  u.HealthCheck.Enabled,
+				Interval: time.Duration(u.HealthCheck.Interval) * time.Second,
+				Target:   u.HealthCheck.Target,
+			},
+		}
+		// Build type-specific config JSON.
+		switch u.Type {
+		case "outline":
+			cfgJSON, _ := json.Marshal(map[string]string{"transport": u.Transport})
+			spec.Config = cfgJSON
+		}
+		specs = append(specs, spec)
+	}
+	return specs
 }
 
 func (c *Config) ParseLogLevel() slog.Level {

@@ -14,15 +14,17 @@ import (
 type ActionType string
 
 const (
-	ActionDirect  ActionType = "direct"
-	ActionOutline ActionType = "outline"
-	ActionDefault ActionType = "default"
+	ActionDirect   ActionType = "direct"
+	ActionOutline  ActionType = "outline"
+	ActionUpstream ActionType = "upstream"
+	ActionDefault  ActionType = "default"
 )
 
 type Decision struct {
-	Action      ActionType
-	OutlineName string // only when Action == ActionOutline
-	RuleName    string // for logging
+	Action        ActionType
+	UpstreamGroup string // group to select upstream from
+	OutlineName   string // deprecated: kept for backward compat
+	RuleName      string // for logging
 }
 
 type Request struct {
@@ -110,20 +112,23 @@ func NewRouter(cfg config.RoutingConfig, geoMgr *geoip.Manager, logger *slog.Log
 type ruleConfig interface {
 	actionType() string
 	outlineName() string
+	upstreamGroup() string
 	ruleName() string
 }
 
 type ipRuleAdapter config.IPRuleConfig
 
-func (a ipRuleAdapter) actionType() string  { return a.Action }
-func (a ipRuleAdapter) outlineName() string { return a.Outline }
-func (a ipRuleAdapter) ruleName() string    { return a.Name }
+func (a ipRuleAdapter) actionType() string     { return a.Action }
+func (a ipRuleAdapter) outlineName() string    { return a.Outline }
+func (a ipRuleAdapter) upstreamGroup() string  { return a.UpstreamGroup }
+func (a ipRuleAdapter) ruleName() string       { return a.Name }
 
 type sniRuleAdapter config.SNIRuleConfig
 
-func (a sniRuleAdapter) actionType() string  { return a.Action }
-func (a sniRuleAdapter) outlineName() string { return a.Outline }
-func (a sniRuleAdapter) ruleName() string    { return a.Name }
+func (a sniRuleAdapter) actionType() string     { return a.Action }
+func (a sniRuleAdapter) outlineName() string    { return a.Outline }
+func (a sniRuleAdapter) upstreamGroup() string  { return a.UpstreamGroup }
+func (a sniRuleAdapter) ruleName() string       { return a.Name }
 
 func parseAction(rule ruleConfig) Decision {
 	d := Decision{
@@ -132,9 +137,13 @@ func parseAction(rule ruleConfig) Decision {
 	switch ActionType(rule.actionType()) {
 	case ActionDirect:
 		d.Action = ActionDirect
-	case ActionOutline:
-		d.Action = ActionOutline
+	case ActionOutline, ActionUpstream:
+		d.Action = ActionUpstream
+		d.UpstreamGroup = rule.upstreamGroup()
 		d.OutlineName = rule.outlineName()
+		if d.UpstreamGroup == "" && d.OutlineName != "" {
+			d.UpstreamGroup = "upstream:" + d.OutlineName
+		}
 	default:
 		d.Action = ActionDefault
 	}

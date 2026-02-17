@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -13,11 +14,12 @@ import (
 )
 
 type statusResponse struct {
-	Daemon   daemonInfo    `json:"daemon"`
-	Peers    []peerInfo    `json:"peers"`
-	Outlines []outlineInfo `json:"outlines"`
-	MTProxy  mtproxyInfo   `json:"mtproxy"`
-	Proxies  []proxyInfo   `json:"proxies"`
+	Daemon    daemonInfo     `json:"daemon"`
+	Peers     []peerInfo     `json:"peers"`
+	Outlines  []outlineInfo  `json:"outlines"`
+	Upstreams []upstreamInfo `json:"upstreams"`
+	MTProxy   mtproxyInfo    `json:"mtproxy"`
+	Proxies   []proxyInfo    `json:"proxies"`
 }
 
 type daemonInfo struct {
@@ -67,13 +69,27 @@ type outlineInfo struct {
 	ActiveConnections int64  `json:"active_connections"`
 }
 
+type upstreamInfo struct {
+	Name              string   `json:"name"`
+	Type              string   `json:"type"`
+	Enabled           bool     `json:"enabled"`
+	Default           bool     `json:"default"`
+	State             string   `json:"state"`
+	Groups            []string `json:"groups"`
+	RxBytes           int64    `json:"rx_bytes"`
+	TxBytes           int64    `json:"tx_bytes"`
+	ActiveConnections int64    `json:"active_connections"`
+	LastError         string   `json:"last_error,omitempty"`
+}
+
 type proxyInfo struct {
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	Listen  string `json:"listen"`
-	Outline string `json:"outline"`
-	HasAuth bool   `json:"has_auth"`
-	Link    string `json:"link"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	Listen        string `json:"listen"`
+	Outline       string `json:"outline,omitempty"`
+	UpstreamGroup string `json:"upstream_group,omitempty"`
+	HasAuth       bool   `json:"has_auth"`
+	Link          string `json:"link"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +135,23 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		resp.Peers = append(resp.Peers, pi)
 	}
 
-	// Outlines.
+	// Upstreams.
+	for _, u := range s.provider.UpstreamStatuses() {
+		resp.Upstreams = append(resp.Upstreams, upstreamInfo{
+			Name:              u.Name,
+			Type:              u.Type,
+			Enabled:           u.Enabled,
+			Default:           u.Default,
+			State:             u.State,
+			Groups:            u.Groups,
+			RxBytes:           u.RxBytes,
+			TxBytes:           u.TxBytes,
+			ActiveConnections: u.ActiveConnections,
+			LastError:         u.LastError,
+		})
+	}
+
+	// Outlines (backward compat).
 	for _, o := range s.provider.OutlineStatuses() {
 		resp.Outlines = append(resp.Outlines, outlineInfo{
 			Name:              o.Name,
@@ -159,12 +191,13 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, p := range cfg.Proxies {
 		pi := proxyInfo{
-			Name:    p.Name,
-			Type:    p.Type,
-			Listen:  p.Listen,
-			Outline: p.Outline,
-			HasAuth: p.Username != "",
-			Link:    buildProxyLink(p, serverIP),
+			Name:          p.Name,
+			Type:          p.Type,
+			Listen:        p.Listen,
+			Outline:       p.Outline,
+			UpstreamGroup: p.UpstreamGroup,
+			HasAuth:       p.Username != "",
+			Link:          buildProxyLink(p, serverIP),
 		}
 		resp.Proxies = append(resp.Proxies, pi)
 	}
@@ -332,6 +365,269 @@ func (s *Server) handleDeleteProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleAddUpstream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Name        string   `json:"name"`
+		Type        string   `json:"type"`
+		Enabled     *bool    `json:"enabled,omitempty"`
+		Default     bool     `json:"default"`
+		Groups      []string `json:"groups,omitempty"`
+		Transport   string   `json:"transport"`
+		HealthCheck struct {
+			Enabled  bool   `json:"enabled"`
+			Interval int    `json:"interval"`
+			Target   string `json:"target"`
+		} `json:"health_check"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
+	if req.Type == "" {
+		req.Type = "outline"
+	}
+	if req.Transport == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "transport is required"})
+		return
+	}
+
+	u := config.UpstreamConfig{
+		Name:      req.Name,
+		Type:      req.Type,
+		Enabled:   req.Enabled,
+		Default:   req.Default,
+		Groups:    req.Groups,
+		Transport: req.Transport,
+		HealthCheck: config.HealthCheckConfig{
+			Enabled:  req.HealthCheck.Enabled,
+			Interval: req.HealthCheck.Interval,
+			Target:   req.HealthCheck.Target,
+		},
+	}
+
+	if err := s.manager.AddUpstream(u); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"name": u.Name, "status": "ok"})
+}
+
+func (s *Server) handleUpdateUpstream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	name := strings.TrimPrefix(r.URL.Path, "/api/upstreams/")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "upstream name is required"})
+		return
+	}
+
+	// Find the existing upstream to use as base for merging.
+	cfg := s.cfgProv.CurrentConfig()
+	var existing *config.UpstreamConfig
+	for i := range cfg.Upstreams {
+		if cfg.Upstreams[i].Name == name {
+			copy := cfg.Upstreams[i]
+			existing = &copy
+			break
+		}
+	}
+	if existing == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "upstream not found"})
+		return
+	}
+
+	var req struct {
+		Type        *string  `json:"type"`
+		Enabled     *bool    `json:"enabled"`
+		Default     *bool    `json:"default"`
+		Groups      []string `json:"groups"`
+		Transport   *string  `json:"transport"`
+		HealthCheck *struct {
+			Enabled  bool   `json:"enabled"`
+			Interval int    `json:"interval"`
+			Target   string `json:"target"`
+		} `json:"health_check"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	// Merge: only overwrite fields that were provided.
+	if req.Type != nil {
+		existing.Type = *req.Type
+	}
+	if req.Enabled != nil {
+		existing.Enabled = req.Enabled
+	}
+	if req.Default != nil {
+		existing.Default = *req.Default
+	}
+	if req.Groups != nil {
+		existing.Groups = req.Groups
+	}
+	if req.Transport != nil {
+		existing.Transport = *req.Transport
+	}
+	if req.HealthCheck != nil {
+		existing.HealthCheck = config.HealthCheckConfig{
+			Enabled:  req.HealthCheck.Enabled,
+			Interval: req.HealthCheck.Interval,
+			Target:   req.HealthCheck.Target,
+		}
+	}
+
+	if err := s.manager.UpdateUpstream(*existing); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "ok"})
+}
+
+func (s *Server) handleDeleteUpstream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	name := strings.TrimPrefix(r.URL.Path, "/api/upstreams/")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "upstream name is required"})
+		return
+	}
+
+	if err := s.manager.DeleteUpstream(name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleUpstreamsRoute(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPut:
+		s.handleUpdateUpstream(w, r)
+	case http.MethodDelete:
+		s.handleDeleteUpstream(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+type groupMember struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	State   string `json:"state"`
+	Enabled bool   `json:"enabled"`
+}
+
+type groupConsumer struct {
+	Type string `json:"type"`
+	Name string `json:"name"`
+}
+
+type groupInfo struct {
+	Name      string          `json:"name"`
+	Members   []groupMember   `json:"members"`
+	Consumers []groupConsumer `json:"consumers"`
+}
+
+func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	groups := make(map[string]*groupInfo)
+
+	ensureGroup := func(name string) *groupInfo {
+		g, ok := groups[name]
+		if !ok {
+			g = &groupInfo{Name: name}
+			groups[name] = g
+		}
+		return g
+	}
+
+	// Populate members from upstream statuses.
+	// u.Groups already contains all effective groups (implicit, default, explicit)
+	// via EffectiveGroups(), so we only need to iterate over it.
+	for _, u := range s.provider.UpstreamStatuses() {
+		member := groupMember{
+			Name:    u.Name,
+			Type:    string(u.Type),
+			State:   string(u.State),
+			Enabled: u.Enabled,
+		}
+
+		for _, gName := range u.Groups {
+			ensureGroup(gName).Members = append(ensureGroup(gName).Members, member)
+		}
+	}
+
+	// Populate consumers from config.
+	cfg := s.cfgProv.CurrentConfig()
+
+	for _, p := range cfg.Proxies {
+		g := p.UpstreamGroup
+		if g == "" && p.Outline == "" {
+			g = "default"
+		}
+		if g != "" {
+			ensureGroup(g).Consumers = append(ensureGroup(g).Consumers, groupConsumer{Type: "proxy", Name: p.Name})
+		}
+	}
+	for _, r := range cfg.Routing.IPRules {
+		g := r.UpstreamGroup
+		if g == "" && r.Outline == "" {
+			g = "default"
+		}
+		if g != "" {
+			ensureGroup(g).Consumers = append(ensureGroup(g).Consumers, groupConsumer{Type: "ip_rule", Name: r.Name})
+		}
+	}
+	for _, r := range cfg.Routing.SNIRules {
+		g := r.UpstreamGroup
+		if g == "" && r.Outline == "" {
+			g = "default"
+		}
+		if g != "" {
+			ensureGroup(g).Consumers = append(ensureGroup(g).Consumers, groupConsumer{Type: "sni_rule", Name: r.Name})
+		}
+	}
+	if cfg.MTProxy.UpstreamGroup != "" {
+		ensureGroup(cfg.MTProxy.UpstreamGroup).Consumers = append(
+			ensureGroup(cfg.MTProxy.UpstreamGroup).Consumers,
+			groupConsumer{Type: "mtproxy", Name: "mtproxy"},
+		)
+	}
+
+	result := make([]groupInfo, 0, len(groups))
+	for _, g := range groups {
+		result = append(result, *g)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name < result[j].Name
+	})
+
+	writeJSON(w, http.StatusOK, result)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

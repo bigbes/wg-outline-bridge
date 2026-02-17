@@ -77,12 +77,27 @@ type OutlineStatus struct {
 	ActiveConnections int64
 }
 
+// UpstreamStatus holds per-upstream endpoint stats (new format).
+type UpstreamStatus struct {
+	Name              string
+	Type              string
+	Enabled           bool
+	Default           bool
+	State             string // "healthy", "degraded", "disabled"
+	Groups            []string
+	RxBytes           int64
+	TxBytes           int64
+	ActiveConnections int64
+	LastError         string
+}
+
 // StatusProvider supplies bridge status data to the observer.
 type StatusProvider interface {
 	PeerStatuses() []PeerStatus
 	DaemonStatus() DaemonStatus
 	MTProxyStatus() MTProxyStatus
 	OutlineStatuses() []OutlineStatus
+	UpstreamStatuses() []UpstreamStatus
 }
 
 // ConfigProvider supplies the current config to the observer.
@@ -98,6 +113,9 @@ type Manager interface {
 	DeleteSecret(secretHex string) error
 	AddProxy(p config.ProxyServerConfig) error
 	DeleteProxy(name string) error
+	AddUpstream(u config.UpstreamConfig) error
+	UpdateUpstream(u config.UpstreamConfig) error
+	DeleteUpstream(name string) error
 }
 
 // Observer sends periodic status updates and handles bot commands via Telegram.
@@ -243,7 +261,8 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 		peers := o.provider.PeerStatuses()
 		daemon := o.provider.DaemonStatus()
 		mt := o.provider.MTProxyStatus()
-		reply = formatStatus(peers, daemon, mt)
+		upstreams := o.provider.UpstreamStatuses()
+		reply = formatStatus(peers, daemon, mt, upstreams)
 	case "/proxy":
 		links := config.ProxyLinks(o.cfgProv.CurrentConfig())
 		if len(links) == 0 {
@@ -356,7 +375,8 @@ func (o *Observer) sendStatus(ctx context.Context) {
 	peers := o.provider.PeerStatuses()
 	daemon := o.provider.DaemonStatus()
 	mt := o.provider.MTProxyStatus()
-	msg := formatStatus(peers, daemon, mt)
+	upstreams := o.provider.UpstreamStatuses()
+	msg := formatStatus(peers, daemon, mt, upstreams)
 	o.send(ctx, msg)
 }
 
@@ -366,7 +386,7 @@ func (o *Observer) send(ctx context.Context, text string) {
 	}
 }
 
-func formatStatus(peers []PeerStatus, daemon DaemonStatus, mt MTProxyStatus) string {
+func formatStatus(peers []PeerStatus, daemon DaemonStatus, mt MTProxyStatus, upstreams []UpstreamStatus) string {
 	var b strings.Builder
 	b.WriteString("📊 Bridge Status\n")
 
@@ -451,6 +471,39 @@ func formatStatus(peers []PeerStatus, daemon DaemonStatus, mt MTProxyStatus) str
 					fmt.Fprintf(&b, " (↑%s ↓%s)", formatBytes(c.BytesC2BTotal), formatBytes(c.BytesB2CTotal))
 				}
 				b.WriteString("\n")
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	if len(upstreams) > 0 {
+		b.WriteString("🔗 Upstreams\n")
+		for _, u := range upstreams {
+			stateIcon := "⚪"
+			switch u.State {
+			case "healthy":
+				stateIcon = "🟢"
+			case "degraded":
+				stateIcon = "🟡"
+			case "disabled":
+				stateIcon = "🔴"
+			}
+
+			label := u.Name
+			if u.Type != "" {
+				label += " (" + u.Type + ")"
+			}
+			if u.Default {
+				label += " [default]"
+			}
+
+			fmt.Fprintf(&b, "%s %s — %s\n", stateIcon, label, u.State)
+			fmt.Fprintf(&b, "  Traffic: ↓%s ↑%s | Conns: %d\n", formatBytes(u.RxBytes), formatBytes(u.TxBytes), u.ActiveConnections)
+			if len(u.Groups) > 0 {
+				fmt.Fprintf(&b, "  Groups: %s\n", strings.Join(u.Groups, ", "))
+			}
+			if u.LastError != "" {
+				fmt.Fprintf(&b, "  Last error: %s\n", u.LastError)
 			}
 		}
 		b.WriteString("\n")
@@ -762,8 +815,10 @@ func (o *Observer) handleListProxy() string {
 			}
 		}
 
-		if p.Outline != "" && p.Outline != "default" {
-			fmt.Fprintf(&b, "  Outline: %s\n", p.Outline)
+		if p.UpstreamGroup != "" && p.UpstreamGroup != "default" {
+			fmt.Fprintf(&b, "  Upstream: %s\n", p.UpstreamGroup)
+		} else if p.Outline != "" && p.Outline != "default" {
+			fmt.Fprintf(&b, "  Upstream: %s\n", p.Outline)
 		}
 		b.WriteString("\n")
 	}

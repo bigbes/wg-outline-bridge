@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -109,6 +110,20 @@ CREATE TABLE IF NOT EXISTS proxy_servers (
   tls_domain TEXT NOT NULL DEFAULT '',
   tls_acme_email TEXT NOT NULL DEFAULT '',
   created_unix INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE TABLE IF NOT EXISTS upstreams (
+  name TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  groups TEXT NOT NULL DEFAULT '',
+  transport TEXT NOT NULL DEFAULT '',
+  health_check_enabled INTEGER NOT NULL DEFAULT 0,
+  health_check_interval INTEGER NOT NULL DEFAULT 30,
+  health_check_target TEXT NOT NULL DEFAULT '1.1.1.1:80',
+  created_unix INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_unix INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
 CREATE TABLE IF NOT EXISTS allowed_users (
@@ -682,6 +697,165 @@ func (s *Store) ImportProxyServers(proxies []config.ProxyServerConfig) (int, err
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("statsdb: commit import proxy servers: %w", err)
+	}
+	return count, nil
+}
+
+// ---------------------------------------------------------------------------
+// Upstream CRUD
+// ---------------------------------------------------------------------------
+
+// ListUpstreams returns all upstream configs from the database.
+func (s *Store) ListUpstreams() ([]config.UpstreamConfig, error) {
+	rows, err := s.db.Query(
+		`SELECT name, type, enabled, is_default, groups, transport,
+		        health_check_enabled, health_check_interval, health_check_target
+		 FROM upstreams`)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list upstreams: %w", err)
+	}
+	defer rows.Close()
+
+	var out []config.UpstreamConfig
+	for rows.Next() {
+		var u config.UpstreamConfig
+		var enabled, isDefault, hcEnabled, hcInterval int
+		var groups, hcTarget string
+		if err := rows.Scan(&u.Name, &u.Type, &enabled, &isDefault, &groups, &u.Transport,
+			&hcEnabled, &hcInterval, &hcTarget); err != nil {
+			return nil, fmt.Errorf("statsdb: scan upstream: %w", err)
+		}
+		if enabled == 0 {
+			f := false
+			u.Enabled = &f
+		}
+		u.Default = isDefault == 1
+		if groups != "" {
+			u.Groups = strings.Split(groups, ",")
+		}
+		u.HealthCheck.Enabled = hcEnabled == 1
+		u.HealthCheck.Interval = hcInterval
+		u.HealthCheck.Target = hcTarget
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("statsdb: iterate upstreams: %w", err)
+	}
+	return out, nil
+}
+
+// AddUpstream inserts a new upstream config.
+func (s *Store) AddUpstream(u config.UpstreamConfig) error {
+	enabled := 0
+	if u.IsEnabled() {
+		enabled = 1
+	}
+	isDefault := 0
+	if u.Default {
+		isDefault = 1
+	}
+	hcEnabled := 0
+	if u.HealthCheck.Enabled {
+		hcEnabled = 1
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO upstreams (name, type, enabled, is_default, groups, transport,
+		                        health_check_enabled, health_check_interval, health_check_target)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		u.Name, u.Type, enabled, isDefault, strings.Join(u.Groups, ","), u.Transport,
+		hcEnabled, u.HealthCheck.Interval, u.HealthCheck.Target,
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: add upstream %q: %w", u.Name, err)
+	}
+	return nil
+}
+
+// UpdateUpstream updates an existing upstream config.
+func (s *Store) UpdateUpstream(u config.UpstreamConfig) error {
+	enabled := 0
+	if u.IsEnabled() {
+		enabled = 1
+	}
+	isDefault := 0
+	if u.Default {
+		isDefault = 1
+	}
+	hcEnabled := 0
+	if u.HealthCheck.Enabled {
+		hcEnabled = 1
+	}
+	res, err := s.db.Exec(
+		`UPDATE upstreams SET type = ?, enabled = ?, is_default = ?, groups = ?, transport = ?,
+		        health_check_enabled = ?, health_check_interval = ?, health_check_target = ?,
+		        updated_unix = unixepoch()
+		 WHERE name = ?`,
+		u.Type, enabled, isDefault, strings.Join(u.Groups, ","), u.Transport,
+		hcEnabled, u.HealthCheck.Interval, u.HealthCheck.Target,
+		u.Name,
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: update upstream %q: %w", u.Name, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("statsdb: update upstream %q: not found", u.Name)
+	}
+	return nil
+}
+
+// DeleteUpstream deletes an upstream by name.
+func (s *Store) DeleteUpstream(name string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM upstreams WHERE name = ?`, name)
+	if err != nil {
+		return false, fmt.Errorf("statsdb: delete upstream %q: %w", name, err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ImportUpstreams inserts upstreams from a list, skipping names that already exist.
+func (s *Store) ImportUpstreams(upstreams []config.UpstreamConfig) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(
+		`INSERT OR IGNORE INTO upstreams (name, type, enabled, is_default, groups, transport,
+		                                  health_check_enabled, health_check_interval, health_check_target)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: prepare import upstreams: %w", err)
+	}
+	defer stmt.Close()
+
+	var count int
+	for _, u := range upstreams {
+		enabled := 0
+		if u.IsEnabled() {
+			enabled = 1
+		}
+		isDefault := 0
+		if u.Default {
+			isDefault = 1
+		}
+		hcEnabled := 0
+		if u.HealthCheck.Enabled {
+			hcEnabled = 1
+		}
+		res, err := stmt.Exec(u.Name, u.Type, enabled, isDefault, strings.Join(u.Groups, ","), u.Transport,
+			hcEnabled, u.HealthCheck.Interval, u.HealthCheck.Target)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: import upstream %q: %w", u.Name, err)
+		}
+		n, _ := res.RowsAffected()
+		count += int(n)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("statsdb: commit import upstreams: %w", err)
 	}
 	return count, nil
 }

@@ -23,12 +23,13 @@ import (
 	mpcrypto "github.com/blikh/wireguard-outline-bridge/internal/mtproxy/crypto"
 	"github.com/blikh/wireguard-outline-bridge/internal/mtproxy/telegram"
 	"github.com/blikh/wireguard-outline-bridge/internal/observer"
-	"github.com/blikh/wireguard-outline-bridge/internal/outline"
 	"github.com/blikh/wireguard-outline-bridge/internal/proxy"
 	"github.com/blikh/wireguard-outline-bridge/internal/proxyserver"
 	"github.com/blikh/wireguard-outline-bridge/internal/routing"
 	"github.com/blikh/wireguard-outline-bridge/internal/statsdb"
 	tgbot "github.com/blikh/wireguard-outline-bridge/internal/telegram"
+	"github.com/blikh/wireguard-outline-bridge/internal/upstream"
+	outlineprovider "github.com/blikh/wireguard-outline-bridge/internal/upstream/providers/outline"
 	wg "github.com/blikh/wireguard-outline-bridge/internal/wireguard"
 )
 
@@ -37,12 +38,11 @@ type Bridge struct {
 	logger     *slog.Logger
 	startTime  time.Time
 
-	mu            sync.Mutex
-	cfg           *config.Config
-	wgDev         wg.Device
-	outlineClient *outline.SwappableClient
-	outlineStats  map[string]*outline.StatsDialer
-	tracker       *proxy.ConnTracker
+	mu        sync.Mutex
+	cfg       *config.Config
+	wgDev     wg.Device
+	upstreams *upstream.Manager
+	tracker   *proxy.ConnTracker
 	peerMon       *peerMonitor
 	mtSrv         *mtproxy.Server
 	statsStore    *statsdb.Store
@@ -63,53 +63,20 @@ func (b *Bridge) Run(ctx context.Context) error {
 		return fmt.Errorf("parsing wireguard address: %w", err)
 	}
 
-	defaultCfg := b.cfg.DefaultOutline()
-	defaultClient, err := outline.NewClient(defaultCfg.Transport)
-	if err != nil {
-		return fmt.Errorf("creating default outline client: %w", err)
-	}
-	b.outlineClient = outline.NewSwappableClient(defaultClient)
-	b.logger.Info("default outline client created", "name", defaultCfg.Name, "transport", config.RedactTransport(defaultCfg.Transport))
+	// Initialize upstream manager.
+	b.upstreams = upstream.NewManager(ctx, b.logger)
+	b.upstreams.RegisterFactory(outlineprovider.Factory{})
 
-	defaultStats := outline.NewStatsDialer(defaultCfg.Name, b.outlineClient)
-	b.outlineStats = map[string]*outline.StatsDialer{defaultCfg.Name: defaultStats}
-
-	dialers := proxy.NewDialerSet(defaultStats)
-	for _, o := range b.cfg.Outlines {
-		if o.Default {
-			continue
-		}
-		c, err := outline.NewClient(o.Transport)
-		if err != nil {
-			return fmt.Errorf("creating outline client %q: %w", o.Name, err)
-		}
-		sd := outline.NewStatsDialer(o.Name, c)
-		dialers.Outlines[o.Name] = sd
-		b.outlineStats[o.Name] = sd
-		b.logger.Info("outline client created", "name", o.Name)
+	specs := b.cfg.ToUpstreamSpecs()
+	if err := b.upstreams.Apply(specs); err != nil {
+		return fmt.Errorf("applying upstream specs: %w", err)
 	}
+	b.logger.Info("upstreams initialized", "count", len(specs))
 
-	for _, o := range b.cfg.Outlines {
-		if o.HealthCheck.Enabled {
-			dialer := b.outlineClient
-			if !o.Default {
-				if _, ok := b.outlineStats[o.Name]; ok {
-					// Use raw client for health checks to avoid polluting stats.
-					c, _ := outline.NewClient(o.Transport)
-					if c != nil {
-						dialer = outline.NewSwappableClient(c)
-					}
-				}
-			}
-			go b.startHealthChecker(ctx, o.Name, dialer,
-				time.Duration(o.HealthCheck.Interval)*time.Second,
-				o.HealthCheck.Target)
-			b.logger.Info("outline health checker started",
-				"name", o.Name,
-				"interval", o.HealthCheck.Interval,
-				"target", o.HealthCheck.Target)
-		}
-	}
+	// Start upstream event listener for logging.
+	go b.upstreamEventLoop(ctx)
+
+	dialers := proxy.NewDialerSet(&upstreamAdapter{b.upstreams})
 
 	backend := wg.NewBackend(b.cfg.WireGuard.Mode)
 	b.logger.Info("using wireguard backend", "backend", backend.Name())
@@ -190,6 +157,22 @@ func (b *Bridge) Run(ctx context.Context) error {
 		} else if len(dbProxies) > 0 {
 			b.cfg.Proxies = dbProxies
 		}
+
+		// Import file-based upstreams into DB if DB is empty
+		dbUpstreams, err := store.ListUpstreams()
+		if err != nil {
+			b.logger.Error("failed to list db upstreams", "err", err)
+		}
+		if len(dbUpstreams) == 0 && len(b.cfg.Upstreams) > 0 {
+			imported, err := store.ImportUpstreams(b.cfg.Upstreams)
+			if err != nil {
+				b.logger.Error("failed to import upstreams to database", "err", err)
+			} else if imported > 0 {
+				b.logger.Info("imported file upstreams to database", "count", imported)
+			}
+		} else if len(dbUpstreams) > 0 {
+			b.cfg.Upstreams = dbUpstreams
+		}
 	}
 
 	var geoMgr *geoip.Manager
@@ -200,7 +183,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 		}
 		var err error
 		cacheDir := filepath.Join(b.cfg.CacheDir, "geoip")
-		geoMgr, err = geoip.NewManager(entries, cacheDir, b.outlineClient, b.logger)
+		geoMgr, err = geoip.NewManager(entries, cacheDir, b.upstreams.DefaultStreamDialer(), b.logger)
 		if err != nil {
 			return fmt.Errorf("loading geoip databases: %w", err)
 		}
@@ -210,7 +193,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 
 	router := routing.NewRouter(b.cfg.Routing, geoMgr, b.logger)
 
-	downloader := routing.NewDownloader(b.outlineClient, router, b.cfg.Routing, b.logger)
+	downloader := routing.NewDownloader(b.upstreams.DefaultStreamDialer(), router, b.cfg.Routing, b.logger)
 	downloader.Start(ctx)
 
 	tcpProxy := proxy.NewTCPProxy(router, dialers, b.tracker, b.logger)
@@ -332,21 +315,20 @@ func (b *Bridge) Reload() error {
 		} else if len(dbSecrets) > 0 {
 			newCfg.MTProxy.Secrets = dbSecrets
 		}
+		dbUpstreams, err := b.statsStore.ListUpstreams()
+		if err != nil {
+			b.logger.Error("failed to load upstreams from database", "err", err)
+		} else if len(dbUpstreams) > 0 {
+			newCfg.Upstreams = dbUpstreams
+		}
 	}
 
-	newDefault := newCfg.DefaultOutline()
-	oldDefault := b.cfg.DefaultOutline()
-	if newDefault.Transport != oldDefault.Transport {
-		b.logger.Info("default outline transport changed, reconnecting",
-			"old", config.RedactTransport(oldDefault.Transport),
-			"new", config.RedactTransport(newDefault.Transport),
-		)
-		newClient, err := outline.NewClient(newDefault.Transport)
-		if err != nil {
-			return fmt.Errorf("creating new default outline client: %w", err)
-		}
-		b.outlineClient.Swap(newClient)
-		b.logger.Info("default outline client swapped")
+	// Reload upstreams.
+	specs := newCfg.ToUpstreamSpecs()
+	if err := b.upstreams.Apply(specs); err != nil {
+		b.logger.Error("failed to reload upstreams", "err", err)
+	} else {
+		b.logger.Info("upstreams reloaded", "count", len(specs))
 	}
 
 	diff := config.DiffPeers(b.cfg.Peers, newCfg.Peers)
@@ -426,11 +408,15 @@ func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) err
 		secrets = append(secrets, secret)
 	}
 
-	var dialer mtproxy.StreamDialer = b.outlineClient
-	if name := b.cfg.MTProxy.Outline; name != "" && name != "default" {
-		if d, ok := dialers.Outlines[name]; ok {
-			dialer = d
-		}
+	group := b.cfg.MTProxy.UpstreamGroup
+	if group == "" {
+		group = "default"
+	}
+	var dialer mtproxy.StreamDialer
+	if d := b.upstreams.StreamDialerForGroup(group); d != nil {
+		dialer = d
+	} else {
+		dialer = b.upstreams.DefaultStreamDialer()
 	}
 
 	endpoints := telegram.NewEndpointManager(b.cfg.MTProxy.Endpoints)
@@ -471,11 +457,15 @@ func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) err
 
 func (b *Bridge) startProxyServers(ctx context.Context, dialers *proxy.DialerSet) error {
 	for _, pcfg := range b.cfg.Proxies {
-		var dialer proxyserver.StreamDialer = b.outlineClient
-		if name := pcfg.Outline; name != "" && name != "default" {
-			if d, ok := dialers.Outlines[name]; ok {
-				dialer = d
-			}
+		group := pcfg.UpstreamGroup
+		if group == "" {
+			group = "default"
+		}
+		var dialer proxyserver.StreamDialer
+		if d := b.upstreams.StreamDialerForGroup(group); d != nil {
+			dialer = d
+		} else {
+			dialer = b.upstreams.DefaultStreamDialer()
 		}
 
 		acmeDir := ""
@@ -626,25 +616,39 @@ func (b *Bridge) MTProxyStatus() observer.MTProxyStatus {
 	return st
 }
 
-// OutlineStatuses implements observer.StatusProvider.
-func (b *Bridge) OutlineStatuses() []observer.OutlineStatus {
-	b.mu.Lock()
-	outlines := b.cfg.Outlines
-	b.mu.Unlock()
+// UpstreamStatuses implements observer.StatusProvider.
+func (b *Bridge) UpstreamStatuses() []observer.UpstreamStatus {
+	statuses := b.upstreams.Statuses()
+	result := make([]observer.UpstreamStatus, 0, len(statuses))
+	for _, st := range statuses {
+		result = append(result, observer.UpstreamStatus{
+			Name:              st.Name,
+			Type:              string(st.Type),
+			Enabled:           st.Enabled,
+			Default:           st.Default,
+			State:             string(st.State),
+			Groups:            st.Groups,
+			RxBytes:           st.RxBytes,
+			TxBytes:           st.TxBytes,
+			ActiveConnections: st.ActiveConnections,
+			LastError:         st.LastError,
+		})
+	}
+	return result
+}
 
-	var result []observer.OutlineStatus
-	for _, o := range outlines {
-		st := observer.OutlineStatus{
-			Name:    o.Name,
-			Default: o.Default,
-		}
-		if sd, ok := b.outlineStats[o.Name]; ok {
-			snap := sd.Snapshot()
-			st.RxBytes = snap.RxBytes
-			st.TxBytes = snap.TxBytes
-			st.ActiveConnections = snap.ActiveConnections
-		}
-		result = append(result, st)
+// OutlineStatuses implements observer.StatusProvider (backward compat).
+func (b *Bridge) OutlineStatuses() []observer.OutlineStatus {
+	statuses := b.upstreams.Statuses()
+	result := make([]observer.OutlineStatus, 0, len(statuses))
+	for _, st := range statuses {
+		result = append(result, observer.OutlineStatus{
+			Name:              st.Name,
+			Default:           st.Default,
+			RxBytes:           st.RxBytes,
+			TxBytes:           st.TxBytes,
+			ActiveConnections: st.ActiveConnections,
+		})
 	}
 	return result
 }
@@ -895,6 +899,101 @@ func (b *Bridge) DeleteProxy(name string) error {
 	return nil
 }
 
+// AddUpstream saves a new upstream config to the database and applies it.
+func (b *Bridge) AddUpstream(u config.UpstreamConfig) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	for _, existing := range b.cfg.Upstreams {
+		if existing.Name == u.Name {
+			return fmt.Errorf("upstream %q already exists", u.Name)
+		}
+	}
+
+	if err := b.statsStore.AddUpstream(u); err != nil {
+		return fmt.Errorf("saving upstream: %w", err)
+	}
+
+	b.cfg.Upstreams = append(b.cfg.Upstreams, u)
+
+	if err := b.upstreams.Apply(b.cfg.ToUpstreamSpecs()); err != nil {
+		b.logger.Error("failed to apply upstream specs", "err", err)
+	}
+
+	b.logger.Info("upstream added", "name", u.Name, "type", u.Type)
+	return nil
+}
+
+// UpdateUpstream updates an existing upstream config in the database and re-applies.
+func (b *Bridge) UpdateUpstream(u config.UpstreamConfig) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	found := false
+	for i, existing := range b.cfg.Upstreams {
+		if existing.Name == u.Name {
+			b.cfg.Upstreams[i] = u
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("upstream %q not found", u.Name)
+	}
+
+	if err := b.statsStore.UpdateUpstream(u); err != nil {
+		return fmt.Errorf("updating upstream: %w", err)
+	}
+
+	if err := b.upstreams.Apply(b.cfg.ToUpstreamSpecs()); err != nil {
+		b.logger.Error("failed to apply upstream specs", "err", err)
+	}
+
+	b.logger.Info("upstream updated", "name", u.Name)
+	return nil
+}
+
+// DeleteUpstream removes an upstream config from the database and re-applies.
+func (b *Bridge) DeleteUpstream(name string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	found, err := b.statsStore.DeleteUpstream(name)
+	if err != nil {
+		return fmt.Errorf("deleting upstream: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("upstream %q not found", name)
+	}
+
+	upstreams := make([]config.UpstreamConfig, 0, len(b.cfg.Upstreams))
+	for _, u := range b.cfg.Upstreams {
+		if u.Name != name {
+			upstreams = append(upstreams, u)
+		}
+	}
+	b.cfg.Upstreams = upstreams
+
+	if err := b.upstreams.Apply(b.cfg.ToUpstreamSpecs()); err != nil {
+		b.logger.Error("failed to apply upstream specs", "err", err)
+	}
+
+	b.logger.Info("upstream deleted", "name", name)
+	return nil
+}
+
 // getPeerStatuses reads peer status from the WireGuard device via IPC.
 func (b *Bridge) getPeerStatuses() []peerStatus {
 	if b.wgDev == nil {
@@ -1016,6 +1115,41 @@ func (b *Bridge) statsFlush() {
 	}
 }
 
+// upstreamAdapter wraps upstream.Manager to satisfy proxy.UpstreamProvider,
+// bridging the identical-but-separate StreamDialer/PacketDialer interfaces.
+type upstreamAdapter struct {
+	mgr *upstream.Manager
+}
+
+func (a *upstreamAdapter) StreamDialerForGroup(group string) proxy.StreamDialer {
+	return a.mgr.StreamDialerForGroup(group)
+}
+
+func (a *upstreamAdapter) PacketDialerForGroup(group string) proxy.PacketDialer {
+	return a.mgr.PacketDialerForGroup(group)
+}
+
+func (b *Bridge) upstreamEventLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev := <-b.upstreams.Events():
+			switch ev.NewState {
+			case upstream.StateDegraded:
+				b.logger.Warn("upstream degraded",
+					"name", ev.Name, "err", ev.Error)
+			case upstream.StateHealthy:
+				b.logger.Info("upstream recovered",
+					"name", ev.Name)
+			case upstream.StateDisabled:
+				b.logger.Info("upstream disabled",
+					"name", ev.Name)
+			}
+		}
+	}
+}
+
 func peerAllowedIPs(peer config.PeerConfig) []netip.Addr {
 	var addrs []netip.Addr
 	for _, cidr := range strings.Split(peer.AllowedIPs, ",") {
@@ -1027,35 +1161,6 @@ func peerAllowedIPs(peer config.PeerConfig) []netip.Addr {
 		}
 	}
 	return addrs
-}
-
-func (b *Bridge) startHealthChecker(ctx context.Context, name string, dialer *outline.SwappableClient, interval time.Duration, target string) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	check := func() {
-		checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-
-		conn, err := dialer.DialStream(checkCtx, target)
-		if err != nil {
-			b.logger.Warn("outline health check failed", "name", name, "target", target, "err", err)
-			return
-		}
-		conn.Close()
-		b.logger.Debug("outline health check passed", "name", name, "target", target)
-	}
-
-	check()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			check()
-		}
-	}
 }
 
 func buildDNSRules(cfg config.DNSConfig, logger *slog.Logger) []dns.Rule {

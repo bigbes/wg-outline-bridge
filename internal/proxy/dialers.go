@@ -20,51 +20,76 @@ func (d *DirectDialer) DialPacket(ctx context.Context, addr string) (net.Conn, e
 	return dialer.DialContext(ctx, "udp", addr)
 }
 
-// StreamAndPacketDialer combines both dialer interfaces.
-type StreamAndPacketDialer interface {
-	StreamDialer
-	PacketDialer
+// UpstreamProvider resolves upstream groups to dialers (implemented by upstream.Manager).
+type UpstreamProvider interface {
+	StreamDialerForGroup(group string) StreamDialer
+	PacketDialerForGroup(group string) PacketDialer
 }
 
 // DialerSet maps routing decisions to concrete dialers.
 type DialerSet struct {
-	Direct         *DirectDialer
-	DefaultOutline StreamAndPacketDialer
-	Outlines       map[string]StreamAndPacketDialer // named outlines
+	Direct   *DirectDialer
+	Upstream UpstreamProvider
 }
 
-func NewDialerSet(defaultOutline StreamAndPacketDialer) *DialerSet {
+// NewDialerSet creates a new DialerSet backed by the given upstream provider.
+func NewDialerSet(upstream UpstreamProvider) *DialerSet {
 	return &DialerSet{
-		Direct:         &DirectDialer{},
-		DefaultOutline: defaultOutline,
-		Outlines:       make(map[string]StreamAndPacketDialer),
+		Direct:   &DirectDialer{},
+		Upstream: upstream,
 	}
 }
 
+// StreamDialerFor returns the appropriate stream dialer for a routing decision.
 func (ds *DialerSet) StreamDialerFor(dec routing.Decision) StreamDialer {
 	switch dec.Action {
 	case routing.ActionDirect:
 		return ds.Direct
-	case routing.ActionOutline:
-		if d, ok := ds.Outlines[dec.OutlineName]; ok {
+	case routing.ActionUpstream, routing.ActionOutline:
+		if d := ds.Upstream.StreamDialerForGroup(dec.UpstreamGroup); d != nil {
 			return d
 		}
-		return ds.DefaultOutline
+		// Fallback: try by legacy OutlineName
+		if dec.OutlineName != "" {
+			if d := ds.Upstream.StreamDialerForGroup("upstream:" + dec.OutlineName); d != nil {
+				return d
+			}
+		}
+		// Final fallback to default group
+		if d := ds.Upstream.StreamDialerForGroup("default"); d != nil {
+			return d
+		}
+		return ds.Direct
 	default:
-		return ds.DefaultOutline
+		if d := ds.Upstream.StreamDialerForGroup("default"); d != nil {
+			return d
+		}
+		return ds.Direct
 	}
 }
 
+// PacketDialerFor returns the appropriate packet dialer for a routing decision.
 func (ds *DialerSet) PacketDialerFor(dec routing.Decision) PacketDialer {
 	switch dec.Action {
 	case routing.ActionDirect:
 		return ds.Direct
-	case routing.ActionOutline:
-		if d, ok := ds.Outlines[dec.OutlineName]; ok {
+	case routing.ActionUpstream, routing.ActionOutline:
+		if d := ds.Upstream.PacketDialerForGroup(dec.UpstreamGroup); d != nil {
 			return d
 		}
-		return ds.DefaultOutline
+		if dec.OutlineName != "" {
+			if d := ds.Upstream.PacketDialerForGroup("upstream:" + dec.OutlineName); d != nil {
+				return d
+			}
+		}
+		if d := ds.Upstream.PacketDialerForGroup("default"); d != nil {
+			return d
+		}
+		return ds.Direct
 	default:
-		return ds.DefaultOutline
+		if d := ds.Upstream.PacketDialerForGroup("default"); d != nil {
+			return d
+		}
+		return ds.Direct
 	}
 }
