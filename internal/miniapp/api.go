@@ -879,6 +879,86 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// DNS response types.
+
+type dnsResponse struct {
+	Enabled  bool            `json:"enabled"`
+	Listen   string          `json:"listen"`
+	Upstream string          `json:"upstream"`
+	Records  []dnsRecordInfo `json:"records"`
+	Rules    []dnsRuleInfo   `json:"rules"`
+}
+
+type dnsRecordInfo struct {
+	Name string   `json:"name"`
+	A    []string `json:"a"`
+	AAAA []string `json:"aaaa"`
+	TTL  uint32   `json:"ttl"`
+}
+
+type dnsRuleInfo struct {
+	Name     string        `json:"name"`
+	Action   string        `json:"action"`
+	Upstream string        `json:"upstream,omitempty"`
+	Domains  []string      `json:"domains"`
+	Lists    []dnsListInfo `json:"lists"`
+}
+
+type dnsListInfo struct {
+	URL     string `json:"url"`
+	Format  string `json:"format"`
+	Refresh int    `json:"refresh"`
+}
+
+func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cfg := s.cfgProv.CurrentConfig()
+	dns := cfg.DNS
+
+	resp := dnsResponse{
+		Enabled:  dns.Enabled,
+		Listen:   dns.Listen,
+		Upstream: dns.Upstream,
+	}
+
+	// Convert records map to sorted slice.
+	for name, rec := range dns.Records {
+		resp.Records = append(resp.Records, dnsRecordInfo{
+			Name: name,
+			A:    rec.A,
+			AAAA: rec.AAAA,
+			TTL:  rec.TTL,
+		})
+	}
+	sort.Slice(resp.Records, func(i, j int) bool {
+		return resp.Records[i].Name < resp.Records[j].Name
+	})
+
+	// Rules.
+	for _, rule := range dns.Rules {
+		ri := dnsRuleInfo{
+			Name:     rule.Name,
+			Action:   rule.Action,
+			Upstream: rule.Upstream,
+			Domains:  rule.Domains,
+		}
+		for _, l := range rule.Lists {
+			ri.Lists = append(ri.Lists, dnsListInfo{
+				URL:     l.URL,
+				Format:  l.Format,
+				Refresh: l.Refresh,
+			})
+		}
+		resp.Rules = append(resp.Rules, ri)
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func buildProxyLink(p config.ProxyServerConfig, serverIP string) string {
 	_, port, _ := strings.Cut(p.Listen, ":")
 	if port == "" {

@@ -157,6 +157,30 @@ h2 { font-size: 15px; margin: 16px 0 8px; display: flex; align-items: center; ga
   display: flex; align-items: center; flex-shrink: 0;
 }
 .rename-form .icon-btn-sm:active { opacity: 0.6; }
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+.stat-tile {
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.stat-tile .stat-icon { font-size: 14px; flex-shrink: 0; }
+.stat-tile .stat-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.stat-tile .stat-label {
+  font-size: 11px;
+  color: var(--hint);
+}
 </style>
 </head>
 <body>
@@ -189,6 +213,7 @@ h2 { font-size: 15px; margin: 16px 0 8px; display: flex; align-items: center; ga
   <button class="tab active" onclick="showTab('peers')">👥<span class="tab-label"> Peers</span></button>
   <button class="tab" onclick="showTab('upstreams')">🔗<span class="tab-label"> Upstreams</span></button>
   <button class="tab" onclick="showTab('proxies')">🔌<span class="tab-label"> Proxies</span></button>
+  <button class="tab" onclick="showTab('dns')">🔍<span class="tab-label"> DNS</span></button>
   <button class="tab" onclick="showTab('users')">🔐<span class="tab-label"> Users</span></button>
 </div>
 
@@ -256,7 +281,7 @@ h2 { font-size: 15px; margin: 16px 0 8px; display: flex; align-items: center; ga
   </div>
   <div id="proxy-sub-mtproxy">
     <div id="mtproxy-status"></div>
-    <div id="secrets-list"></div>
+    <div id="proxy-links"></div>
     <div class="input-row">
       <select class="input" id="new-secret-type" style="flex:0.6">
         <option value="faketls">FakeTLS (ee)</option>
@@ -266,7 +291,6 @@ h2 { font-size: 15px; margin: 16px 0 8px; display: flex; align-items: center; ga
       <button class="btn btn-sm" onclick="addSecret()">+ Add Secret</button>
     </div>
     <div id="secret-msg"></div>
-    <div id="proxy-links"></div>
   </div>
   <div id="proxy-sub-socks5" style="display:none">
     <div id="proxies-list-socks5"></div>
@@ -306,6 +330,12 @@ h2 { font-size: 15px; margin: 16px 0 8px; display: flex; align-items: center; ga
   </div>
 </div>
 
+<div id="dns" class="section">
+  <div id="dns-status"></div>
+  <div id="dns-records"></div>
+  <div id="dns-rules"></div>
+</div>
+
 <div id="users" class="section">
   <div id="users-list"></div>
   <h2>Grant Access</h2>
@@ -332,6 +362,8 @@ const initData = tg.initData;
 let data = null;
 let groupsData = null;
 let groupsLoaded = false;
+let dnsData = null;
+let dnsLoaded = false;
 
 function api(method, path, body) {
   const opts = {
@@ -353,7 +385,7 @@ function api(method, path, body) {
 }
 
 function showTab(name) {
-  const sections = ['peers', 'upstreams', 'proxies', 'users'];
+  const sections = ['peers', 'upstreams', 'proxies', 'dns', 'users'];
   document.querySelectorAll('#app > .tabs > .tab').forEach((t, i) => {
     t.classList.toggle('active', sections[i] === name);
   });
@@ -362,6 +394,8 @@ function showTab(name) {
   });
   if (name === 'users' && !usersLoaded) refreshUsers();
   if (name === 'upstreams' && !groupsLoaded) refreshGroups();
+  if (name === 'dns' && !dnsLoaded) refreshDNS();
+  try { sessionStorage.setItem('activeTab', name); } catch(e) {}
 }
 
 function showSubTab(showId, hideId, btn) {
@@ -370,6 +404,7 @@ function showSubTab(showId, hideId, btn) {
   btn.parentElement.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
   if (showId === 'upstream-groups-view' && !groupsLoaded) refreshGroups();
+  try { sessionStorage.setItem('activeUpstreamSubTab', showId); } catch(e) {}
 }
 
 let activeProxySubTab = 'mtproxy';
@@ -383,6 +418,7 @@ function showProxySubTab(type) {
   subs.forEach(s => {
     document.getElementById('proxy-sub-' + s).style.display = s === type ? '' : 'none';
   });
+  try { sessionStorage.setItem('activeProxySubTab', type); } catch(e) {}
 }
 
 function formatBytes(b) {
@@ -494,52 +530,57 @@ function render() {
   const ms = document.getElementById('mtproxy-status');
   if (!data.mtproxy.enabled) {
     ms.innerHTML = '<div class="empty">MTProxy not enabled</div>';
-    document.getElementById('secrets-list').innerHTML = '';
     document.getElementById('proxy-links').innerHTML = '';
   } else {
-    ms.innerHTML = `
-      <div class="card">
-        <div class="meta">
-          <span>Active: ${data.mtproxy.active_connections}</span>
-          <span>Session: ${data.mtproxy.connections}</span>
-        </div>
-        <div class="meta">
-          <span>↑${formatBytes(data.mtproxy.bytes_c2b)} ↓${formatBytes(data.mtproxy.bytes_b2c)}</span>
-          ${data.mtproxy.bytes_c2b_total > 0 ? `<span>Total: ↑${formatBytes(data.mtproxy.bytes_c2b_total)} ↓${formatBytes(data.mtproxy.bytes_b2c_total)}</span>` : ''}
-        </div>
-      </div>
-    `;
-
-    const sl = document.getElementById('secrets-list');
-    if (!data.mtproxy.secrets || data.mtproxy.secrets.length === 0) {
-      sl.innerHTML = '<div class="empty">No secrets</div>';
-    } else {
-      sl.innerHTML = '<h2>🔑 Secrets</h2>' + data.mtproxy.secrets.map(s => `
-        <div class="card">
-          <div class="card-header">
-            <span class="name secret-text">${truncSecret(s.secret)}</span>
-            <button class="btn btn-sm btn-danger" onclick="deleteSecret('${s.secret}')">Delete</button>
-          </div>
-          <div class="meta">
-            <span>Last: ${timeAgo(s.last_connection_unix)}</span>
-            <span>Conns: ${s.connections}${s.connections_total > 0 ? ' / ' + s.connections_total + ' total' : ''}</span>
-          </div>
-        </div>
-      `).join('');
+    const tiles = [
+      { icon: '⚡', value: data.mtproxy.active_connections, label: 'Active' },
+      { icon: '🔗', value: data.mtproxy.connections, label: 'Session' },
+      { icon: '↑', value: formatBytes(data.mtproxy.bytes_c2b), label: 'Upload' },
+      { icon: '↓', value: formatBytes(data.mtproxy.bytes_b2c), label: 'Download' },
+    ];
+    if (data.mtproxy.bytes_c2b_total > 0) {
+      tiles.push({ icon: '⬆', value: formatBytes(data.mtproxy.bytes_c2b_total), label: 'Total Up' });
+      tiles.push({ icon: '⬇', value: formatBytes(data.mtproxy.bytes_b2c_total), label: 'Total Down' });
     }
+    ms.innerHTML = `<div class="card"><div class="stats-grid">${tiles.map(t =>
+      `<div class="stat-tile">
+        <span class="stat-icon">${t.icon}</span>
+        <span class="stat-value">${t.value}</span>
+        <span class="stat-label">${t.label}</span>
+      </div>`
+    ).join('')}</div></div>`;
 
     const ll = document.getElementById('proxy-links');
+    const secretMap = {};
+    (data.mtproxy.secrets || []).forEach(s => { secretMap[s.secret] = s; });
+
+    function secretTypeBadge(secret) {
+      if (secret.startsWith('ee')) return '<span title="FakeTLS" style="cursor:default">🛡️</span>';
+      if (secret.startsWith('dd')) return '<span title="Padded" style="cursor:default">📦</span>';
+      return '<span title="Basic" style="cursor:default">🔓</span>';
+    }
+
     if (data.mtproxy.links && data.mtproxy.links.length > 0) {
-      ll.innerHTML = '<h2>🔗 Proxy Links</h2>' + data.mtproxy.links.map(l => `
-        <div class="card proxy-link-card" id="plink-${l.secret}">
-          <span class="name" onclick="startRenameLink('${l.secret}', this)">📡 ${l.name}</span>
-          <button class="icon-btn" onclick="startRenameLink('${l.secret}', this.parentElement.querySelector('.name'))" title="Rename">✏️</button>
-          <button class="icon-btn" onclick="copyText('${l.url}')" title="Copy link">📋</button>
-          <a class="icon-btn" href="${l.url}" target="_blank" title="Open link">🔗</a>
-        </div>
-      `).join('');
+      ll.innerHTML = '<hr style="border:none;border-top:1px solid color-mix(in srgb,var(--hint) 30%,transparent);margin:12px 0"><h2>🔗 Proxy Links</h2>' + data.mtproxy.links.map(l => {
+        const s = secretMap[l.secret];
+        const statsHtml = s ? `<div class="meta">
+            <span>Last: ${timeAgo(s.last_connection_unix)}</span>
+            <span>Conns: ${s.connections}${s.connections_total > 0 ? ' / ' + s.connections_total + ' total' : ''}</span>
+          </div>` : '';
+        return `
+        <div class="card" id="plink-${l.secret}">
+          <div class="proxy-link-card">
+            <span class="name" onclick="startRenameLink('${l.secret}', this)">${secretTypeBadge(l.secret)} ${l.name}</span>
+            <button class="icon-btn" onclick="startRenameLink('${l.secret}', this.parentElement.querySelector('.name'))" title="Rename">✏️</button>
+            <button class="icon-btn" onclick="copyText('${l.url}')" title="Copy link">📋</button>
+            <a class="icon-btn" href="${l.url}" target="_blank" title="Open link">🔗</a>
+            <button class="icon-btn" onclick="deleteSecret('${l.secret}')" title="Delete secret" style="color:#e53935">🗑️</button>
+          </div>
+          ${statsHtml}
+        </div>`;
+      }).join('');
     } else {
-      ll.innerHTML = '';
+      ll.innerHTML = '<div class="empty">No secrets</div>';
     }
   }
 
@@ -620,7 +661,7 @@ function addSecret() {
 function startRenameLink(secret, nameEl) {
   const card = document.getElementById('plink-' + secret);
   if (!card || card.querySelector('.rename-form')) return;
-  const oldName = nameEl.textContent.replace(/^📡\s*/, '');
+  const oldName = nameEl.textContent.replace(/^[🛡️📦🔓]\s*/u, '');
   const form = document.createElement('div');
   form.className = 'rename-form';
   const input = document.createElement('input');
@@ -801,6 +842,92 @@ function deleteUser(id, name) {
   });
 }
 
+// DNS
+function refreshDNS() {
+  api('GET', '/api/dns').then(d => {
+    dnsData = d;
+    dnsLoaded = true;
+    renderDNS();
+  });
+}
+
+function renderDNS() {
+  if (!dnsData) return;
+
+  // Status card
+  const ds = document.getElementById('dns-status');
+  if (!dnsData.enabled) {
+    ds.innerHTML = '<div class="empty">DNS proxy not enabled</div>';
+    document.getElementById('dns-records').innerHTML = '';
+    document.getElementById('dns-rules').innerHTML = '';
+    return;
+  }
+
+  ds.innerHTML = `<div class="card">
+    <div class="card-header">
+      <span class="name">🔍 DNS Proxy</span>
+      <span style="color:#4caf50;font-size:12px">● Enabled</span>
+    </div>
+    <div class="meta">
+      <span>Listen: ${dnsData.listen}</span>
+      <span>Upstream: ${dnsData.upstream}</span>
+    </div>
+  </div>`;
+
+  // Records
+  const rl = document.getElementById('dns-records');
+  if (!dnsData.records || dnsData.records.length === 0) {
+    rl.innerHTML = '<h2>📋 Static Records</h2><div class="empty">No static records configured</div>';
+  } else {
+    rl.innerHTML = '<h2>📋 Static Records</h2>' + dnsData.records.map(r => `
+      <div class="card">
+        <div class="card-header">
+          <span class="name" style="font-family:monospace;font-size:13px">${r.name}</span>
+          <span class="meta">TTL: ${r.ttl || 60}s</span>
+        </div>
+        <div class="meta">
+          ${r.a && r.a.length > 0 ? '<span>A: ' + r.a.join(', ') + '</span>' : ''}
+          ${r.aaaa && r.aaaa.length > 0 ? '<span>AAAA: ' + r.aaaa.join(', ') + '</span>' : ''}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // Rules
+  const ul = document.getElementById('dns-rules');
+  if (!dnsData.rules || dnsData.rules.length === 0) {
+    ul.innerHTML = '<h2>📜 Rules</h2><div class="empty">No DNS rules configured</div>';
+  } else {
+    ul.innerHTML = '<h2>📜 Rules</h2>' + dnsData.rules.map(r => {
+      const actionIcon = r.action === 'block' ? '🚫' : '↗️';
+      const actionLabel = r.action === 'block' ? 'Block' : 'Upstream: ' + r.upstream;
+      const domainsHtml = r.domains && r.domains.length > 0
+        ? '<div class="meta" style="margin-top:4px"><span>Domains: ' + r.domains.map(d => '<code style="background:var(--bg);padding:1px 4px;border-radius:3px;font-size:11px">' + d + '</code>').join(' ') + '</span></div>'
+        : '';
+      const listsHtml = r.lists && r.lists.length > 0
+        ? '<div class="meta" style="margin-top:4px">' + r.lists.map(l => '<div><span>📥 ' + l.url + '</span><span class="meta"> (' + (l.format || 'domains') + ', refresh: ' + formatRefresh(l.refresh) + ')</span></div>').join('') + '</div>'
+        : '';
+      return `
+      <div class="card">
+        <div class="card-header">
+          <span class="name">${actionIcon} ${r.name}</span>
+          <span class="meta">${actionLabel}</span>
+        </div>
+        ${domainsHtml}
+        ${listsHtml}
+      </div>`;
+    }).join('');
+  }
+}
+
+function formatRefresh(seconds) {
+  if (!seconds) return '24h';
+  if (seconds >= 86400) return Math.floor(seconds / 86400) + 'd';
+  if (seconds >= 3600) return Math.floor(seconds / 3600) + 'h';
+  if (seconds >= 60) return Math.floor(seconds / 60) + 'm';
+  return seconds + 's';
+}
+
 // Groups
 function refreshGroups() {
   api('GET', '/api/groups').then(d => {
@@ -904,6 +1031,21 @@ function removeFromGroup(upstreamName, groupName) {
     refresh();
   });
 }
+
+// Restore active tab from session on reload.
+try {
+  const savedTab = sessionStorage.getItem('activeTab');
+  if (savedTab) showTab(savedTab);
+  const savedProxy = sessionStorage.getItem('activeProxySubTab');
+  if (savedProxy) showProxySubTab(savedProxy);
+  const savedUpstream = sessionStorage.getItem('activeUpstreamSubTab');
+  if (savedUpstream) {
+    const hideId = savedUpstream === 'upstream-groups-view' ? 'upstream-list-view' : 'upstream-groups-view';
+    const btns = document.querySelectorAll('#upstreams > .sub-tabs > .tab');
+    const btn = savedUpstream === 'upstream-groups-view' ? btns[1] : btns[0];
+    showSubTab(savedUpstream, hideId, btn);
+  }
+} catch(e) {}
 
 // Initial load
 refresh();

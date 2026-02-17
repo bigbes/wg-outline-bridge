@@ -372,20 +372,7 @@ func (b *Bridge) Reload() error {
 	b.cfg = newCfg
 
 	// Update MTProxy secrets at runtime
-	if b.mtSrv != nil && len(newCfg.MTProxy.Secrets) > 0 {
-		secrets := make([]mpcrypto.Secret, 0, len(newCfg.MTProxy.Secrets))
-		for _, s := range newCfg.MTProxy.Secrets {
-			secret, err := mpcrypto.ParseSecret(s)
-			if err != nil {
-				b.logger.Error("failed to parse mtproxy secret during reload", "err", err)
-				continue
-			}
-			secrets = append(secrets, secret)
-		}
-		if len(secrets) > 0 {
-			b.mtSrv.UpdateSecrets(secrets, newCfg.MTProxy.Secrets)
-		}
-	}
+	b.reloadMTProxySecrets()
 
 	if b.peerMon != nil {
 		b.peerMon.updatePeers(newCfg.Peers)
@@ -776,8 +763,8 @@ func (b *Bridge) DeletePeer(name string) error {
 	return nil
 }
 
-// AddSecret generates a new MTProxy secret, saves it to the database.
-// The MTProxy server needs a restart to pick up new secrets.
+// AddSecret generates a new MTProxy secret, saves it to the database,
+// and live-reloads the MTProxy server to accept the new secret immediately.
 func (b *Bridge) AddSecret(secretType, comment string) (string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -808,13 +795,14 @@ func (b *Bridge) AddSecret(secretType, comment string) (string, error) {
 	}
 
 	b.cfg.MTProxy.Secrets = append(b.cfg.MTProxy.Secrets, secretHex)
+	b.reloadMTProxySecrets()
 
 	b.logger.Info("mtproxy secret added", "type", secretType)
 	return secretHex, nil
 }
 
-// DeleteSecret removes an MTProxy secret from the database.
-// The MTProxy server needs a restart to stop accepting the deleted secret.
+// DeleteSecret removes an MTProxy secret from the database
+// and live-reloads the MTProxy server to stop accepting it immediately.
 func (b *Bridge) DeleteSecret(secretHex string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -838,9 +826,29 @@ func (b *Bridge) DeleteSecret(secretHex string) error {
 		}
 	}
 	b.cfg.MTProxy.Secrets = secrets
+	b.reloadMTProxySecrets()
 
 	b.logger.Info("mtproxy secret deleted")
 	return nil
+}
+
+// reloadMTProxySecrets parses the current config secrets and pushes them
+// to the running MTProxy server. Must be called with b.mu held.
+func (b *Bridge) reloadMTProxySecrets() {
+	if b.mtSrv == nil {
+		return
+	}
+	hexes := b.cfg.MTProxy.Secrets
+	secrets := make([]mpcrypto.Secret, 0, len(hexes))
+	for _, s := range hexes {
+		secret, err := mpcrypto.ParseSecret(s)
+		if err != nil {
+			b.logger.Error("failed to parse mtproxy secret", "err", err)
+			continue
+		}
+		secrets = append(secrets, secret)
+	}
+	b.mtSrv.UpdateSecrets(secrets, hexes)
 }
 
 // AddProxy saves a new proxy server config to the database.
