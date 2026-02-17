@@ -41,14 +41,14 @@ type peerInfo struct {
 }
 
 type mtproxyInfo struct {
-	Enabled           bool         `json:"enabled"`
-	Connections       int64        `json:"connections"`
-	ActiveConnections int64        `json:"active_connections"`
-	BytesC2B          int64        `json:"bytes_c2b"`
-	BytesB2C          int64        `json:"bytes_b2c"`
-	BytesC2BTotal     int64        `json:"bytes_c2b_total"`
-	BytesB2CTotal     int64        `json:"bytes_b2c_total"`
-	Secrets           []secretInfo `json:"secrets"`
+	Enabled           bool               `json:"enabled"`
+	Connections       int64              `json:"connections"`
+	ActiveConnections int64              `json:"active_connections"`
+	BytesC2B          int64              `json:"bytes_c2b"`
+	BytesB2C          int64              `json:"bytes_b2c"`
+	BytesC2BTotal     int64              `json:"bytes_c2b_total"`
+	BytesB2CTotal     int64              `json:"bytes_b2c_total"`
+	Secrets           []secretInfo       `json:"secrets"`
 	Links             []config.ProxyLink `json:"links"`
 }
 

@@ -118,17 +118,17 @@ type ruleConfig interface {
 
 type ipRuleAdapter config.IPRuleConfig
 
-func (a ipRuleAdapter) actionType() string     { return a.Action }
-func (a ipRuleAdapter) outlineName() string    { return a.Outline }
-func (a ipRuleAdapter) upstreamGroup() string  { return a.UpstreamGroup }
-func (a ipRuleAdapter) ruleName() string       { return a.Name }
+func (a ipRuleAdapter) actionType() string    { return a.Action }
+func (a ipRuleAdapter) outlineName() string   { return a.Outline }
+func (a ipRuleAdapter) upstreamGroup() string { return a.UpstreamGroup }
+func (a ipRuleAdapter) ruleName() string      { return a.Name }
 
 type sniRuleAdapter config.SNIRuleConfig
 
-func (a sniRuleAdapter) actionType() string     { return a.Action }
-func (a sniRuleAdapter) outlineName() string    { return a.Outline }
-func (a sniRuleAdapter) upstreamGroup() string  { return a.UpstreamGroup }
-func (a sniRuleAdapter) ruleName() string       { return a.Name }
+func (a sniRuleAdapter) actionType() string    { return a.Action }
+func (a sniRuleAdapter) outlineName() string   { return a.Outline }
+func (a sniRuleAdapter) upstreamGroup() string { return a.UpstreamGroup }
+func (a sniRuleAdapter) ruleName() string      { return a.Name }
 
 func parseAction(rule ruleConfig) Decision {
 	d := Decision{

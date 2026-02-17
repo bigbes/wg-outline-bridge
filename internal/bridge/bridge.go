@@ -38,14 +38,14 @@ type Bridge struct {
 	logger     *slog.Logger
 	startTime  time.Time
 
-	mu        sync.Mutex
-	cfg       *config.Config
-	wgDev     wg.Device
-	upstreams *upstream.Manager
-	tracker   *proxy.ConnTracker
-	peerMon       *peerMonitor
-	mtSrv         *mtproxy.Server
-	statsStore    *statsdb.Store
+	mu         sync.Mutex
+	cfg        *config.Config
+	wgDev      wg.Device
+	upstreams  *upstream.Manager
+	tracker    *proxy.ConnTracker
+	peerMon    *peerMonitor
+	mtSrv      *mtproxy.Server
+	statsStore *statsdb.Store
 }
 
 func New(configPath string, cfg *config.Config, logger *slog.Logger) *Bridge {

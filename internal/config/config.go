@@ -195,7 +195,7 @@ type ProxyServerConfig struct {
 	Name          string         `yaml:"name"`
 	Type          string         `yaml:"type"` // "socks5", "http", "https"
 	Listen        string         `yaml:"listen"`
-	Outline       string         `yaml:"outline"`  // optional named outline, default = default
+	Outline       string         `yaml:"outline"` // optional named outline, default = default
 	UpstreamGroup string         `yaml:"upstream_group"`
 	Username      string         `yaml:"username"` // optional auth
 	Password      string         `yaml:"password"`
