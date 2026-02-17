@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"sync"
 	"time"
 
 	dnspkg "github.com/miekg/dns"
@@ -55,6 +56,7 @@ func (p DomainPattern) matches(fqdn string) bool {
 type Server struct {
 	upstream string
 	records  map[string]Record
+	mu       sync.RWMutex
 	rules    []Rule
 	logger   *slog.Logger
 	server   *dnspkg.Server
@@ -107,6 +109,20 @@ func (s *Server) Stop() error {
 	return s.server.Shutdown()
 }
 
+// UpdateRules replaces the current rules with new ones, starting any
+// blocklist loaders. Must not be called concurrently with Start.
+func (s *Server) UpdateRules(ctx context.Context, rules []Rule) {
+	for i := range rules {
+		if rules[i].Blocklist != nil {
+			rules[i].Blocklist.Start(ctx)
+		}
+	}
+
+	s.mu.Lock()
+	s.rules = rules
+	s.mu.Unlock()
+}
+
 func (s *Server) ServeDNS(w dnspkg.ResponseWriter, r *dnspkg.Msg) {
 	if len(r.Question) == 0 {
 		return
@@ -121,9 +137,13 @@ func (s *Server) ServeDNS(w dnspkg.ResponseWriter, r *dnspkg.Msg) {
 		return
 	}
 
+	s.mu.RLock()
+	rules := s.rules
+	s.mu.RUnlock()
+
 	// 2. Rules (first match wins)
-	for i := range s.rules {
-		rule := &s.rules[i]
+	for i := range rules {
+		rule := &rules[i]
 		if !s.ruleMatches(rule, name) {
 			continue
 		}

@@ -40,11 +40,13 @@ type Bridge struct {
 
 	mu         sync.Mutex
 	cfg        *config.Config
+	ctx        context.Context
 	wgDev      wg.Device
 	upstreams  *upstream.Manager
 	tracker    *proxy.ConnTracker
 	peerMon    *peerMonitor
 	mtSrv      *mtproxy.Server
+	dnsSrv     *dns.Server
 	statsStore *statsdb.Store
 }
 
@@ -58,6 +60,7 @@ func New(configPath string, cfg *config.Config, logger *slog.Logger) *Bridge {
 }
 
 func (b *Bridge) Run(ctx context.Context) error {
+	b.ctx = ctx
 	addr, _, err := b.cfg.WireGuard.ParseAddress()
 	if err != nil {
 		return fmt.Errorf("parsing wireguard address: %w", err)
@@ -173,6 +176,23 @@ func (b *Bridge) Run(ctx context.Context) error {
 		if err := b.upstreams.Apply(b.cfg.ToUpstreamSpecs()); err != nil {
 			b.logger.Error("failed to re-apply upstream specs from db", "err", err)
 		}
+
+		// Seed config-file DNS rules into DB, then use DB as source of truth.
+		if len(b.cfg.DNS.Rules) > 0 {
+			imported, err := store.ImportDNSRules(b.cfg.DNS.Rules)
+			if err != nil {
+				b.logger.Error("failed to import dns rules to database", "err", err)
+			} else if imported > 0 {
+				b.logger.Info("imported file dns rules to database", "count", imported)
+			}
+		}
+		dbDNSRules, err := store.ListDNSRules()
+		if err != nil {
+			b.logger.Error("failed to list db dns rules", "err", err)
+		}
+		if len(dbDNSRules) > 0 {
+			b.cfg.DNS.Rules = dbDNSRules
+		}
 	}
 
 	var geoMgr *geoip.Manager
@@ -245,11 +265,11 @@ func (b *Bridge) Run(ctx context.Context) error {
 	if b.cfg.DNS.Enabled {
 		records := buildDNSRecords(b.cfg.DNS)
 		rules := buildDNSRules(b.cfg.DNS, b.logger)
-		dnsServer := dns.New(b.cfg.DNS.Listen, b.cfg.DNS.Upstream, records, rules, b.logger)
-		if err := dnsServer.Start(ctx); err != nil {
+		b.dnsSrv = dns.New(b.cfg.DNS.Listen, b.cfg.DNS.Upstream, records, rules, b.logger)
+		if err := b.dnsSrv.Start(ctx); err != nil {
 			return fmt.Errorf("starting dns server: %w", err)
 		}
-		defer dnsServer.Stop()
+		defer b.dnsSrv.Stop()
 	}
 
 	b.peerMon = newPeerMonitor(b.wgDev, b.cfg.Peers, b.logger)
@@ -321,6 +341,12 @@ func (b *Bridge) Reload() error {
 		} else if len(dbUpstreams) > 0 {
 			newCfg.Upstreams = dbUpstreams
 		}
+		dbDNSRules, err := b.statsStore.ListDNSRules()
+		if err != nil {
+			b.logger.Error("failed to load dns rules from database", "err", err)
+		} else if len(dbDNSRules) > 0 {
+			newCfg.DNS.Rules = dbDNSRules
+		}
 	}
 
 	// Reload upstreams.
@@ -373,6 +399,9 @@ func (b *Bridge) Reload() error {
 
 	// Update MTProxy secrets at runtime
 	b.reloadMTProxySecrets()
+
+	// Reload DNS rules at runtime
+	b.reloadDNSRules()
 
 	if b.peerMon != nil {
 		b.peerMon.updatePeers(newCfg.Peers)
@@ -1000,6 +1029,72 @@ func (b *Bridge) DeleteUpstream(name string) error {
 
 	b.logger.Info("upstream deleted", "name", name)
 	return nil
+}
+
+// AddDNSRule saves a new DNS rule to the database and hot-reloads the DNS server.
+func (b *Bridge) AddDNSRule(r config.DNSRuleConfig) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	for _, existing := range b.cfg.DNS.Rules {
+		if existing.Name == r.Name {
+			return fmt.Errorf("dns rule %q already exists", r.Name)
+		}
+	}
+
+	if err := b.statsStore.AddDNSRule(r); err != nil {
+		return fmt.Errorf("saving dns rule: %w", err)
+	}
+
+	b.cfg.DNS.Rules = append(b.cfg.DNS.Rules, r)
+	b.reloadDNSRules()
+
+	b.logger.Info("dns rule added", "name", r.Name, "action", r.Action)
+	return nil
+}
+
+// DeleteDNSRule removes a DNS rule from the database and hot-reloads the DNS server.
+func (b *Bridge) DeleteDNSRule(name string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	found, err := b.statsStore.DeleteDNSRule(name)
+	if err != nil {
+		return fmt.Errorf("deleting dns rule: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("dns rule %q not found", name)
+	}
+
+	rules := make([]config.DNSRuleConfig, 0, len(b.cfg.DNS.Rules))
+	for _, r := range b.cfg.DNS.Rules {
+		if r.Name != name {
+			rules = append(rules, r)
+		}
+	}
+	b.cfg.DNS.Rules = rules
+	b.reloadDNSRules()
+
+	b.logger.Info("dns rule deleted", "name", name)
+	return nil
+}
+
+// reloadDNSRules rebuilds runtime DNS rules and hot-reloads the DNS server.
+// Must be called with b.mu held.
+func (b *Bridge) reloadDNSRules() {
+	if b.dnsSrv == nil {
+		return
+	}
+	rules := buildDNSRules(b.cfg.DNS, b.logger)
+	b.dnsSrv.UpdateRules(b.ctx, rules)
 }
 
 // getPeerStatuses reads peer status from the WireGuard device via IPC.

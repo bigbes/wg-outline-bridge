@@ -334,6 +334,31 @@ h2 { font-size: 15px; margin: 16px 0 8px; display: flex; align-items: center; ga
   <div id="dns-status"></div>
   <div id="dns-records"></div>
   <div id="dns-rules"></div>
+  <h2>➕ Add Rule</h2>
+  <div style="display:flex;flex-direction:column;gap:6px">
+    <div class="input-row">
+      <input class="input" id="new-dns-rule-name" placeholder="Rule name">
+      <select class="input" id="new-dns-rule-action" style="flex:0.6" onchange="dnsActionChanged()">
+        <option value="block">🚫 Block</option>
+        <option value="upstream">↗️ Upstream</option>
+      </select>
+    </div>
+    <div class="input-row" id="dns-upstream-row" style="display:none">
+      <input class="input" id="new-dns-rule-upstream" placeholder="Upstream (e.g. 8.8.8.8:53)">
+    </div>
+    <div class="input-row">
+      <input class="input" id="new-dns-rule-domains" placeholder="Domains (comma-separated, e.g. *.ads.com, tracker.net)">
+    </div>
+    <div class="input-row">
+      <input class="input" id="new-dns-rule-list-url" placeholder="Blocklist URL (optional)">
+      <select class="input" id="new-dns-rule-list-format" style="flex:0.5">
+        <option value="domains">domains</option>
+        <option value="hosts">hosts</option>
+      </select>
+    </div>
+    <button class="btn btn-sm" onclick="addDNSRule()">+ Add Rule</button>
+  </div>
+  <div id="dns-msg"></div>
 </div>
 
 <div id="users" class="section">
@@ -907,17 +932,72 @@ function renderDNS() {
       const listsHtml = r.lists && r.lists.length > 0
         ? '<div class="meta" style="margin-top:4px">' + r.lists.map(l => '<div><span>📥 ' + l.url + '</span><span class="meta"> (' + (l.format || 'domains') + ', refresh: ' + formatRefresh(l.refresh) + ')</span></div>').join('') + '</div>'
         : '';
+      const escapedName = r.name.replace(/'/g, "\\'");
       return `
       <div class="card">
         <div class="card-header">
           <span class="name">${actionIcon} ${r.name}</span>
-          <span class="meta">${actionLabel}</span>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span class="meta">${actionLabel}</span>
+            <button class="btn btn-sm btn-danger" onclick="deleteDNSRule('${escapedName}')">✕</button>
+          </div>
         </div>
         ${domainsHtml}
         ${listsHtml}
       </div>`;
     }).join('');
   }
+}
+
+function dnsActionChanged() {
+  const action = document.getElementById('new-dns-rule-action').value;
+  document.getElementById('dns-upstream-row').style.display = action === 'upstream' ? '' : 'none';
+}
+
+function addDNSRule() {
+  const name = document.getElementById('new-dns-rule-name').value.trim();
+  const action = document.getElementById('new-dns-rule-action').value;
+  const upstream = document.getElementById('new-dns-rule-upstream').value.trim();
+  const domainsRaw = document.getElementById('new-dns-rule-domains').value.trim();
+  const listUrl = document.getElementById('new-dns-rule-list-url').value.trim();
+  const listFormat = document.getElementById('new-dns-rule-list-format').value;
+
+  if (!name) return;
+
+  const domains = domainsRaw ? domainsRaw.split(',').map(d => d.trim()).filter(Boolean) : [];
+  const lists = [];
+  if (listUrl) {
+    lists.push({ url: listUrl, format: listFormat, refresh: 86400 });
+  }
+
+  if (domains.length === 0 && lists.length === 0) {
+    showMsg('dns-msg', 'At least one domain or blocklist URL is required', true);
+    return;
+  }
+
+  const body = { name, action, domains, lists };
+  if (action === 'upstream') body.upstream = upstream;
+
+  api('POST', '/api/dns', body).then(d => {
+    if (d.error) { showMsg('dns-msg', d.error, true); return; }
+    document.getElementById('new-dns-rule-name').value = '';
+    document.getElementById('new-dns-rule-upstream').value = '';
+    document.getElementById('new-dns-rule-domains').value = '';
+    document.getElementById('new-dns-rule-list-url').value = '';
+    showMsg('dns-msg', 'Rule "' + name + '" added', false);
+    refreshDNS();
+  });
+}
+
+function deleteDNSRule(name) {
+  tg.showConfirm('Delete DNS rule "' + name + '"?', (ok) => {
+    if (!ok) return;
+    api('DELETE', '/api/dns/rules/' + encodeURIComponent(name)).then(d => {
+      if (d.error) { showMsg('dns-msg', d.error, true); return; }
+      showMsg('dns-msg', 'Rule deleted', false);
+      refreshDNS();
+    });
+  });
 }
 
 function formatRefresh(seconds) {

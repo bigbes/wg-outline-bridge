@@ -89,6 +89,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/upstreams/", s.authMiddleware(s.handleUpstreamsRoute))
 	mux.HandleFunc("/api/groups", s.authMiddleware(s.handleGroups))
 	mux.HandleFunc("/api/dns", s.authMiddleware(s.handleDNS))
+	mux.HandleFunc("/api/dns/rules/", s.authMiddleware(s.handleDeleteDNSRule))
 	mux.HandleFunc("/api/users", s.authMiddleware(s.handleUsers))
 	mux.HandleFunc("/api/users/", s.authMiddleware(s.handleDeleteUser))
 

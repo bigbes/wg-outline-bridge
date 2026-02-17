@@ -2,6 +2,7 @@ package statsdb
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -133,6 +134,17 @@ CREATE TABLE IF NOT EXISTS allowed_users (
   last_name TEXT NOT NULL DEFAULT '',
   photo_url TEXT NOT NULL DEFAULT '',
   created_unix INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE TABLE IF NOT EXISTS dns_rules (
+  name TEXT PRIMARY KEY,
+  action TEXT NOT NULL,
+  upstream TEXT NOT NULL DEFAULT '',
+  domains_json TEXT NOT NULL DEFAULT '[]',
+  lists_json TEXT NOT NULL DEFAULT '[]',
+  priority INTEGER NOT NULL DEFAULT 0,
+  created_unix INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_unix INTEGER NOT NULL DEFAULT (unixepoch())
 );`
 	if _, err := s.db.Exec(ddl); err != nil {
 		return fmt.Errorf("statsdb: init schema: %w", err)
@@ -968,4 +980,124 @@ func (s *Store) IsAllowedUser(userID int64) (bool, error) {
 		return false, fmt.Errorf("statsdb: check allowed user %d: %w", userID, err)
 	}
 	return count > 0, nil
+}
+
+// ---------------------------------------------------------------------------
+// DNS Rule CRUD
+// ---------------------------------------------------------------------------
+
+// ListDNSRules returns all DNS rules ordered by priority.
+func (s *Store) ListDNSRules() ([]config.DNSRuleConfig, error) {
+	rows, err := s.db.Query(
+		`SELECT name, action, upstream, domains_json, lists_json
+		 FROM dns_rules ORDER BY priority ASC, created_unix ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list dns rules: %w", err)
+	}
+	defer rows.Close()
+
+	var out []config.DNSRuleConfig
+	for rows.Next() {
+		var r config.DNSRuleConfig
+		var domainsJSON, listsJSON string
+		if err := rows.Scan(&r.Name, &r.Action, &r.Upstream, &domainsJSON, &listsJSON); err != nil {
+			return nil, fmt.Errorf("statsdb: scan dns rule: %w", err)
+		}
+		if domainsJSON != "" && domainsJSON != "[]" {
+			if err := json.Unmarshal([]byte(domainsJSON), &r.Domains); err != nil {
+				return nil, fmt.Errorf("statsdb: unmarshal domains for %q: %w", r.Name, err)
+			}
+		}
+		if listsJSON != "" && listsJSON != "[]" {
+			if err := json.Unmarshal([]byte(listsJSON), &r.Lists); err != nil {
+				return nil, fmt.Errorf("statsdb: unmarshal lists for %q: %w", r.Name, err)
+			}
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("statsdb: iterate dns rules: %w", err)
+	}
+	return out, nil
+}
+
+// AddDNSRule inserts a new DNS rule with the next available priority.
+func (s *Store) AddDNSRule(r config.DNSRuleConfig) error {
+	domainsJSON, err := json.Marshal(r.Domains)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal domains: %w", err)
+	}
+	listsJSON, err := json.Marshal(r.Lists)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal lists: %w", err)
+	}
+
+	_, err = s.db.Exec(
+		`INSERT INTO dns_rules (name, action, upstream, domains_json, lists_json, priority)
+		 VALUES (?, ?, ?, ?, ?, COALESCE((SELECT MAX(priority) FROM dns_rules), -1) + 1)`,
+		r.Name, r.Action, r.Upstream, string(domainsJSON), string(listsJSON),
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: add dns rule %q: %w", r.Name, err)
+	}
+	return nil
+}
+
+// DeleteDNSRule deletes a DNS rule by name.
+func (s *Store) DeleteDNSRule(name string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM dns_rules WHERE name = ?`, name)
+	if err != nil {
+		return false, fmt.Errorf("statsdb: delete dns rule %q: %w", name, err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ImportDNSRules inserts DNS rules from a list, skipping names that already exist.
+// Rules are assigned incrementing priorities starting from the current max.
+func (s *Store) ImportDNSRules(rules []config.DNSRuleConfig) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Get current max priority.
+	var maxPriority int
+	err = tx.QueryRow(`SELECT COALESCE(MAX(priority), -1) FROM dns_rules`).Scan(&maxPriority)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: get max priority: %w", err)
+	}
+
+	stmt, err := tx.Prepare(
+		`INSERT OR IGNORE INTO dns_rules (name, action, upstream, domains_json, lists_json, priority)
+		 VALUES (?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: prepare import dns rules: %w", err)
+	}
+	defer stmt.Close()
+
+	var count int
+	for _, r := range rules {
+		domainsJSON, err := json.Marshal(r.Domains)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: marshal domains for %q: %w", r.Name, err)
+		}
+		listsJSON, err := json.Marshal(r.Lists)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: marshal lists for %q: %w", r.Name, err)
+		}
+		maxPriority++
+		res, err := stmt.Exec(r.Name, r.Action, r.Upstream, string(domainsJSON), string(listsJSON), maxPriority)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: import dns rule %q: %w", r.Name, err)
+		}
+		n, _ := res.RowsAffected()
+		count += int(n)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("statsdb: commit import dns rules: %w", err)
+	}
+	return count, nil
 }

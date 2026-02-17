@@ -911,7 +911,13 @@ type dnsListInfo struct {
 }
 
 func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		// fall through to GET handler below
+	case http.MethodPost:
+		s.handleAddDNSRule(w, r)
+		return
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -957,6 +963,86 @@ func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleAddDNSRule(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name     string   `json:"name"`
+		Action   string   `json:"action"`
+		Upstream string   `json:"upstream"`
+		Domains  []string `json:"domains"`
+		Lists    []struct {
+			URL     string `json:"url"`
+			Format  string `json:"format"`
+			Refresh int    `json:"refresh"`
+		} `json:"lists"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
+	if req.Action != "block" && req.Action != "upstream" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action must be 'block' or 'upstream'"})
+		return
+	}
+	if req.Action == "upstream" && req.Upstream == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "upstream is required for upstream action"})
+		return
+	}
+	if len(req.Domains) == 0 && len(req.Lists) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one domain or list is required"})
+		return
+	}
+
+	rule := config.DNSRuleConfig{
+		Name:     req.Name,
+		Action:   req.Action,
+		Upstream: req.Upstream,
+		Domains:  req.Domains,
+	}
+	for _, l := range req.Lists {
+		format := l.Format
+		if format == "" {
+			format = "domains"
+		}
+		rule.Lists = append(rule.Lists, config.DNSListConfig{
+			URL:     l.URL,
+			Format:  format,
+			Refresh: l.Refresh,
+		})
+	}
+
+	if err := s.manager.AddDNSRule(rule); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"name": req.Name, "status": "ok"})
+}
+
+func (s *Server) handleDeleteDNSRule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	name := strings.TrimPrefix(r.URL.Path, "/api/dns/rules/")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule name is required"})
+		return
+	}
+
+	if err := s.manager.DeleteDNSRule(name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func buildProxyLink(p config.ProxyServerConfig, serverIP string) string {
