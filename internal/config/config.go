@@ -179,7 +179,6 @@ type MTProxyConfig struct {
 	Outline       string           `yaml:"outline"`
 	UpstreamGroup string           `yaml:"upstream_group"`
 	Secrets       []string         `yaml:"secrets"`
-	SecretsFile   string           `yaml:"secrets_file"`
 	StatsAddr     string           `yaml:"stats_addr"`
 	FakeTLS       FakeTLSConfig    `yaml:"fake_tls"`
 	Endpoints     map[int][]string `yaml:"endpoints"`
@@ -305,8 +304,8 @@ func Load(path string) (*Config, error) {
 			cfg.Outlines[i].HealthCheck.Target = "1.1.1.1:80"
 		}
 	}
-	if !hasDefault && len(cfg.Upstreams) == 0 {
-		return nil, fmt.Errorf("no default outline configured: set default: true on one outline entry")
+	if !hasDefault && len(cfg.Outlines) > 0 {
+		cfg.Outlines[0].Default = true
 	}
 
 	// Normalize outlines → upstreams for backward compatibility.
@@ -375,14 +374,6 @@ func Load(path string) (*Config, error) {
 		if len(cfg.MTProxy.Listen) == 0 {
 			return nil, fmt.Errorf("mtproxy: at least one listen address is required")
 		}
-		if cfg.MTProxy.SecretsFile == "" {
-			cfg.MTProxy.SecretsFile = filepath.Join(filepath.Dir(path), "mtproxy.secrets")
-		}
-		fileSecrets, err := LoadSecretsFile(cfg.MTProxy.SecretsFile)
-		if err != nil && !os.IsNotExist(err) {
-			return nil, fmt.Errorf("mtproxy: loading secrets file: %w", err)
-		}
-		cfg.MTProxy.Secrets = append(cfg.MTProxy.Secrets, fileSecrets...)
 		if cfg.MTProxy.FakeTLS.MaxClockSkewSeconds == 0 {
 			cfg.MTProxy.FakeTLS.MaxClockSkewSeconds = 600
 		}
@@ -841,52 +832,16 @@ func (c *WireGuardConfig) ToUAPI(peers map[string]PeerConfig) (string, error) {
 	return b.String(), nil
 }
 
-// LoadSecretsFile reads secrets from a file, one per line.
-// Supports line comments (# to end of line) and block comments (#~ to ~#).
-func LoadSecretsFile(path string) ([]string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	text := stripBlockComments(string(data))
-
-	var secrets []string
-	for _, line := range strings.Split(text, "\n") {
-		if i := strings.Index(line, "#"); i >= 0 {
-			line = line[:i]
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		secrets = append(secrets, line)
-	}
-	return secrets, nil
-}
-
-// stripBlockComments removes all #~ ... ~# regions from text.
-func stripBlockComments(text string) string {
-	var b strings.Builder
-	for {
-		start := strings.Index(text, "#~")
-		if start < 0 {
-			b.WriteString(text)
-			break
-		}
-		b.WriteString(text[:start])
-		end := strings.Index(text[start+2:], "~#")
-		if end < 0 {
-			// Unterminated block comment: treat rest as comment.
-			break
-		}
-		text = text[start+2+end+2:]
-	}
-	return b.String()
+// ProxyLink holds a named Telegram proxy link.
+type ProxyLink struct {
+	Name   string `json:"name"`
+	URL    string `json:"url"`
+	Secret string `json:"secret"`
 }
 
 // ProxyLinks builds Telegram proxy links for all configured MTProxy secrets.
-func ProxyLinks(cfg *Config) []string {
+// The names map provides optional display names keyed by secret hex.
+func ProxyLinks(cfg *Config, names map[string]string) []ProxyLink {
 	serverIP := cfg.ServerPublicIP()
 	if serverIP == "" {
 		serverIP = "<SERVER_IP>"
@@ -901,30 +856,25 @@ func ProxyLinks(cfg *Config) []string {
 		return nil
 	}
 
-	links := make([]string, 0, len(cfg.MTProxy.Secrets))
-	for _, secret := range cfg.MTProxy.Secrets {
+	links := make([]ProxyLink, 0, len(cfg.MTProxy.Secrets))
+	for i, secret := range cfg.MTProxy.Secrets {
 		linkSecret := secret
 		// Append hex-encoded SNI to ee-prefixed secrets
 		if len(secret) >= 2 && secret[:2] == "ee" && len(cfg.MTProxy.FakeTLS.SNI) > 0 {
 			linkSecret = secret + hex.EncodeToString([]byte(cfg.MTProxy.FakeTLS.SNI[0]))
 		}
-		link := fmt.Sprintf("https://t.me/proxy?server=%s&port=%s&secret=%s", serverIP, port, linkSecret)
-		links = append(links, link)
+		url := fmt.Sprintf("https://t.me/proxy?server=%s&port=%s&secret=%s", serverIP, port, linkSecret)
+		name := names[secret]
+		if name == "" {
+			name = fmt.Sprintf("Proxy %d", i+1)
+		}
+		links = append(links, ProxyLink{
+			Name:   name,
+			URL:    url,
+			Secret: secret,
+		})
 	}
 	return links
-}
-
-// AppendSecret appends a secret line to the given file, creating it if needed.
-func AppendSecret(path, secret string) error {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("opening secrets file: %w", err)
-	}
-	defer f.Close()
-	if _, err := fmt.Fprintln(f, secret); err != nil {
-		return fmt.Errorf("writing secret: %w", err)
-	}
-	return nil
 }
 
 // GenerateKeyPair generates a WireGuard private/public key pair,

@@ -126,19 +126,11 @@ func (b *Bridge) Run(ctx context.Context) error {
 			b.cfg.Peers = dbPeers
 		}
 
-		// Import file-based secrets into DB if DB is empty
 		dbSecrets, err := store.ListSecrets()
 		if err != nil {
 			b.logger.Error("failed to list db secrets", "err", err)
 		}
-		if len(dbSecrets) == 0 && len(b.cfg.MTProxy.Secrets) > 0 {
-			imported, err := store.ImportSecrets(b.cfg.MTProxy.Secrets)
-			if err != nil {
-				b.logger.Error("failed to import secrets to database", "err", err)
-			} else if imported > 0 {
-				b.logger.Info("imported file secrets to database", "count", imported)
-			}
-		} else if len(dbSecrets) > 0 {
+		if len(dbSecrets) > 0 {
 			b.cfg.MTProxy.Secrets = dbSecrets
 		}
 
@@ -158,20 +150,28 @@ func (b *Bridge) Run(ctx context.Context) error {
 			b.cfg.Proxies = dbProxies
 		}
 
-		// Import file-based upstreams into DB if DB is empty
-		dbUpstreams, err := store.ListUpstreams()
-		if err != nil {
-			b.logger.Error("failed to list db upstreams", "err", err)
-		}
-		if len(dbUpstreams) == 0 && len(b.cfg.Upstreams) > 0 {
+		// Seed config-file upstreams into DB (skips names already present),
+		// then use the DB as the source of truth so webapp edits are preserved.
+		if len(b.cfg.Upstreams) > 0 {
 			imported, err := store.ImportUpstreams(b.cfg.Upstreams)
 			if err != nil {
 				b.logger.Error("failed to import upstreams to database", "err", err)
 			} else if imported > 0 {
 				b.logger.Info("imported file upstreams to database", "count", imported)
 			}
-		} else if len(dbUpstreams) > 0 {
+		}
+		dbUpstreams, err := store.ListUpstreams()
+		if err != nil {
+			b.logger.Error("failed to list db upstreams", "err", err)
+		}
+		if len(dbUpstreams) > 0 {
 			b.cfg.Upstreams = dbUpstreams
+		}
+
+		// Re-apply upstream specs after merging DB state, since the upstream
+		// manager was initialized before the database was opened.
+		if err := b.upstreams.Apply(b.cfg.ToUpstreamSpecs()); err != nil {
+			b.logger.Error("failed to re-apply upstream specs from db", "err", err)
 		}
 	}
 

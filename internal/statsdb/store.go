@@ -571,6 +571,50 @@ func (s *Store) AddSecret(secretHex, comment string) error {
 	return nil
 }
 
+// SecretNames returns a map of secret_hex → comment for the given secrets.
+func (s *Store) SecretNames(secrets []string) (map[string]string, error) {
+	if len(secrets) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(secrets))
+	args := make([]interface{}, len(secrets))
+	for i, sec := range secrets {
+		placeholders[i] = "?"
+		args[i] = sec
+	}
+	query := `SELECT secret_hex, comment FROM mtproxy_secrets WHERE secret_hex IN (` + strings.Join(placeholders, ",") + `)`
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: secret names: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]string)
+	for rows.Next() {
+		var hex, comment string
+		if err := rows.Scan(&hex, &comment); err != nil {
+			return nil, fmt.Errorf("statsdb: scan secret name: %w", err)
+		}
+		if comment != "" {
+			out[hex] = comment
+		}
+	}
+	return out, rows.Err()
+}
+
+// RenameSecret updates the comment (display name) of a secret.
+func (s *Store) RenameSecret(secretHex, name string) error {
+	res, err := s.db.Exec(`UPDATE mtproxy_secrets SET comment = ? WHERE secret_hex = ?`, name, secretHex)
+	if err != nil {
+		return fmt.Errorf("statsdb: rename secret: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("statsdb: secret not found")
+	}
+	return nil
+}
+
 // DeleteSecret deletes a secret by hex string.
 func (s *Store) DeleteSecret(secretHex string) (bool, error) {
 	res, err := s.db.Exec(`DELETE FROM mtproxy_secrets WHERE secret_hex = ?`, secretHex)

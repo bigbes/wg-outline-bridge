@@ -451,32 +451,20 @@ sudo mkdir -p /data/var/log
 | `genconf` | Generate a client keypair and add to config |
 | `listconf` | List all configured peers |
 | `showconf` | Print WireGuard client config for a peer |
-| `gensecret` | Generate a new MTProxy secret and save to database (or secrets file) |
+| `gensecret` | Generate a new MTProxy secret and save to database |
 | `showproxy` | Print Telegram proxy links for all MTProxy secrets |
 
-### MTProxy Secrets File
+### MTProxy Secrets
 
-MTProxy secrets can be stored in an external file (default: `mtproxy.secrets` next to your config). Generate new secrets with `gensecret`:
+MTProxy secrets are stored in the database. Generate new secrets with `gensecret`:
 
 ```bash
-./main gensecret -config configs/bridge.yaml       # standard secret
-./main gensecret -config configs/bridge.yaml -dd   # dd-prefix (padding mode)
+./main gensecret -config configs/bridge.yaml                    # standard secret (ee-prefix)
+./main gensecret -config configs/bridge.yaml -type dd           # dd-prefix (padding mode)
+./main gensecret -config configs/bridge.yaml -comment "user1"   # with a comment
 ```
 
-The file supports two comment styles:
-
-```
-# Line comment — everything from # to end of line
-dd0123456789abcdef0123456789abcdef  # inline comment after a secret
-
-#~ Block comment:
-   everything between #~ and ~# is ignored,
-   can span multiple lines ~#
-
-ee0123456789abcdef0123456789abcdef
-```
-
-Secrets from the file are merged with any inline `secrets:` in the YAML config. The file path can be customized with `mtproxy.secrets_file` in the config.
+Secrets can also be configured inline in the YAML config under `mtproxy.secrets`.
 
 ## Project Structure
 

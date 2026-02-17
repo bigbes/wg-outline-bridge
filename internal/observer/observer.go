@@ -264,14 +264,14 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 		upstreams := o.provider.UpstreamStatuses()
 		reply = formatStatus(peers, daemon, mt, upstreams)
 	case "/proxy":
-		links := config.ProxyLinks(o.cfgProv.CurrentConfig())
+		links := config.ProxyLinks(o.cfgProv.CurrentConfig(), nil)
 		if len(links) == 0 {
 			reply = "No proxy links available (MTProxy not configured or no secrets)"
 		} else {
 			var b strings.Builder
 			b.WriteString("🔗 Telegram Proxy Links:\n\n")
-			for i, link := range links {
-				fmt.Fprintf(&b, "[%d] %s\n", i+1, link)
+			for _, link := range links {
+				fmt.Fprintf(&b, "[%s] %s\n", link.Name, link.URL)
 			}
 			reply = b.String()
 		}
@@ -693,9 +693,9 @@ func (o *Observer) handleAddSecret(args string) string {
 	fmt.Fprintf(&b, "Secret: <code>%s</code>\n", secretHex)
 
 	cfg := o.cfgProv.CurrentConfig()
-	links := config.ProxyLinks(cfg)
+	links := config.ProxyLinks(cfg, nil)
 	if len(links) > 0 {
-		fmt.Fprintf(&b, "\n🔗 %s", links[len(links)-1])
+		fmt.Fprintf(&b, "\n🔗 %s", links[len(links)-1].URL)
 	}
 	fmt.Fprintf(&b, "\n\n💡 Send SIGHUP to reload secrets without restart")
 

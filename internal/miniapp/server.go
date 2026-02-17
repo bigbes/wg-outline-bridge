@@ -82,7 +82,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/peers", s.authMiddleware(s.handleAddPeer))
 	mux.HandleFunc("/api/peers/", s.authMiddleware(s.handlePeersRoute))
 	mux.HandleFunc("/api/secrets", s.authMiddleware(s.handleAddSecret))
-	mux.HandleFunc("/api/secrets/", s.authMiddleware(s.handleDeleteSecret))
+	mux.HandleFunc("/api/secrets/", s.authMiddleware(s.handleSecretsRoute))
 	mux.HandleFunc("/api/proxies", s.authMiddleware(s.handleAddProxy))
 	mux.HandleFunc("/api/proxies/", s.authMiddleware(s.handleDeleteProxy))
 	mux.HandleFunc("/api/upstreams", s.authMiddleware(s.handleAddUpstream))

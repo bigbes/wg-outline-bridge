@@ -44,7 +44,7 @@ func ShowProxy(args []string, logger *slog.Logger) {
 		os.Exit(1)
 	}
 
-	links := config.ProxyLinks(cfg)
+	links := config.ProxyLinks(cfg, nil)
 	if len(links) == 0 {
 		fmt.Fprintln(os.Stderr, "error: no secrets configured")
 		os.Exit(1)
@@ -52,7 +52,7 @@ func ShowProxy(args []string, logger *slog.Logger) {
 
 	fmt.Println("Telegram Proxy Links:")
 	fmt.Println()
-	for i, link := range links {
-		fmt.Printf("  [%d] %s\n", i+1, link)
+	for _, link := range links {
+		fmt.Printf("  [%s] %s\n", link.Name, link.URL)
 	}
 }

@@ -136,6 +136,27 @@ h2 { font-size: 15px; margin: 16px 0 8px; display: flex; align-items: center; ga
 .copy-btn {
   background: none; border: none; color: var(--link); cursor: pointer; font-size: 12px; padding: 2px 4px;
 }
+.proxy-link-card {
+  display: flex; align-items: center; gap: 8px;
+}
+.proxy-link-card .name { font-weight: 600; flex: 1; cursor: pointer; }
+.proxy-link-card .icon-btn {
+  background: none; border: none; cursor: pointer; font-size: 18px; padding: 4px;
+  color: var(--link); display: flex; align-items: center; flex-shrink: 0;
+}
+.proxy-link-card .icon-btn:active { opacity: 0.6; }
+.rename-form {
+  display: flex; align-items: center; gap: 4px; flex: 1;
+}
+.rename-form input {
+  background: var(--bg); color: var(--text); border: 1px solid var(--hint);
+  border-radius: 6px; padding: 4px 8px; font-size: 13px; flex: 1;
+}
+.rename-form .icon-btn-sm {
+  background: none; border: none; cursor: pointer; font-size: 16px; padding: 2px;
+  display: flex; align-items: center; flex-shrink: 0;
+}
+.rename-form .icon-btn-sm:active { opacity: 0.6; }
 </style>
 </head>
 <body>
@@ -510,9 +531,11 @@ function render() {
     const ll = document.getElementById('proxy-links');
     if (data.mtproxy.links && data.mtproxy.links.length > 0) {
       ll.innerHTML = '<h2>🔗 Proxy Links</h2>' + data.mtproxy.links.map(l => `
-        <div class="card">
-          <span class="link-text">${l}</span>
-          <button class="copy-btn" onclick="copyText('${l}')">📋 Copy</button>
+        <div class="card proxy-link-card" id="plink-${l.secret}">
+          <span class="name" onclick="startRenameLink('${l.secret}', this)">📡 ${l.name}</span>
+          <button class="icon-btn" onclick="startRenameLink('${l.secret}', this.parentElement.querySelector('.name'))" title="Rename">✏️</button>
+          <button class="icon-btn" onclick="copyText('${l.url}')" title="Copy link">📋</button>
+          <a class="icon-btn" href="${l.url}" target="_blank" title="Open link">🔗</a>
         </div>
       `).join('');
     } else {
@@ -591,6 +614,55 @@ function addSecret() {
     if (d.error) { showMsg('secret-msg', d.error, true); return; }
     showMsg('secret-msg', 'Secret added (send SIGHUP to reload)', false);
     refresh();
+  });
+}
+
+function startRenameLink(secret, nameEl) {
+  const card = document.getElementById('plink-' + secret);
+  if (!card || card.querySelector('.rename-form')) return;
+  const oldName = nameEl.textContent.replace(/^📡\s*/, '');
+  const form = document.createElement('div');
+  form.className = 'rename-form';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = oldName;
+  const okBtn = document.createElement('button');
+  okBtn.className = 'icon-btn-sm';
+  okBtn.textContent = '✅';
+  okBtn.title = 'Apply';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'icon-btn-sm';
+  cancelBtn.textContent = '❌';
+  cancelBtn.title = 'Cancel';
+  form.appendChild(input);
+  form.appendChild(okBtn);
+  form.appendChild(cancelBtn);
+
+  nameEl.style.display = 'none';
+  const editBtn = card.querySelector('.icon-btn[title="Rename"]');
+  if (editBtn) editBtn.style.display = 'none';
+  nameEl.parentElement.insertBefore(form, nameEl);
+  input.focus();
+  input.select();
+
+  function apply() {
+    const newName = input.value.trim();
+    if (!newName || newName === oldName) { cancel(); return; }
+    api('PUT', '/api/secrets/' + encodeURIComponent(secret) + '/name', { name: newName }).then(d => {
+      if (d.error) { tg.showAlert(d.error); cancel(); return; }
+      refresh();
+    });
+  }
+  function cancel() {
+    form.remove();
+    nameEl.style.display = '';
+    if (editBtn) editBtn.style.display = '';
+  }
+  okBtn.addEventListener('click', apply);
+  cancelBtn.addEventListener('click', cancel);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); apply(); }
+    if (e.key === 'Escape') { e.preventDefault(); cancel(); }
   });
 }
 
@@ -808,13 +880,22 @@ function addToGroup() {
 }
 
 function removeFromGroup(upstreamName, groupName) {
-  // Cannot remove implicit groups
-  if (groupName === 'default' || groupName.startsWith('upstream:')) {
+  // Cannot remove the implicit upstream:<name> group
+  if (groupName.startsWith('upstream:')) {
     showMsg('group-msg', 'Cannot remove implicit group "' + groupName + '"', true);
     return;
   }
   const upstream = data.upstreams.find(u => u.name === upstreamName);
   if (!upstream) return;
+  // Removing from "default" means unsetting the default flag
+  if (groupName === 'default') {
+    api('PUT', '/api/upstreams/' + encodeURIComponent(upstreamName), { default: false }).then(d => {
+      if (d.error) { showMsg('group-msg', d.error, true); return; }
+      showMsg('group-msg', upstreamName + ' removed from group "default"', false);
+      refresh();
+    });
+    return;
+  }
   const currentGroups = (upstream.groups || []).filter(g => g !== 'default' && !g.startsWith('upstream:'));
   const newGroups = currentGroups.filter(g => g !== groupName);
   api('PUT', '/api/upstreams/' + encodeURIComponent(upstreamName), { groups: newGroups }).then(d => {

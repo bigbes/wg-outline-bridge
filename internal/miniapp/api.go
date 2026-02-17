@@ -49,7 +49,7 @@ type mtproxyInfo struct {
 	BytesC2BTotal     int64        `json:"bytes_c2b_total"`
 	BytesB2CTotal     int64        `json:"bytes_b2c_total"`
 	Secrets           []secretInfo `json:"secrets"`
-	Links             []string     `json:"links"`
+	Links             []config.ProxyLink `json:"links"`
 }
 
 type secretInfo struct {
@@ -171,7 +171,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		BytesB2C:          mt.BytesB2C,
 		BytesC2BTotal:     mt.BytesC2BTotal,
 		BytesB2CTotal:     mt.BytesB2CTotal,
-		Links:             config.ProxyLinks(cfg),
+		Links:             s.proxyLinks(cfg),
 	}
 	for _, c := range mt.Clients {
 		resp.MTProxy.Secrets = append(resp.MTProxy.Secrets, secretInfo{
@@ -283,6 +283,14 @@ func (s *Server) handleAddSecret(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"secret": secretHex})
 }
 
+func (s *Server) handleSecretsRoute(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/name") {
+		s.handleRenameSecret(w, r)
+		return
+	}
+	s.handleDeleteSecret(w, r)
+}
+
 func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -296,6 +304,48 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.manager.DeleteSecret(secretHex); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) proxyLinks(cfg *config.Config) []config.ProxyLink {
+	var names map[string]string
+	if s.store != nil {
+		names, _ = s.store.SecretNames(cfg.MTProxy.Secrets)
+	}
+	return config.ProxyLinks(cfg, names)
+}
+
+func (s *Server) handleRenameSecret(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	secretHex := strings.TrimPrefix(r.URL.Path, "/api/secrets/")
+	secretHex = strings.TrimSuffix(secretHex, "/name")
+	if secretHex == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "secret hex is required"})
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if s.store == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database not available"})
+		return
+	}
+
+	if err := s.store.RenameSecret(secretHex, req.Name); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
