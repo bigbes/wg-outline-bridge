@@ -94,6 +94,12 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/users", s.authMiddleware(s.handleUsers))
 	mux.HandleFunc("/api/users/", s.authMiddleware(s.handleDeleteUser))
 
+	// Health check (unauthenticated).
+	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"ok"}`))
+	})
+
 	// Static files (SPA).
 	mux.HandleFunc("/", s.handleStatic)
 
@@ -161,8 +167,12 @@ func (s *Server) Run(ctx context.Context) error {
 	return nil
 }
 
-// handlePeersRoute dispatches DELETE /api/peers/<name>.
+// handlePeersRoute dispatches GET /api/peers/<name>/conf and DELETE /api/peers/<name>.
 func (s *Server) handlePeersRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/conf") {
+		s.handlePeerConf(w, r)
+		return
+	}
 	if r.Method == http.MethodDelete {
 		s.handleDeletePeer(w, r)
 		return

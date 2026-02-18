@@ -261,6 +261,116 @@ func (s *Server) handleDeletePeer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (s *Server) handlePeerConf(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract peer name from path: /api/peers/<name>/conf
+	path := strings.TrimPrefix(r.URL.Path, "/api/peers/")
+	name := strings.TrimSuffix(path, "/conf")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer name is required"})
+		return
+	}
+
+	cfg := s.cfgProv.CurrentConfig()
+
+	peer, ok := cfg.Peers[name]
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
+		return
+	}
+
+	clientIP := strings.Split(peer.AllowedIPs, "/")[0]
+
+	serverIP := cfg.ServerPublicIP()
+	endpoint := fmt.Sprintf("<SERVER_IP>:%d", cfg.WireGuard.ListenPort)
+	if serverIP != "" {
+		endpoint = fmt.Sprintf("%s:%d", serverIP, cfg.WireGuard.ListenPort)
+	}
+
+	allowedIPs := "0.0.0.0/0"
+	cidrRules, err := config.ParseCIDRRules(cfg.Routing.CIDRs)
+	if err == nil {
+		if computed := config.ComputeAllowedIPs(cidrRules, serverIP); computed != "" {
+			allowedIPs = computed
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "[Interface]\n")
+	fmt.Fprintf(&b, "PrivateKey = %s\n", peer.PrivateKey)
+	fmt.Fprintf(&b, "Address = %s/24\n", clientIP)
+	fmt.Fprintf(&b, "DNS = %s\n", cfg.WireGuard.DNS)
+	if cfg.WireGuard.IsAmneziaWG() && cfg.WireGuard.AmneziaWG != nil {
+		awg := cfg.WireGuard.AmneziaWG
+		if awg.Jc != 0 {
+			fmt.Fprintf(&b, "Jc = %d\n", awg.Jc)
+		}
+		if awg.Jmin != 0 {
+			fmt.Fprintf(&b, "Jmin = %d\n", awg.Jmin)
+		}
+		if awg.Jmax != 0 {
+			fmt.Fprintf(&b, "Jmax = %d\n", awg.Jmax)
+		}
+		if awg.S1 != 0 {
+			fmt.Fprintf(&b, "S1 = %d\n", awg.S1)
+		}
+		if awg.S2 != 0 {
+			fmt.Fprintf(&b, "S2 = %d\n", awg.S2)
+		}
+		if awg.S3 != 0 {
+			fmt.Fprintf(&b, "S3 = %d\n", awg.S3)
+		}
+		if awg.S4 != 0 {
+			fmt.Fprintf(&b, "S4 = %d\n", awg.S4)
+		}
+		if awg.H1 != "" {
+			fmt.Fprintf(&b, "H1 = %s\n", awg.H1)
+		}
+		if awg.H2 != "" {
+			fmt.Fprintf(&b, "H2 = %s\n", awg.H2)
+		}
+		if awg.H3 != "" {
+			fmt.Fprintf(&b, "H3 = %s\n", awg.H3)
+		}
+		if awg.H4 != "" {
+			fmt.Fprintf(&b, "H4 = %s\n", awg.H4)
+		}
+		if awg.I1 != "" {
+			fmt.Fprintf(&b, "I1 = %s\n", awg.I1)
+		}
+		if awg.I2 != "" {
+			fmt.Fprintf(&b, "I2 = %s\n", awg.I2)
+		}
+		if awg.I3 != "" {
+			fmt.Fprintf(&b, "I3 = %s\n", awg.I3)
+		}
+		if awg.I4 != "" {
+			fmt.Fprintf(&b, "I4 = %s\n", awg.I4)
+		}
+		if awg.I5 != "" {
+			fmt.Fprintf(&b, "I5 = %s\n", awg.I5)
+		}
+	}
+	fmt.Fprintf(&b, "\n[Peer]\n")
+	if serverPublicKey, err := config.DerivePublicKey(cfg.WireGuard.PrivateKey); err == nil {
+		fmt.Fprintf(&b, "PublicKey = %s\n", serverPublicKey)
+	} else {
+		fmt.Fprintf(&b, "PublicKey = <failed to derive>\n")
+	}
+	if peer.PresharedKey != "" {
+		fmt.Fprintf(&b, "PresharedKey = %s\n", peer.PresharedKey)
+	}
+	fmt.Fprintf(&b, "Endpoint = %s\n", endpoint)
+	fmt.Fprintf(&b, "AllowedIPs = %s\n", allowedIPs)
+	fmt.Fprintf(&b, "PersistentKeepalive = 25\n")
+
+	writeJSON(w, http.StatusOK, map[string]string{"config": b.String()})
+}
+
 func (s *Server) handleAddSecret(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
