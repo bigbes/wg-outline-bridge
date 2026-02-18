@@ -292,7 +292,8 @@ func (s *Server) handlePeerConf(w http.ResponseWriter, r *http.Request) {
 	}
 
 	allowedIPs := "0.0.0.0/0"
-	cidrRules, err := config.ParseCIDRRules(cfg.Routing.CIDRs)
+	cidrVars := map[string]string{"server_ip": serverIP}
+	cidrRules, err := config.ParseCIDRRules(config.ExpandCIDRRuleVars(cfg.Routing.CIDRs, cidrVars))
 	if err == nil {
 		if computed := config.ComputeAllowedIPs(cidrRules, serverIP); computed != "" {
 			allowedIPs = computed

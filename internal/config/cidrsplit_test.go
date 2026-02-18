@@ -5,6 +5,72 @@ import (
 	"testing"
 )
 
+func TestExpandCIDRRuleVars(t *testing.T) {
+	tests := []struct {
+		name  string
+		rules []string
+		vars  map[string]string
+		want  []string
+	}{
+		{
+			name:  "server_ip substituted",
+			rules: []string{"d:{{ $server_ip }}/32", "a:*"},
+			vars:  map[string]string{"server_ip": "203.0.113.1"},
+			want:  []string{"d:203.0.113.1/32", "a:*"},
+		},
+		{
+			name:  "no spacing in braces",
+			rules: []string{"d:{{$server_ip}}/32"},
+			vars:  map[string]string{"server_ip": "10.0.0.1"},
+			want:  []string{"d:10.0.0.1/32"},
+		},
+		{
+			name:  "unknown var left unexpanded",
+			rules: []string{"d:{{ $unknown }}/32"},
+			vars:  map[string]string{"server_ip": "10.0.0.1"},
+			want:  []string{"d:{{ $unknown }}/32"},
+		},
+		{
+			name:  "empty var left unexpanded",
+			rules: []string{"d:{{ $server_ip }}/32"},
+			vars:  map[string]string{"server_ip": ""},
+			want:  []string{"d:{{ $server_ip }}/32"},
+		},
+		{
+			name:  "no vars no change",
+			rules: []string{"d:10.0.0.0/8", "a:*"},
+			vars:  map[string]string{"server_ip": "1.2.3.4"},
+			want:  []string{"d:10.0.0.0/8", "a:*"},
+		},
+		{
+			name:  "nil vars",
+			rules: []string{"d:{{ $server_ip }}/32"},
+			vars:  nil,
+			want:  []string{"d:{{ $server_ip }}/32"},
+		},
+		{
+			name:  "multiple vars in one rule",
+			rules: []string{"d:{{ $server_ip }}/{{ $bits }}"},
+			vars:  map[string]string{"server_ip": "1.2.3.0", "bits": "24"},
+			want:  []string{"d:1.2.3.0/24"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ExpandCIDRRuleVars(tt.rules, tt.vars)
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %d rules, want %d", len(got), len(tt.want))
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("rule %d: got %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestExcludePrefixes(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -261,6 +327,14 @@ func TestComputeAllowedIPs(t *testing.T) {
 			want:  "",
 		},
 		{
+			name:     "server IP via template variable",
+			rules:    []string{"d:{{ $server_ip }}/32", "a:203.0.113.0/24"},
+			serverIP: "203.0.113.1",
+			want: "203.0.113.0/32, 203.0.113.2/31, 203.0.113.4/30, " +
+				"203.0.113.8/29, 203.0.113.16/28, 203.0.113.32/27, " +
+				"203.0.113.64/26, 203.0.113.128/25",
+		},
+		{
 			name:  "bare CIDR backward compat with allow all",
 			rules: []string{"192.168.0.0/16", "a:*"},
 			want: "0.0.0.0/1, 128.0.0.0/2, " +
@@ -274,7 +348,8 @@ func TestComputeAllowedIPs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rules, err := ParseCIDRRules(tt.rules)
+			expanded := ExpandCIDRRuleVars(tt.rules, map[string]string{"server_ip": tt.serverIP})
+			rules, err := ParseCIDRRules(expanded)
 			if err != nil {
 				t.Fatalf("ParseCIDRRules: %v", err)
 			}

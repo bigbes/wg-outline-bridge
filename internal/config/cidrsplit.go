@@ -3,9 +3,33 @@ package config
 import (
 	"fmt"
 	"net/netip"
+	"regexp"
 	"sort"
 	"strings"
 )
+
+var templateVarRe = regexp.MustCompile(`\{\{\s*\$([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}`)
+
+// ExpandCIDRRuleVars replaces template variables in CIDR rules.
+// Variables use the syntax {{ $var_name }} and are looked up in the
+// provided vars map. Unknown or empty variables are left unexpanded
+// (which will cause a parse error downstream, giving a clear message).
+func ExpandCIDRRuleVars(rules []string, vars map[string]string) []string {
+	out := make([]string, len(rules))
+	for i, rule := range rules {
+		out[i] = templateVarRe.ReplaceAllStringFunc(rule, func(match string) string {
+			sub := templateVarRe.FindStringSubmatch(match)
+			if len(sub) < 2 {
+				return match
+			}
+			if v, ok := vars[sub[1]]; ok && v != "" {
+				return v
+			}
+			return match
+		})
+	}
+	return out
+}
 
 // CIDRRule is a single allow/disallow rule.
 type CIDRRule struct {
@@ -30,6 +54,9 @@ type CIDRRules struct {
 // A bare CIDR without a prefix (e.g. "192.168.0.0/16") is treated as "disallow"
 // for backward compatibility. Wildcard rules ("a:*" / "d:*") are always placed
 // last regardless of position.
+//
+// Template variables (e.g. "d:{{ $server_ip }}/32") should be expanded with
+// ExpandCIDRRuleVars before calling this function.
 func ParseCIDRRules(rules []string) (*CIDRRules, error) {
 	result := &CIDRRules{}
 	var wildcard *CIDRRule

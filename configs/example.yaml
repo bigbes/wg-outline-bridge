@@ -144,14 +144,17 @@ outlines:
 
 # routing:
 #   cidrs:                    # CIDR rules for client WireGuard AllowedIPs
-#     - "a:*"                 # allow all (default base: 0.0.0.0/0)
+#     - "d:{{ $server_ip }}/32" # exclude server's own public IP (template variable)
 #     - "d:192.168.0.0/16"    # disallow local network (traffic goes direct)
+#     - "a:*"                 # allow all (default base: 0.0.0.0/0)
 #     # Supported formats:
 #     #   allow:<range>  or  a:<range>   — include CIDR in AllowedIPs
 #     #   disallow:<range> or d:<range>  — exclude CIDR from AllowedIPs
 #     #   a:*  — allow all (0.0.0.0/0)
 #     #   d:*  — disallow all
 #     #   bare CIDR (e.g. "192.168.0.0/16") — treated as disallow
+#     # Template variables ({{ $var_name }}):
+#     #   {{ $server_ip }} — server's public IP (from wireguard.public_address or auto-detected)
 #
 #   ip_rules:
 #     - name: "private-networks"

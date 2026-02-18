@@ -169,13 +169,18 @@ The `routing.cidrs` list controls which CIDRs end up in the client's WireGuard `
 
 When no explicit allow rules are given, the base is `0.0.0.0/0`. The server's `public_address` is automatically excluded.
 
-```yaml
-wireguard:
-  public_address: "203.0.113.1"
+**Template variables** can be used inside CIDR rules with the `{{ $var_name }}` syntax. The following variables are available:
 
+| Variable | Description |
+|----------|-------------|
+| `{{ $server_ip }}` | The server's public IP (from `wireguard.public_address` or auto-detected) |
+
+```yaml
 routing:
   cidrs:
-    - "d:192.168.0.0/16"   # local network goes direct
+    - "d:{{ $server_ip }}/32"  # exclude server's own public IP
+    - "d:192.168.0.0/16"       # local network goes direct
+    - "a:*"
 ```
 
 ### IP Rules

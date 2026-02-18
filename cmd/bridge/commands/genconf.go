@@ -101,7 +101,8 @@ func GenConf(args []string, logger *slog.Logger) {
 	}
 
 	allowedIPs := "0.0.0.0/0"
-	cidrRules, err := config.ParseCIDRRules(cfg.Routing.CIDRs)
+	cidrVars := map[string]string{"server_ip": serverIP}
+	cidrRules, err := config.ParseCIDRRules(config.ExpandCIDRRuleVars(cfg.Routing.CIDRs, cidrVars))
 	if err != nil {
 		logger.Error("failed to parse CIDR rules", "err", err)
 		os.Exit(1)
