@@ -10,7 +10,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/config"
+	"github.com/bigbes/wireguard-outline-bridge/internal/config"
 )
 
 // Store is a SQLite-backed persistent stats store.
@@ -344,10 +344,7 @@ func (s *Store) FlushMTProxySecrets(secrets []MTSecretSnapshot) error {
 		b2cDelta := delta(p.BytesB2C, b2cLS)
 		bdErrDelta := delta(p.BackendDialErrors, bdErrLS)
 
-		lastConn := dbLastConn
-		if p.LastConnectionUnix > dbLastConn {
-			lastConn = p.LastConnectionUnix
-		}
+		lastConn := max(p.LastConnectionUnix, dbLastConn)
 
 		if _, err := updStmt.Exec(
 			lastConn,
@@ -589,7 +586,7 @@ func (s *Store) SecretNames(secrets []string) (map[string]string, error) {
 		return nil, nil
 	}
 	placeholders := make([]string, len(secrets))
-	args := make([]interface{}, len(secrets))
+	args := make([]any, len(secrets))
 	for i, sec := range secrets {
 		placeholders[i] = "?"
 		args[i] = sec

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/upstream"
+	"github.com/bigbes/wireguard-outline-bridge/internal/upstream"
 )
 
 // OutlineConfig is the type-specific configuration for outline upstreams.

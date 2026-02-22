@@ -3,7 +3,7 @@ package commands
 import (
 	"fmt"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/config"
+	"github.com/bigbes/wireguard-outline-bridge/internal/config"
 )
 
 // printAWGInterfaceParams prints AmneziaWG-specific parameters for a client config.

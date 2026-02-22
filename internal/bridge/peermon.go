@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/config"
-	wg "github.com/blikh/wireguard-outline-bridge/internal/wireguard"
+	"github.com/bigbes/wireguard-outline-bridge/internal/config"
+	wg "github.com/bigbes/wireguard-outline-bridge/internal/wireguard"
 )
 
 const peerMonitorInterval = 10 * time.Second

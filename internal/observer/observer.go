@@ -4,12 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/config"
-	"github.com/blikh/wireguard-outline-bridge/internal/telegram"
+	"github.com/bigbes/wireguard-outline-bridge/internal/config"
+	"github.com/bigbes/wireguard-outline-bridge/internal/telegram"
 )
 
 // PeerStatus holds the current status of a WireGuard peer.
@@ -233,12 +234,7 @@ func (o *Observer) isAllowed(msg *telegram.Message) bool {
 	if msg.From == nil {
 		return false
 	}
-	for _, uid := range allowedUsers {
-		if uid == msg.From.ID {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowedUsers, msg.From.ID)
 }
 
 func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {

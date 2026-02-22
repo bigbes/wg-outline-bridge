@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/config"
-	"github.com/blikh/wireguard-outline-bridge/internal/statsdb"
+	"github.com/bigbes/wireguard-outline-bridge/internal/config"
+	"github.com/bigbes/wireguard-outline-bridge/internal/statsdb"
 )
 
 func GenConf(args []string, logger *slog.Logger) {

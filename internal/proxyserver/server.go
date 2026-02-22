@@ -17,8 +17,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/armon/go-socks5"
 	"golang.org/x/crypto/acme/autocert"
+
+	"github.com/bigbes/wireguard-outline-bridge/internal/socks5"
 )
 
 // StreamDialer dials a TCP connection (typically through an Outline proxy).
@@ -267,16 +268,12 @@ func (h *httpProxyHandler) handleConnect(w http.ResponseWriter, r *http.Request)
 	go func() {
 		defer wg.Done()
 		io.Copy(upstream, client)
-		if tc, ok := upstream.(interface{ CloseWrite() error }); ok {
-			tc.CloseWrite()
-		}
+		upstream.Close() // unblock upstream -> client read
 	}()
 	go func() {
 		defer wg.Done()
 		io.Copy(client, upstream)
-		if tc, ok := client.(interface{ CloseWrite() error }); ok {
-			tc.CloseWrite()
-		}
+		client.Close() // unblock client -> upstream read
 	}()
 	wg.Wait()
 }

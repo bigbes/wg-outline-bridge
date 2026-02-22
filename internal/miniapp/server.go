@@ -7,14 +7,15 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/acme/autocert"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/observer"
-	"github.com/blikh/wireguard-outline-bridge/internal/statsdb"
-	tgbot "github.com/blikh/wireguard-outline-bridge/internal/telegram"
+	"github.com/bigbes/wireguard-outline-bridge/internal/observer"
+	"github.com/bigbes/wireguard-outline-bridge/internal/statsdb"
+	tgbot "github.com/bigbes/wireguard-outline-bridge/internal/telegram"
 )
 
 // Server serves the Telegram Mini App web interface and JSON API.
@@ -175,8 +176,8 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		if initData == "" {
 			// Also support Authorization: tma <initData>
 			auth := r.Header.Get("Authorization")
-			if strings.HasPrefix(auth, "tma ") {
-				initData = strings.TrimPrefix(auth, "tma ")
+			if after, ok := strings.CutPrefix(auth, "tma "); ok {
+				initData = after
 			}
 		}
 
@@ -192,13 +193,7 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		allowed := false
-		for _, uid := range s.allowedUsers {
-			if uid == userID {
-				allowed = true
-				break
-			}
-		}
+		allowed := slices.Contains(s.allowedUsers, userID)
 		if !allowed && s.store != nil {
 			if ok, err := s.store.IsAllowedUser(userID); err == nil && ok {
 				allowed = true

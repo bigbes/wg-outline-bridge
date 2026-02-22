@@ -4,13 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/config"
-	"github.com/blikh/wireguard-outline-bridge/internal/statsdb"
+	"github.com/bigbes/wireguard-outline-bridge/internal/config"
+	"github.com/bigbes/wireguard-outline-bridge/internal/statsdb"
 )
 
 type statusResponse struct {
@@ -229,7 +230,7 @@ func (s *Server) handleAddPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"name":        req.Name,
 		"public_key":  peer.PublicKey,
 		"allowed_ips": peer.AllowedIPs,
@@ -680,7 +681,7 @@ func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
@@ -698,12 +699,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) isConfigAdmin(userID int64) bool {
-	for _, uid := range s.allowedUsers {
-		if uid == userID {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(s.allowedUsers, userID)
 }
 
 func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
@@ -829,7 +825,7 @@ func (s *Server) handleAddUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"user_id":    u.UserID,
 		"username":   u.Username,
 		"first_name": u.FirstName,

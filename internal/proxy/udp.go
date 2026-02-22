@@ -13,8 +13,8 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/metrics"
-	"github.com/blikh/wireguard-outline-bridge/internal/routing"
+	"github.com/bigbes/wireguard-outline-bridge/internal/metrics"
+	"github.com/bigbes/wireguard-outline-bridge/internal/routing"
 )
 
 const udpSessionTimeout = 60 * time.Second

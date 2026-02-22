@@ -20,10 +20,7 @@ func PeekSNI(br *bufio.Reader) string {
 		return ""
 	}
 
-	totalLength := 5 + recordLength
-	if totalLength > 16384+5 {
-		totalLength = 16384 + 5
-	}
+	totalLength := min(5+recordLength, 16384+5)
 
 	data, err := br.Peek(totalLength)
 	if err != nil {

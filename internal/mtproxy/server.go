@@ -16,8 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	mpcrypto "github.com/blikh/wireguard-outline-bridge/internal/mtproxy/crypto"
-	"github.com/blikh/wireguard-outline-bridge/internal/mtproxy/telegram"
+	mpcrypto "github.com/bigbes/wireguard-outline-bridge/internal/mtproxy/crypto"
+	"github.com/bigbes/wireguard-outline-bridge/internal/mtproxy/telegram"
 )
 
 const (
@@ -449,7 +449,7 @@ func (s *Server) handleFakeTLSHandshake(conn net.Conn, peeked []byte) (*tlsFrame
 	// Zero out client_random in the full record for HMAC validation
 	fullRecordForHMAC := make([]byte, len(fullRecord))
 	copy(fullRecordForHMAC, fullRecord)
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		fullRecordForHMAC[11+i] = 0
 	}
 

@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	mpcrypto "github.com/blikh/wireguard-outline-bridge/internal/mtproxy/crypto"
-	"github.com/blikh/wireguard-outline-bridge/internal/mtproxy/telegram"
+	mpcrypto "github.com/bigbes/wireguard-outline-bridge/internal/mtproxy/crypto"
+	"github.com/bigbes/wireguard-outline-bridge/internal/mtproxy/telegram"
 )
 
 // directDialer dials TCP directly (no proxy).
@@ -207,13 +207,13 @@ func buildClientHeader(t *testing.T, secret mpcrypto.Secret, tag uint32, dcID in
 
 	// Derive decrypt key from wire bytes: SHA256(reverse(header[24:56]) + secret)
 	var decKeyInput [48]byte
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		decKeyInput[i] = header[55-i]
 	}
 	copy(decKeyInput[32:], secret.Raw[:])
 	decKey := sha256.Sum256(decKeyInput[:])
 	var decIV [16]byte
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		decIV[i] = header[23-i]
 	}
 
@@ -325,13 +325,6 @@ func TestMTProxyIntegration_Compact(t *testing.T) {
 	}
 
 	t.Log("SUCCESS: received valid resPQ via compact transport")
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // Verify that a wrong secret is rejected.

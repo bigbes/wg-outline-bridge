@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/config"
+	"github.com/bigbes/wireguard-outline-bridge/internal/config"
 )
 
 type StreamDialer interface {

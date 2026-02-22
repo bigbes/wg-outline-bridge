@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/config"
+	"github.com/bigbes/wireguard-outline-bridge/internal/config"
 )
 
 func Watch(args []string, logger *slog.Logger) {

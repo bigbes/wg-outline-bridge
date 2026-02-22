@@ -19,26 +19,26 @@ import (
 	"golang.org/x/crypto/curve25519"
 	"gopkg.in/yaml.v3"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/upstream"
+	"github.com/bigbes/wireguard-outline-bridge/internal/upstream"
 )
 
 type Config struct {
-	LogLevel        string                `yaml:"log_level"`
-	CacheDir        string                `yaml:"cache_dir"`
+	LogLevel          string                  `yaml:"log_level"`
+	CacheDir          string                  `yaml:"cache_dir"`
 	ObservabilityHTTP ObservabilityHTTPConfig `yaml:"observability_http"`
-	WireGuard       WireGuardConfig       `yaml:"wireguard"`
-	DNS       DNSConfig             `yaml:"dns"`
-	MTProxy   MTProxyConfig         `yaml:"mtproxy"`
-	Proxies   []ProxyServerConfig   `yaml:"proxies"`
-	Telegram  TelegramConfig        `yaml:"telegram"`
-	MiniApp   MiniAppConfig         `yaml:"miniapp"`
-	Database  DatabaseConfig        `yaml:"database"`
-	Outlines  []OutlineConfig       `yaml:"outlines"`
-	Upstreams []UpstreamConfig      `yaml:"upstreams"`
-	Routing   RoutingConfig         `yaml:"routing"`
-	GeoIP     []GeoIPConfig         `yaml:"geoip"`
-	PeersDir  string                `yaml:"peers_dir"`
-	Peers     map[string]PeerConfig `yaml:"-"`
+	WireGuard         WireGuardConfig         `yaml:"wireguard"`
+	DNS               DNSConfig               `yaml:"dns"`
+	MTProxy           MTProxyConfig           `yaml:"mtproxy"`
+	Proxies           []ProxyServerConfig     `yaml:"proxies"`
+	Telegram          TelegramConfig          `yaml:"telegram"`
+	MiniApp           MiniAppConfig           `yaml:"miniapp"`
+	Database          DatabaseConfig          `yaml:"database"`
+	Outlines          []OutlineConfig         `yaml:"outlines"`
+	Upstreams         []UpstreamConfig        `yaml:"upstreams"`
+	Routing           RoutingConfig           `yaml:"routing"`
+	GeoIP             []GeoIPConfig           `yaml:"geoip"`
+	PeersDir          string                  `yaml:"peers_dir"`
+	Peers             map[string]PeerConfig   `yaml:"-"`
 }
 
 type ObservabilityHTTPConfig struct {
@@ -949,7 +949,7 @@ func NextPeerIP(cfg *Config) (string, error) {
 	}
 
 	candidate := addr.Next()
-	for i := 0; i < 253; i++ {
+	for range 253 {
 		if !used[candidate] {
 			return candidate.String(), nil
 		}

@@ -14,8 +14,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/bridge"
-	"github.com/blikh/wireguard-outline-bridge/internal/config"
+	"github.com/bigbes/wireguard-outline-bridge/internal/bridge"
+	"github.com/bigbes/wireguard-outline-bridge/internal/config"
 )
 
 const logo = `

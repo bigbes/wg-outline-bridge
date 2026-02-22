@@ -1,10 +1,9 @@
-module github.com/blikh/wireguard-outline-bridge
+module github.com/bigbes/wireguard-outline-bridge
 
 go 1.25.5
 
 require (
 	github.com/amnezia-vpn/amneziawg-go v0.2.15
-	github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5
 	github.com/miekg/dns v1.1.72
 	github.com/oschwald/maxminddb-golang/v2 v2.1.1
 	github.com/prometheus/client_golang v1.23.2

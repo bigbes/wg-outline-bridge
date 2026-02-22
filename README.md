@@ -441,6 +441,35 @@ Logs are written to `/data/var/log/bridge.log`. Make sure the directory exists b
 sudo mkdir -p /data/var/log
 ```
 
+## Development Commands (Just)
+
+The project includes a `justfile` with common development and deployment tasks. Set `REMOTE_HOST` in a `.env` file (or environment) to use remote commands.
+
+| Command | Description |
+|---------|-------------|
+| `just build` | Build the bridge binary |
+| `just upload` | Upload binary and config to remote host |
+| `just restart` | Restart remote bridge service |
+| `just deploy` | Build, upload, and restart |
+| `just logs` | Fetch logs from remote host |
+| `just pprof` | Fetch goroutine/heap pprof profiles from remote bridge |
+| `just pprof-local` | Fetch pprof profiles from local bridge instance |
+| `just pprof-tunnel` | Fetch pprof via SSH tunnel (if bridge not directly accessible) |
+| `just pprof-goroutines-debug` | Fetch goroutine debug dump (`?debug=2`) from remote bridge |
+| `just pprof-goroutines-debug-tunnel` | Fetch goroutine debug dump via SSH tunnel |
+| `just pprof-goroutines-debug-local` | Fetch goroutine debug dump from local bridge |
+
+**Note**: The bridge must have observability HTTP enabled in config (`observability_http.addr` and `observability_http.pprof: true`).
+
+Parameters are passed positionally: `just pprof <profile-list> <port>`.
+
+Example:
+```bash
+just pprof goroutine,heap,allocs 6060
+just pprof-local goroutine,heap
+just pprof-goroutines-debug 6060           # goroutine stack traces in text format
+```
+
 ## Commands
 
 | Command | Description |

@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/config"
-	"github.com/blikh/wireguard-outline-bridge/internal/statsdb"
+	"github.com/bigbes/wireguard-outline-bridge/internal/config"
+	"github.com/bigbes/wireguard-outline-bridge/internal/statsdb"
 )
 
 func ShowConf(args []string, logger *slog.Logger) {

@@ -1,4 +1,5 @@
 output.log
 main
 bridge
+pprof
 .env

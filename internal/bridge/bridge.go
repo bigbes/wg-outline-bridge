@@ -15,23 +15,23 @@ import (
 	"sync"
 	"time"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/config"
-	"github.com/blikh/wireguard-outline-bridge/internal/dns"
-	"github.com/blikh/wireguard-outline-bridge/internal/metrics"
-	"github.com/blikh/wireguard-outline-bridge/internal/geoip"
-	"github.com/blikh/wireguard-outline-bridge/internal/miniapp"
-	"github.com/blikh/wireguard-outline-bridge/internal/mtproxy"
-	mpcrypto "github.com/blikh/wireguard-outline-bridge/internal/mtproxy/crypto"
-	"github.com/blikh/wireguard-outline-bridge/internal/mtproxy/telegram"
-	"github.com/blikh/wireguard-outline-bridge/internal/observer"
-	"github.com/blikh/wireguard-outline-bridge/internal/proxy"
-	"github.com/blikh/wireguard-outline-bridge/internal/proxyserver"
-	"github.com/blikh/wireguard-outline-bridge/internal/routing"
-	"github.com/blikh/wireguard-outline-bridge/internal/statsdb"
-	tgbot "github.com/blikh/wireguard-outline-bridge/internal/telegram"
-	"github.com/blikh/wireguard-outline-bridge/internal/upstream"
-	outlineprovider "github.com/blikh/wireguard-outline-bridge/internal/upstream/providers/outline"
-	wg "github.com/blikh/wireguard-outline-bridge/internal/wireguard"
+	"github.com/bigbes/wireguard-outline-bridge/internal/config"
+	"github.com/bigbes/wireguard-outline-bridge/internal/dns"
+	"github.com/bigbes/wireguard-outline-bridge/internal/geoip"
+	"github.com/bigbes/wireguard-outline-bridge/internal/metrics"
+	"github.com/bigbes/wireguard-outline-bridge/internal/miniapp"
+	"github.com/bigbes/wireguard-outline-bridge/internal/mtproxy"
+	mpcrypto "github.com/bigbes/wireguard-outline-bridge/internal/mtproxy/crypto"
+	"github.com/bigbes/wireguard-outline-bridge/internal/mtproxy/telegram"
+	"github.com/bigbes/wireguard-outline-bridge/internal/observer"
+	"github.com/bigbes/wireguard-outline-bridge/internal/proxy"
+	"github.com/bigbes/wireguard-outline-bridge/internal/proxyserver"
+	"github.com/bigbes/wireguard-outline-bridge/internal/routing"
+	"github.com/bigbes/wireguard-outline-bridge/internal/statsdb"
+	tgbot "github.com/bigbes/wireguard-outline-bridge/internal/telegram"
+	"github.com/bigbes/wireguard-outline-bridge/internal/upstream"
+	outlineprovider "github.com/bigbes/wireguard-outline-bridge/internal/upstream/providers/outline"
+	wg "github.com/bigbes/wireguard-outline-bridge/internal/wireguard"
 )
 
 type Bridge struct {
@@ -103,11 +103,9 @@ func (b *Bridge) Run(ctx context.Context) error {
 			b.logger.Error("failed to set daemon start time", "err", err)
 		}
 		var statsWg sync.WaitGroup
-		statsWg.Add(1)
-		go func() {
-			defer statsWg.Done()
+		statsWg.Go(func() {
 			b.statsFlushLoop(ctx, time.Duration(b.cfg.Database.FlushInterval)*time.Second)
-		}()
+		})
 		defer func() {
 			statsWg.Wait()
 			store.Close()
@@ -1275,7 +1273,7 @@ func (b *Bridge) refreshUpstreamMetrics() {
 
 func peerAllowedIPs(peer config.PeerConfig) []netip.Addr {
 	var addrs []netip.Addr
-	for _, cidr := range strings.Split(peer.AllowedIPs, ",") {
+	for cidr := range strings.SplitSeq(peer.AllowedIPs, ",") {
 		cidr = strings.TrimSpace(cidr)
 		if prefix, err := netip.ParsePrefix(cidr); err == nil {
 			addrs = append(addrs, prefix.Addr())

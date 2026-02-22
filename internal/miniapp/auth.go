@@ -81,11 +81,11 @@ func ValidateInitData(initData, botToken string) (int64, error) {
 // without importing encoding/json to keep it lightweight.
 func extractUserID(userJSON string) (int64, error) {
 	// Simple extraction: find "id": followed by a number.
-	idx := strings.Index(userJSON, `"id"`)
-	if idx < 0 {
+	_, after, ok := strings.Cut(userJSON, `"id"`)
+	if !ok {
 		return 0, fmt.Errorf("no id field in user JSON")
 	}
-	rest := userJSON[idx+4:]
+	rest := after
 	// Skip whitespace and colon.
 	rest = strings.TrimLeft(rest, " \t\n\r:")
 	// Read digits.

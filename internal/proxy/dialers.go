@@ -4,7 +4,7 @@ import (
 	"context"
 	"net"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/routing"
+	"github.com/bigbes/wireguard-outline-bridge/internal/routing"
 )
 
 // DirectDialer connects directly without a proxy.

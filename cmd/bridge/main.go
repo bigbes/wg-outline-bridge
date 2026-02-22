@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/blikh/wireguard-outline-bridge/cmd/bridge/commands"
+	"github.com/bigbes/wireguard-outline-bridge/cmd/bridge/commands"
 )
 
 // Version is set at build time via -ldflags.

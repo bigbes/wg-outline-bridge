@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/config"
+	"github.com/bigbes/wireguard-outline-bridge/internal/config"
 )
 
 func testStore(t *testing.T) *Store {

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/config"
-	"github.com/blikh/wireguard-outline-bridge/internal/geoip"
+	"github.com/bigbes/wireguard-outline-bridge/internal/config"
+	"github.com/bigbes/wireguard-outline-bridge/internal/geoip"
 )
 
 type ActionType string

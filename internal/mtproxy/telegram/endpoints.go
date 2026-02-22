@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"sync"
 )
@@ -73,12 +74,8 @@ type EndpointManager struct {
 // Merges provided endpoints with defaults (provided takes priority).
 func NewEndpointManager(configured map[int][]string) *EndpointManager {
 	merged := make(map[int][]string)
-	for dc, addrs := range DefaultEndpoints {
-		merged[dc] = addrs
-	}
-	for dc, addrs := range configured {
-		merged[dc] = addrs
-	}
+	maps.Copy(merged, DefaultEndpoints)
+	maps.Copy(merged, configured)
 	return &EndpointManager{endpoints: merged}
 }
 

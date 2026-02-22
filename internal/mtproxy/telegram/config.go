@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -77,12 +78,8 @@ func parseProxyConfig(r io.Reader) (map[int][]string, error) {
 // Update replaces the endpoint map (merges with defaults, configured takes priority).
 func (m *EndpointManager) Update(endpoints map[int][]string) {
 	merged := make(map[int][]string)
-	for dc, addrs := range DefaultEndpoints {
-		merged[dc] = addrs
-	}
-	for dc, addrs := range endpoints {
-		merged[dc] = addrs
-	}
+	maps.Copy(merged, DefaultEndpoints)
+	maps.Copy(merged, endpoints)
 
 	m.mu.Lock()
 	m.endpoints = merged

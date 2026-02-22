@@ -34,7 +34,7 @@ func (gs *GroupSelector) pick() *entry {
 	}
 
 	start := gs.counter.Add(1) - 1
-	for i := 0; i < n; i++ {
+	for i := range n {
 		idx := int((start + uint64(i)) % uint64(n))
 		e := gs.members[idx]
 		if e.state == StateHealthy {

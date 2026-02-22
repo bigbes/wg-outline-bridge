@@ -16,8 +16,8 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/waiter"
 
-	"github.com/blikh/wireguard-outline-bridge/internal/metrics"
-	"github.com/blikh/wireguard-outline-bridge/internal/routing"
+	"github.com/bigbes/wireguard-outline-bridge/internal/metrics"
+	"github.com/bigbes/wireguard-outline-bridge/internal/routing"
 )
 
 type StreamDialer interface {
@@ -121,6 +121,7 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 		n, err := io.Copy(outConn, clientReader)
 		metrics.TCPBytesTotal.WithLabelValues("tx").Add(float64(n))
 		p.logger.Debug("tcp: client -> upstream done", "src", srcAddr, "dest", dest, "bytes", n, "err", err)
+		outConn.Close() // unblock upstream -> client read
 	}()
 
 	go func() {
@@ -128,6 +129,7 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 		n, err := io.Copy(clientConn, outConn)
 		metrics.TCPBytesTotal.WithLabelValues("rx").Add(float64(n))
 		p.logger.Debug("tcp: upstream -> client done", "src", srcAddr, "dest", dest, "bytes", n, "err", err)
+		clientConn.Close() // unblock client -> upstream read
 	}()
 
 	wg.Wait()

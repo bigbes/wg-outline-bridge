@@ -45,7 +45,7 @@ func ParseSecret(hex string) (Secret, error) {
 		return s, fmt.Errorf("secret must be 32 hex chars (or 34 with dd/ee prefix), got %d", len(hex))
 	}
 
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		b, err := parseHexByte(hex[i*2], hex[i*2+1])
 		if err != nil {
 			return s, fmt.Errorf("invalid hex at position %d: %w", i*2, err)
@@ -117,7 +117,7 @@ func tryDecryptHeader(header [64]byte, secret Secret) (*ObfuscatedHeader, error)
 
 	// Derive write key: SHA256(reverse(header[24:56]) + secret[0:16])
 	var writeKeyInput [48]byte
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		writeKeyInput[i] = header[55-i]
 	}
 	copy(writeKeyInput[32:], secret.Raw[:])
@@ -125,7 +125,7 @@ func tryDecryptHeader(header [64]byte, secret Secret) (*ObfuscatedHeader, error)
 
 	// Write IV: reverse(header[8:24])
 	var writeIV [16]byte
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		writeIV[i] = header[23-i]
 	}
 
@@ -220,10 +220,10 @@ func GenerateBackendHeader(tag uint32, dcID int16) (header [64]byte, encrypt cip
 	// Decrypt key = inverted[8:40], decrypt IV = inverted[40:56]
 	var decKey [32]byte
 	var decIV [16]byte
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		decKey[i] = savedKeyIV[47-i] // savedKeyIV[47-i] == original header[55-i]
 	}
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		decIV[i] = savedKeyIV[47-32-i] // savedKeyIV[15-i] == original header[23-i]
 	}
 	decBlock, err := aes.NewCipher(decKey[:])

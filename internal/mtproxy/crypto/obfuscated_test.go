@@ -56,10 +56,10 @@ func TestGenerateBackendHeader(t *testing.T) {
 		// DC derives write key from inverted key+iv block (reverse of bytes 8-55)
 		var dcEncKey [32]byte
 		var dcEncIV [16]byte
-		for i := 0; i < 32; i++ {
+		for i := range 32 {
 			dcEncKey[i] = header[55-i]
 		}
-		for i := 0; i < 16; i++ {
+		for i := range 16 {
 			dcEncIV[i] = header[23-i]
 		}
 		dcBlock, _ := aes.NewCipher(dcEncKey[:])
