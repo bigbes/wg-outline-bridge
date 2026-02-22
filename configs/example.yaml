@@ -2,6 +2,11 @@
 log_level: "info"
 # cache_dir: "/var/cache/wg-outline-bridge"  # cache for downloaded files (default: ~/.cache/wg-outline-bridge)
 
+# observability_http:              # Single HTTP server for observability endpoints
+#   addr: ":6060"                  # listen address (empty = disabled)
+#   pprof: true                    # serve /debug/pprof/* (Go profiling)
+#   metrics: true                  # serve /metrics (Prometheus)
+
 wireguard:
   private_key: "CHANGE_ME_BASE64_PRIVATE_KEY"
   listen_port: 51820

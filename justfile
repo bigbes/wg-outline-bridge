@@ -11,7 +11,7 @@ remote_config_example := env("REMOTE_CONFIG_EXAMPLE", "/data/etc/bridge.conf.exa
 remote_log := env("REMOTE_LOG", "/data/var/log/bridge.log")
 
 # Local paths
-local_bin := "main"
+local_bin := "bridge"
 local_config := "configs/example.yaml"
 
 # Version from git describe (tag + commits since tag + short hash)

@@ -13,6 +13,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
 
+	"github.com/blikh/wireguard-outline-bridge/internal/metrics"
 	"github.com/blikh/wireguard-outline-bridge/internal/routing"
 )
 
@@ -74,7 +75,10 @@ func (p *UDPProxy) handleRequest(r *udp.ForwarderRequest) {
 }
 
 func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest string, destIP netip.Addr, destPort uint16) {
+	metrics.UDPSessionsTotal.Inc()
+	metrics.UDPSessionsActive.Inc()
 	defer func() {
+		metrics.UDPSessionsActive.Dec()
 		clientConn.Close()
 		if srcAddr.IsValid() {
 			p.tracker.Untrack(srcAddr, clientConn)
@@ -92,6 +96,7 @@ func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest str
 
 	outConn, err := dialer.DialPacket(context.Background(), dest)
 	if err != nil {
+		metrics.UDPDialErrors.Inc()
 		p.logger.Error("udp: failed to dial outline", "dest", dest, "err", err)
 		return
 	}

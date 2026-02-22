@@ -368,7 +368,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	relayWg.Add(2)
 
 	var bytesUp, bytesDown int64
-	var closeReason string
+	var upReason, downReason string
 
 	// Client -> Backend (decrypt from client, forward to backend)
 	go func() {
@@ -377,10 +377,11 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 		n, err := io.Copy(backendWriter, sr)
 		bytesUp = n
 		if err != nil {
-			closeReason = fmt.Sprintf("client->backend: %v", err)
+			upReason = fmt.Sprintf("client->backend: %v", err)
 		} else {
-			closeReason = "client EOF"
+			upReason = "client EOF"
 		}
+		backendConn.Close() // unblock backend->client reader
 	}()
 
 	// Backend -> Client (read from backend, encrypt for client)
@@ -390,10 +391,11 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 		n, err := io.Copy(sw, backendReader)
 		bytesDown = n
 		if err != nil {
-			closeReason = fmt.Sprintf("backend->client: %v", err)
+			downReason = fmt.Sprintf("backend->client: %v", err)
 		} else {
-			closeReason = "backend EOF"
+			downReason = "backend EOF"
 		}
+		conn.Close() // unblock client->backend reader
 	}()
 
 	relayWg.Wait()
@@ -406,7 +408,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 		"dc_id", dcID,
 		"up", bytesUp,
 		"down", bytesDown,
-		"reason", closeReason,
+		"close", upReason+"; "+downReason,
 	)
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
 	"github.com/blikh/wireguard-outline-bridge/internal/dns"
+	"github.com/blikh/wireguard-outline-bridge/internal/metrics"
 	"github.com/blikh/wireguard-outline-bridge/internal/geoip"
 	"github.com/blikh/wireguard-outline-bridge/internal/miniapp"
 	"github.com/blikh/wireguard-outline-bridge/internal/mtproxy"
@@ -1233,6 +1234,9 @@ func (a *upstreamAdapter) PacketDialerForGroup(group string) proxy.PacketDialer 
 }
 
 func (b *Bridge) upstreamEventLoop(ctx context.Context) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -1249,7 +1253,23 @@ func (b *Bridge) upstreamEventLoop(ctx context.Context) {
 				b.logger.Info("upstream disabled",
 					"name", ev.Name)
 			}
+			b.refreshUpstreamMetrics()
+		case <-ticker.C:
+			b.refreshUpstreamMetrics()
 		}
+	}
+}
+
+func (b *Bridge) refreshUpstreamMetrics() {
+	for _, st := range b.upstreams.Statuses() {
+		healthy := float64(0)
+		if st.State == upstream.StateHealthy {
+			healthy = 1
+		}
+		metrics.UpstreamHealthy.WithLabelValues(st.Name).Set(healthy)
+		metrics.UpstreamConnectionsActive.WithLabelValues(st.Name).Set(float64(st.ActiveConnections))
+		metrics.UpstreamBytesTotal.WithLabelValues(st.Name, "rx").Set(float64(st.RxBytes))
+		metrics.UpstreamBytesTotal.WithLabelValues(st.Name, "tx").Set(float64(st.TxBytes))
 	}
 }
 

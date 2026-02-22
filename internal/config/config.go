@@ -23,9 +23,10 @@ import (
 )
 
 type Config struct {
-	LogLevel  string                `yaml:"log_level"`
-	CacheDir  string                `yaml:"cache_dir"`
-	WireGuard WireGuardConfig       `yaml:"wireguard"`
+	LogLevel        string                `yaml:"log_level"`
+	CacheDir        string                `yaml:"cache_dir"`
+	ObservabilityHTTP ObservabilityHTTPConfig `yaml:"observability_http"`
+	WireGuard       WireGuardConfig       `yaml:"wireguard"`
 	DNS       DNSConfig             `yaml:"dns"`
 	MTProxy   MTProxyConfig         `yaml:"mtproxy"`
 	Proxies   []ProxyServerConfig   `yaml:"proxies"`
@@ -38,6 +39,12 @@ type Config struct {
 	GeoIP     []GeoIPConfig         `yaml:"geoip"`
 	PeersDir  string                `yaml:"peers_dir"`
 	Peers     map[string]PeerConfig `yaml:"-"`
+}
+
+type ObservabilityHTTPConfig struct {
+	Addr    string `yaml:"addr"`    // e.g. ":6060"
+	Pprof   bool   `yaml:"pprof"`   // serve /debug/pprof/*
+	Metrics bool   `yaml:"metrics"` // serve /metrics (Prometheus)
 }
 
 type WireGuardConfig struct {

@@ -16,6 +16,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 	"gvisor.dev/gvisor/pkg/waiter"
 
+	"github.com/blikh/wireguard-outline-bridge/internal/metrics"
 	"github.com/blikh/wireguard-outline-bridge/internal/routing"
 )
 
@@ -66,7 +67,10 @@ func (p *TCPProxy) handleRequest(r *tcp.ForwarderRequest) {
 }
 
 func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest string, destIP netip.Addr, destPort uint16) {
+	metrics.TCPConnectionsTotal.Inc()
+	metrics.TCPConnectionsActive.Inc()
 	defer func() {
+		metrics.TCPConnectionsActive.Dec()
 		clientConn.Close()
 		if srcAddr.IsValid() {
 			p.tracker.Untrack(srcAddr, clientConn)
@@ -103,6 +107,7 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 
 	outConn, err := dialer.DialStream(context.Background(), dest)
 	if err != nil {
+		metrics.TCPDialErrors.Inc()
 		p.logger.Error("tcp: failed to dial", "dest", dest, "route", routeDesc, "err", err)
 		return
 	}
@@ -114,12 +119,14 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 	go func() {
 		defer wg.Done()
 		n, err := io.Copy(outConn, clientReader)
+		metrics.TCPBytesTotal.WithLabelValues("tx").Add(float64(n))
 		p.logger.Debug("tcp: client -> upstream done", "src", srcAddr, "dest", dest, "bytes", n, "err", err)
 	}()
 
 	go func() {
 		defer wg.Done()
 		n, err := io.Copy(clientConn, outConn)
+		metrics.TCPBytesTotal.WithLabelValues("rx").Add(float64(n))
 		p.logger.Debug("tcp: upstream -> client done", "src", srcAddr, "dest", dest, "bytes", n, "err", err)
 	}()
 

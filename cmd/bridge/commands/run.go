@@ -5,10 +5,14 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"runtime/debug"
 	"syscall"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/blikh/wireguard-outline-bridge/internal/bridge"
 	"github.com/blikh/wireguard-outline-bridge/internal/config"
@@ -54,6 +58,23 @@ func RunBridge(args []string, logger *slog.Logger, version string) {
 		if len(buildAttrs) > 0 {
 			logger.Info("build info", buildAttrs...)
 		}
+	}
+
+	if obs := cfg.ObservabilityHTTP; obs.Addr != "" {
+		mux := http.NewServeMux()
+		if obs.Pprof {
+			// Re-register pprof handlers on our mux (net/http/pprof init registers on DefaultServeMux).
+			mux.HandleFunc("/debug/pprof/", http.DefaultServeMux.ServeHTTP)
+		}
+		if obs.Metrics {
+			mux.Handle("/metrics", promhttp.Handler())
+		}
+		go func() {
+			logger.Info("starting observability server", "addr", obs.Addr, "pprof", obs.Pprof, "metrics", obs.Metrics)
+			if err := http.ListenAndServe(obs.Addr, mux); err != nil {
+				logger.Error("observability server failed", "err", err)
+			}
+		}()
 	}
 
 	b := bridge.New(*configPath, cfg, logger)
