@@ -84,6 +84,7 @@ func (ss *StatsServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&b, "uptime\t%d\n", uptime)
 	fmt.Fprintf(&b, "connections\t%d\n", stats.Connections.Load())
 	fmt.Fprintf(&b, "active_connections\t%d\n", stats.ActiveConnections.Load())
+	fmt.Fprintf(&b, "unique_users\t%d\n", stats.UniqueUsers.Load())
 	fmt.Fprintf(&b, "tls_connections\t%d\n", stats.TLSConnections.Load())
 	fmt.Fprintf(&b, "handshake_errors\t%d\n", stats.HandshakeErrors.Load())
 	fmt.Fprintf(&b, "backend_dial_errors\t%d\n", stats.BackendDialErrors.Load())

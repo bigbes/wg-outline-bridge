@@ -20,6 +20,8 @@ import (
 	"github.com/bigbes/wireguard-outline-bridge/internal/routing"
 )
 
+const tcpIdleTimeout = 5 * time.Minute
+
 type StreamDialer interface {
 	DialStream(ctx context.Context, addr string) (net.Conn, error)
 }
@@ -113,12 +115,15 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 	}
 	defer outConn.Close()
 
+	idle := &idleTimer{timeout: tcpIdleTimeout, a: clientConn, b: outConn}
+	idle.touch()
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 
 	go func() {
 		defer wg.Done()
-		n, err := io.Copy(outConn, clientReader)
+		n, err := io.Copy(outConn, &activityReader{r: clientReader, idle: idle})
 		metrics.TCPBytesTotal.WithLabelValues("tx").Add(float64(n))
 		p.logger.Debug("tcp: client -> upstream done", "src", srcAddr, "dest", dest, "bytes", n, "err", err)
 		outConn.Close() // unblock upstream -> client read
@@ -126,7 +131,7 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 
 	go func() {
 		defer wg.Done()
-		n, err := io.Copy(clientConn, outConn)
+		n, err := io.Copy(clientConn, &activityReader{r: outConn, idle: idle})
 		metrics.TCPBytesTotal.WithLabelValues("rx").Add(float64(n))
 		p.logger.Debug("tcp: upstream -> client done", "src", srcAddr, "dest", dest, "bytes", n, "err", err)
 		clientConn.Close() // unblock client -> upstream read
@@ -138,4 +143,33 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 
 func itoa(port uint16) string {
 	return fmt.Sprintf("%d", port)
+}
+
+// idleTimer tracks bidirectional activity and sets read deadlines on both
+// connections. Activity on either side extends the deadline for both,
+// preventing premature timeout during one-way data flows while still
+// catching half-open connections where neither side sends data.
+type idleTimer struct {
+	timeout time.Duration
+	a, b    interface{ SetReadDeadline(time.Time) error }
+}
+
+func (t *idleTimer) touch() {
+	deadline := time.Now().Add(t.timeout)
+	t.a.SetReadDeadline(deadline)
+	t.b.SetReadDeadline(deadline)
+}
+
+// activityReader wraps a reader and signals the idle timer on each successful read.
+type activityReader struct {
+	r    io.Reader
+	idle *idleTimer
+}
+
+func (r *activityReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	if n > 0 {
+		r.idle.touch()
+	}
+	return n, err
 }

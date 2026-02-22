@@ -45,6 +45,7 @@ type mtproxyInfo struct {
 	Enabled           bool               `json:"enabled"`
 	Connections       int64              `json:"connections"`
 	ActiveConnections int64              `json:"active_connections"`
+	UniqueUsers       int64              `json:"unique_users"`
 	BytesC2B          int64              `json:"bytes_c2b"`
 	BytesB2C          int64              `json:"bytes_b2c"`
 	BytesC2BTotal     int64              `json:"bytes_c2b_total"`
@@ -57,6 +58,7 @@ type secretInfo struct {
 	Secret           string `json:"secret"`
 	LastConnection   int64  `json:"last_connection_unix"`
 	Connections      int64  `json:"connections"`
+	UniqueUsers      int64  `json:"unique_users"`
 	ConnectionsTotal int64  `json:"connections_total"`
 	BytesC2B         int64  `json:"bytes_c2b"`
 	BytesB2C         int64  `json:"bytes_b2c"`
@@ -168,6 +170,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Enabled:           mt.Enabled,
 		Connections:       mt.Connections,
 		ActiveConnections: mt.ActiveConnections,
+		UniqueUsers:       mt.UniqueUsers,
 		BytesC2B:          mt.BytesC2B,
 		BytesB2C:          mt.BytesB2C,
 		BytesC2BTotal:     mt.BytesC2BTotal,
@@ -179,6 +182,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			Secret:           c.Secret,
 			LastConnection:   c.LastConnection.Unix(),
 			Connections:      c.Connections,
+			UniqueUsers:      c.UniqueUsers,
 			ConnectionsTotal: c.ConnectionsTotal,
 			BytesC2B:         c.BytesC2B,
 			BytesB2C:         c.BytesB2C,

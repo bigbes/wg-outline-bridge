@@ -23,6 +23,7 @@ import (
 const (
 	handshakeTimeout = 10 * time.Second
 	maxTLSRecordLen  = 16384
+	relayIdleTimeout = 5 * time.Minute
 )
 
 // StreamDialer dials a TCP connection (typically through Outline proxy).
@@ -52,6 +53,9 @@ type secretCounters struct {
 	bytesC2B          atomic.Int64
 	bytesB2C          atomic.Int64
 	backendDialErrors atomic.Int64
+
+	uniqueIPsMu sync.Mutex
+	uniqueIPs   map[string]struct{}
 }
 
 // SecretSnapshot holds a point-in-time copy of per-secret counters.
@@ -59,6 +63,7 @@ type SecretSnapshot struct {
 	SecretHex          string
 	LastConnectionUnix int64
 	Connections        int64
+	UniqueUsers        int64
 	BytesC2B           int64
 	BytesB2C           int64
 	BackendDialErrors  int64
@@ -68,6 +73,7 @@ type SecretSnapshot struct {
 type Stats struct {
 	Connections          atomic.Int64 // total connections accepted
 	ActiveConnections    atomic.Int64 // currently active connections
+	UniqueUsers          atomic.Int64 // unique remote IPs seen (session)
 	TLSConnections       atomic.Int64 // connections using fake TLS
 	HandshakeErrors      atomic.Int64 // failed handshakes (TLS, header, secret mismatch)
 	BackendDialErrors    atomic.Int64 // failed backend dials
@@ -93,6 +99,10 @@ type Server struct {
 	secretMu    sync.Mutex
 	secretStats map[int]*secretCounters
 
+	// Global unique IP tracking
+	uniqueIPsMu sync.Mutex
+	uniqueIPs   map[string]struct{}
+
 	// Replay cache for fake TLS (client_random dedup)
 	replayMu    sync.Mutex
 	replayCache map[[32]byte]time.Time
@@ -106,6 +116,7 @@ func NewServer(config ServerConfig, dialer StreamDialer, endpoints *telegram.End
 		endpoints:   endpoints,
 		logger:      logger.With("component", "mtproxy"),
 		secretStats: make(map[int]*secretCounters),
+		uniqueIPs:   make(map[string]struct{}),
 		replayCache: make(map[[32]byte]time.Time),
 	}
 }
@@ -182,6 +193,11 @@ func (s *Server) StatsSnapshot() *Stats {
 	snap.BackendDialErrors.Store(s.stats.BackendDialErrors.Load())
 	snap.BytesClientToBackend.Store(s.stats.BytesClientToBackend.Load())
 	snap.BytesBackendToClient.Store(s.stats.BytesBackendToClient.Load())
+
+	s.uniqueIPsMu.Lock()
+	snap.UniqueUsers.Store(int64(len(s.uniqueIPs)))
+	s.uniqueIPsMu.Unlock()
+
 	return snap
 }
 
@@ -190,7 +206,7 @@ func (s *Server) getSecretCounters(idx int) *secretCounters {
 	defer s.secretMu.Unlock()
 	sc, ok := s.secretStats[idx]
 	if !ok {
-		sc = &secretCounters{}
+		sc = &secretCounters{uniqueIPs: make(map[string]struct{})}
 		s.secretStats[idx] = sc
 	}
 	return sc
@@ -207,10 +223,14 @@ func (s *Server) SecretStatsSnapshot() []SecretSnapshot {
 		if idx >= 0 && idx < len(hexes) {
 			hex = hexes[idx]
 		}
+		sc.uniqueIPsMu.Lock()
+		uniqueUsers := int64(len(sc.uniqueIPs))
+		sc.uniqueIPsMu.Unlock()
 		result = append(result, SecretSnapshot{
 			SecretHex:          hex,
 			LastConnectionUnix: sc.lastConnUnix.Load(),
 			Connections:        sc.connections.Load(),
+			UniqueUsers:        uniqueUsers,
 			BytesC2B:           sc.bytesC2B.Load(),
 			BytesB2C:           sc.bytesB2C.Load(),
 			BackendDialErrors:  sc.backendDialErrors.Load(),
@@ -310,6 +330,21 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	sc.connections.Add(1)
 	sc.lastConnUnix.Store(time.Now().Unix())
 
+	// Track unique IPs (per-secret and global).
+	remoteIP, _, _ := net.SplitHostPort(remoteAddr)
+	if remoteIP != "" {
+		sc.uniqueIPsMu.Lock()
+		sc.uniqueIPs[remoteIP] = struct{}{}
+		sc.uniqueIPsMu.Unlock()
+
+		s.uniqueIPsMu.Lock()
+		if _, exists := s.uniqueIPs[remoteIP]; !exists {
+			s.uniqueIPs[remoteIP] = struct{}{}
+			s.stats.UniqueUsers.Add(1)
+		}
+		s.uniqueIPsMu.Unlock()
+	}
+
 	conn.SetDeadline(time.Time{}) // clear handshake deadline
 
 	dcID := int(parsed.DCID)
@@ -363,7 +398,10 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	var backendReader io.Reader = &cipher.StreamReader{S: backendDecrypt, R: backendConn}
 	var backendWriter io.Writer = &cipher.StreamWriter{S: backendEncrypt, W: backendConn}
 
-	// Bidirectional relay
+	// Bidirectional relay with idle timeout
+	idle := &idleTimer{timeout: relayIdleTimeout, a: conn, b: backendConn}
+	idle.touch()
+
 	var relayWg sync.WaitGroup
 	relayWg.Add(2)
 
@@ -373,7 +411,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	// Client -> Backend (decrypt from client, forward to backend)
 	go func() {
 		defer relayWg.Done()
-		sr := &cipher.StreamReader{S: parsed.Decrypt, R: clientReader}
+		sr := &cipher.StreamReader{S: parsed.Decrypt, R: &activityReader{r: clientReader, idle: idle}}
 		n, err := io.Copy(backendWriter, sr)
 		bytesUp = n
 		if err != nil {
@@ -388,7 +426,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	go func() {
 		defer relayWg.Done()
 		sw := &cipher.StreamWriter{S: parsed.Encrypt, W: clientWriter}
-		n, err := io.Copy(sw, backendReader)
+		n, err := io.Copy(sw, &activityReader{r: backendReader, idle: idle})
 		bytesDown = n
 		if err != nil {
 			downReason = fmt.Sprintf("backend->client: %v", err)
@@ -677,6 +715,32 @@ func (s *Server) addClientRandom(random [32]byte) {
 	s.replayMu.Lock()
 	defer s.replayMu.Unlock()
 	s.replayCache[random] = time.Now()
+}
+
+// idleTimer tracks bidirectional activity and sets read deadlines on both
+// connections. Activity on either side extends the deadline for both.
+type idleTimer struct {
+	timeout time.Duration
+	a, b    interface{ SetReadDeadline(time.Time) error }
+}
+
+func (t *idleTimer) touch() {
+	deadline := time.Now().Add(t.timeout)
+	t.a.SetReadDeadline(deadline)
+	t.b.SetReadDeadline(deadline)
+}
+
+type activityReader struct {
+	r    io.Reader
+	idle *idleTimer
+}
+
+func (r *activityReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	if n > 0 {
+		r.idle.touch()
+	}
+	return n, err
 }
 
 func (s *Server) cleanupReplayCache(ctx context.Context) {

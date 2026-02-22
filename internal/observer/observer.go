@@ -40,6 +40,7 @@ type MTProxyStatus struct {
 	// Session (since last restart).
 	Connections       int64
 	ActiveConnections int64
+	UniqueUsers       int64
 	TLSConnections    int64
 	HandshakeErrors   int64
 	BackendDialErrors int64
@@ -60,6 +61,7 @@ type MTProxyClient struct {
 	Secret         string // hex secret string
 	LastConnection time.Time
 	Connections    int64
+	UniqueUsers    int64
 	BytesC2B       int64
 	BytesB2C       int64
 
@@ -436,6 +438,9 @@ func formatStatus(peers []PeerStatus, daemon DaemonStatus, mt MTProxyStatus, ups
 			fmt.Fprintf(&b, ", %d total", mt.ConnectionsTotal)
 		}
 		b.WriteString("\n")
+		if mt.UniqueUsers > 0 {
+			fmt.Fprintf(&b, "  Unique users: %d\n", mt.UniqueUsers)
+		}
 		fmt.Fprintf(&b, "  Traffic: ↑%s ↓%s\n", formatBytes(mt.BytesC2B), formatBytes(mt.BytesB2C))
 		if mt.BytesC2BTotal > 0 || mt.BytesB2CTotal > 0 {
 			fmt.Fprintf(&b, "  Total: ↑%s ↓%s\n", formatBytes(mt.BytesC2BTotal), formatBytes(mt.BytesB2CTotal))
@@ -460,7 +465,12 @@ func formatStatus(peers []PeerStatus, daemon DaemonStatus, mt MTProxyStatus, ups
 					lastConn = fmt.Sprintf("%s ago", formatDuration(time.Since(c.LastConnection).Truncate(time.Second)))
 				}
 				fmt.Fprintf(&b, "  • %s — last %s\n", label, lastConn)
-				fmt.Fprintf(&b, "    Conns: %d session", c.Connections)
+				if c.UniqueUsers > 0 {
+					fmt.Fprintf(&b, "    Users: %d | ", c.UniqueUsers)
+				} else {
+					fmt.Fprintf(&b, "    ")
+				}
+				fmt.Fprintf(&b, "Conns: %d session", c.Connections)
 				if c.ConnectionsTotal > 0 {
 					fmt.Fprintf(&b, ", %d total", c.ConnectionsTotal)
 				}

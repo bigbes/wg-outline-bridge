@@ -22,6 +22,8 @@ import (
 	"github.com/bigbes/wireguard-outline-bridge/internal/socks5"
 )
 
+const connectIdleTimeout = 5 * time.Minute
+
 // StreamDialer dials a TCP connection (typically through an Outline proxy).
 type StreamDialer interface {
 	DialStream(ctx context.Context, addr string) (net.Conn, error)
@@ -34,6 +36,10 @@ type ServerConfig struct {
 	Listen   string
 	Username string
 	Password string
+
+	// DNSAddr, when set, makes the SOCKS5 resolver use the onboard DNS
+	// proxy instead of the system resolver. Format: "host:port".
+	DNSAddr string
 
 	// TLS settings (https only)
 	CertFile  string
@@ -124,6 +130,10 @@ func (s *Server) serveSOCKS5(ctx context.Context) {
 	conf := &socks5.Config{
 		Dial:   s.dialForSOCKS5,
 		Logger: log.New(io.Discard, "", 0),
+	}
+
+	if s.config.DNSAddr != "" {
+		conf.Resolver = &onboardDNSResolver{addr: s.config.DNSAddr}
 	}
 
 	if s.config.Username != "" {
@@ -263,16 +273,19 @@ func (h *httpProxyHandler) handleConnect(w http.ResponseWriter, r *http.Request)
 	}
 	defer client.Close()
 
+	idle := &idleTimer{timeout: connectIdleTimeout, a: client, b: upstream}
+	idle.touch()
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		io.Copy(upstream, client)
+		io.Copy(upstream, &activityReader{r: client, idle: idle})
 		upstream.Close() // unblock upstream -> client read
 	}()
 	go func() {
 		defer wg.Done()
-		io.Copy(client, upstream)
+		io.Copy(client, &activityReader{r: upstream, idle: idle})
 		client.Close() // unblock client -> upstream read
 	}()
 	wg.Wait()
@@ -331,4 +344,53 @@ func (h *httpProxyHandler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	defer client.Close()
 
 	io.Copy(client, upstream)
+}
+
+// idleTimer tracks bidirectional activity and sets read deadlines on both
+// connections. Activity on either side extends the deadline for both.
+type idleTimer struct {
+	timeout time.Duration
+	a, b    interface{ SetReadDeadline(time.Time) error }
+}
+
+func (t *idleTimer) touch() {
+	deadline := time.Now().Add(t.timeout)
+	t.a.SetReadDeadline(deadline)
+	t.b.SetReadDeadline(deadline)
+}
+
+type activityReader struct {
+	r    io.Reader
+	idle *idleTimer
+}
+
+func (r *activityReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	if n > 0 {
+		r.idle.touch()
+	}
+	return n, err
+}
+
+// onboardDNSResolver resolves names via the built-in DNS proxy server.
+type onboardDNSResolver struct {
+	addr string // "host:port" of the onboard DNS server
+}
+
+func (r *onboardDNSResolver) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "udp", r.addr)
+		},
+	}
+	addrs, err := resolver.LookupIPAddr(ctx, name)
+	if err != nil {
+		return ctx, nil, err
+	}
+	if len(addrs) == 0 {
+		return ctx, nil, fmt.Errorf("no addresses found for %s", name)
+	}
+	return ctx, addrs[0].IP, nil
 }

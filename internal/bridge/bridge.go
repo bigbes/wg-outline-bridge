@@ -488,7 +488,7 @@ func (b *Bridge) startProxyServers(ctx context.Context, dialers *proxy.DialerSet
 			acmeDir = filepath.Join(b.cfg.CacheDir, "acme", pcfg.Name)
 		}
 
-		srv := proxyserver.NewServer(proxyserver.ServerConfig{
+		srvCfg := proxyserver.ServerConfig{
 			Name:      pcfg.Name,
 			Type:      pcfg.Type,
 			Listen:    pcfg.Listen,
@@ -499,7 +499,12 @@ func (b *Bridge) startProxyServers(ctx context.Context, dialers *proxy.DialerSet
 			Domain:    pcfg.TLS.Domain,
 			ACMEEmail: pcfg.TLS.ACMEEmail,
 			ACMEDir:   acmeDir,
-		}, dialer, b.logger)
+		}
+		if b.cfg.DNS.Enabled {
+			srvCfg.DNSAddr = b.cfg.DNS.Listen
+		}
+
+		srv := proxyserver.NewServer(srvCfg, dialer, b.logger)
 
 		if err := srv.Listen(); err != nil {
 			return fmt.Errorf("proxy %q: %w", pcfg.Name, err)
@@ -570,6 +575,7 @@ func (b *Bridge) MTProxyStatus() observer.MTProxyStatus {
 		Enabled:           true,
 		Connections:       snap.Connections.Load(),
 		ActiveConnections: snap.ActiveConnections.Load(),
+		UniqueUsers:       snap.UniqueUsers.Load(),
 		TLSConnections:    snap.TLSConnections.Load(),
 		HandshakeErrors:   snap.HandshakeErrors.Load(),
 		BackendDialErrors: snap.BackendDialErrors.Load(),
@@ -606,6 +612,7 @@ func (b *Bridge) MTProxyStatus() observer.MTProxyStatus {
 				c.LastConnection = time.Unix(ss.LastConnectionUnix, 0)
 			}
 			c.Connections = ss.Connections
+			c.UniqueUsers = ss.UniqueUsers
 			c.BytesC2B = ss.BytesC2B
 			c.BytesB2C = ss.BytesB2C
 		}
