@@ -276,7 +276,11 @@ func (b *Bridge) Run(ctx context.Context) error {
 
 	if b.cfg.Telegram.Enabled {
 		bot := tgbot.NewBot(b.cfg.Telegram.Token, b.cfg.Telegram.ChatID)
-		obs := observer.New(bot, b, b, b, time.Duration(b.cfg.Telegram.Interval)*time.Second, b.cfg.Telegram.ChatID, b.logger)
+		var roleChecker observer.RoleChecker
+		if b.statsStore != nil {
+			roleChecker = b.statsStore
+		}
+		obs := observer.New(bot, b, b, b, roleChecker, time.Duration(b.cfg.Telegram.Interval)*time.Second, b.cfg.Telegram.ChatID, b.logger)
 		go obs.Run(ctx)
 		b.logger.Info("telegram observer started", "interval", b.cfg.Telegram.Interval)
 

@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS allowed_users (
   first_name TEXT NOT NULL DEFAULT '',
   last_name TEXT NOT NULL DEFAULT '',
   photo_url TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL DEFAULT 'admin',
   created_unix INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
@@ -148,6 +149,40 @@ CREATE TABLE IF NOT EXISTS dns_rules (
 );`
 	if _, err := s.db.Exec(ddl); err != nil {
 		return fmt.Errorf("statsdb: init schema: %w", err)
+	}
+	if err := s.migrateSchema(); err != nil {
+		return fmt.Errorf("statsdb: migrate schema: %w", err)
+	}
+	return nil
+}
+
+// migrateSchema applies incremental ALTER TABLE migrations for columns added
+// after the initial schema.  Each migration is idempotent (checks column
+// existence before altering).
+func (s *Store) migrateSchema() error {
+	migrations := []struct {
+		table  string
+		column string
+		ddl    string
+	}{
+		{"allowed_users", "role", `ALTER TABLE allowed_users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'`},
+		{"wg_peers", "owner_user_id", `ALTER TABLE wg_peers ADD COLUMN owner_user_id INTEGER`},
+		{"mtproxy_secrets", "owner_user_id", `ALTER TABLE mtproxy_secrets ADD COLUMN owner_user_id INTEGER`},
+	}
+	for _, m := range migrations {
+		var count int
+		err := s.db.QueryRow(
+			`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`,
+			m.table, m.column,
+		).Scan(&count)
+		if err != nil {
+			return fmt.Errorf("check column %s.%s: %w", m.table, m.column, err)
+		}
+		if count == 0 {
+			if _, err := s.db.Exec(m.ddl); err != nil {
+				return fmt.Errorf("add column %s.%s: %w", m.table, m.column, err)
+			}
+		}
 	}
 	return nil
 }
@@ -920,7 +955,7 @@ func (s *Store) ImportUpstreams(upstreams []config.UpstreamConfig) (int, error) 
 // ListAllowedUsers returns all authorized Telegram users.
 func (s *Store) ListAllowedUsers() ([]AllowedUser, error) {
 	rows, err := s.db.Query(
-		`SELECT user_id, username, first_name, last_name, photo_url, created_unix
+		`SELECT user_id, username, first_name, last_name, photo_url, role, created_unix
 		 FROM allowed_users ORDER BY created_unix DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: list allowed users: %w", err)
@@ -930,7 +965,7 @@ func (s *Store) ListAllowedUsers() ([]AllowedUser, error) {
 	var out []AllowedUser
 	for rows.Next() {
 		var u AllowedUser
-		if err := rows.Scan(&u.UserID, &u.Username, &u.FirstName, &u.LastName, &u.PhotoURL, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.UserID, &u.Username, &u.FirstName, &u.LastName, &u.PhotoURL, &u.Role, &u.CreatedAt); err != nil {
 			return nil, fmt.Errorf("statsdb: scan allowed user: %w", err)
 		}
 		out = append(out, u)
@@ -943,20 +978,48 @@ func (s *Store) ListAllowedUsers() ([]AllowedUser, error) {
 
 // AddAllowedUser adds a new authorized user. Upserts to update profile info.
 func (s *Store) AddAllowedUser(u AllowedUser) error {
+	role := u.Role
+	if role == "" {
+		role = RoleGuest
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO allowed_users (user_id, username, first_name, last_name, photo_url)
-		 VALUES (?, ?, ?, ?, ?)
+		`INSERT INTO allowed_users (user_id, username, first_name, last_name, photo_url, role)
+		 VALUES (?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(user_id) DO UPDATE SET
 		   username = excluded.username,
 		   first_name = excluded.first_name,
 		   last_name = excluded.last_name,
-		   photo_url = excluded.photo_url`,
-		u.UserID, u.Username, u.FirstName, u.LastName, u.PhotoURL,
+		   photo_url = excluded.photo_url,
+		   role = excluded.role`,
+		u.UserID, u.Username, u.FirstName, u.LastName, u.PhotoURL, role,
 	)
 	if err != nil {
 		return fmt.Errorf("statsdb: add allowed user %d: %w", u.UserID, err)
 	}
 	return nil
+}
+
+// GetUserRole returns the role of a user, or empty string if not found.
+func (s *Store) GetUserRole(userID int64) (string, error) {
+	var role string
+	err := s.db.QueryRow(`SELECT role FROM allowed_users WHERE user_id = ?`, userID).Scan(&role)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("statsdb: get user role %d: %w", userID, err)
+	}
+	return role, nil
+}
+
+// SetUserRole updates the role of an existing user.
+func (s *Store) SetUserRole(userID int64, role string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE allowed_users SET role = ? WHERE user_id = ?`, role, userID)
+	if err != nil {
+		return false, fmt.Errorf("statsdb: set user role %d: %w", userID, err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // DeleteAllowedUser removes an authorized user by ID.
@@ -1097,4 +1160,116 @@ func (s *Store) ImportDNSRules(rules []config.DNSRuleConfig) (int, error) {
 		return 0, fmt.Errorf("statsdb: commit import dns rules: %w", err)
 	}
 	return count, nil
+}
+
+// ---------------------------------------------------------------------------
+// Ownership helpers
+// ---------------------------------------------------------------------------
+
+// SetPeerOwner sets the owner_user_id for a peer.
+func (s *Store) SetPeerOwner(name string, ownerID int64) error {
+	_, err := s.db.Exec(`UPDATE wg_peers SET owner_user_id = ? WHERE name = ?`, ownerID, name)
+	if err != nil {
+		return fmt.Errorf("statsdb: set peer owner %q: %w", name, err)
+	}
+	return nil
+}
+
+// GetPeerOwner returns the owner_user_id for a peer. Returns nil if unowned or not found.
+func (s *Store) GetPeerOwner(name string) (*int64, error) {
+	var ownerID sql.NullInt64
+	err := s.db.QueryRow(`SELECT owner_user_id FROM wg_peers WHERE name = ?`, name).Scan(&ownerID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: get peer owner %q: %w", name, err)
+	}
+	if !ownerID.Valid {
+		return nil, nil
+	}
+	return &ownerID.Int64, nil
+}
+
+// CountPeersByOwner returns the number of peers owned by a user.
+func (s *Store) CountPeersByOwner(ownerID int64) (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM wg_peers WHERE owner_user_id = ?`, ownerID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: count peers by owner %d: %w", ownerID, err)
+	}
+	return count, nil
+}
+
+// ListPeerNamesByOwner returns the set of peer names owned by a user.
+func (s *Store) ListPeerNamesByOwner(ownerID int64) (map[string]struct{}, error) {
+	rows, err := s.db.Query(`SELECT name FROM wg_peers WHERE owner_user_id = ?`, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list peers by owner %d: %w", ownerID, err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]struct{})
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("statsdb: scan peer name: %w", err)
+		}
+		out[name] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
+// SetSecretOwner sets the owner_user_id for a secret.
+func (s *Store) SetSecretOwner(secretHex string, ownerID int64) error {
+	_, err := s.db.Exec(`UPDATE mtproxy_secrets SET owner_user_id = ? WHERE secret_hex = ?`, ownerID, secretHex)
+	if err != nil {
+		return fmt.Errorf("statsdb: set secret owner %q: %w", secretHex, err)
+	}
+	return nil
+}
+
+// GetSecretOwner returns the owner_user_id for a secret. Returns nil if unowned or not found.
+func (s *Store) GetSecretOwner(secretHex string) (*int64, error) {
+	var ownerID sql.NullInt64
+	err := s.db.QueryRow(`SELECT owner_user_id FROM mtproxy_secrets WHERE secret_hex = ?`, secretHex).Scan(&ownerID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: get secret owner %q: %w", secretHex, err)
+	}
+	if !ownerID.Valid {
+		return nil, nil
+	}
+	return &ownerID.Int64, nil
+}
+
+// CountSecretsByOwner returns the number of secrets owned by a user.
+func (s *Store) CountSecretsByOwner(ownerID int64) (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM mtproxy_secrets WHERE owner_user_id = ?`, ownerID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: count secrets by owner %d: %w", ownerID, err)
+	}
+	return count, nil
+}
+
+// ListSecretHexByOwner returns the set of secret hex strings owned by a user.
+func (s *Store) ListSecretHexByOwner(ownerID int64) (map[string]struct{}, error) {
+	rows, err := s.db.Query(`SELECT secret_hex FROM mtproxy_secrets WHERE owner_user_id = ?`, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list secrets by owner %d: %w", ownerID, err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]struct{})
+	for rows.Next() {
+		var hex string
+		if err := rows.Scan(&hex); err != nil {
+			return nil, fmt.Errorf("statsdb: scan secret hex: %w", err)
+		}
+		out[hex] = struct{}{}
+	}
+	return out, rows.Err()
 }

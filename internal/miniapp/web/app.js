@@ -13,6 +13,11 @@ if (!tg || !tg.initData) {
     let groupsLoaded = false;
     let dnsData = null;
     let dnsLoaded = false;
+    let meData = null;
+
+    function isAdmin() {
+        return meData && meData.role === "admin";
+    }
 
     function api(method, path, body) {
         const opts = {
@@ -218,10 +223,10 @@ if (!tg || !tg.initData) {
       <div class="card">
         <div class="card-header">
           <span class="name">${stateIcon} ${u.name} <span class="meta">${u.type}</span> ${badgeHtml}</span>
-          <div style="display:flex;gap:4px">
+          ${isAdmin() ? `<div style="display:flex;gap:4px">
             ${u.enabled ? `<button class="btn btn-sm" style="background:var(--hint)" onclick="toggleUpstream('${u.name}',false)">Disable</button>` : `<button class="btn btn-sm" onclick="toggleUpstream('${u.name}',true)">Enable</button>`}
             <button class="btn btn-sm btn-danger" onclick="deleteUpstream('${u.name}')">✕</button>
-          </div>
+          </div>` : ""}
         </div>
         <div class="meta">
           <span>↓${formatBytes(u.rx_bytes)} ↑${formatBytes(u.tx_bytes)}</span>
@@ -314,8 +319,8 @@ if (!tg || !tg.initData) {
                             return `
         <div class="card" id="plink-${l.secret}">
           <div class="proxy-link-card">
-            <span class="name" onclick="startRenameLink('${l.secret}', this)">${secretTypeBadge(l.secret)} ${l.name}</span>
-            <button class="icon-btn" onclick="startRenameLink('${l.secret}', this.parentElement.querySelector('.name'))" title="Rename">✏️</button>
+            <span class="name"${isAdmin() ? ` onclick="startRenameLink('${l.secret}', this)"` : ""}>${secretTypeBadge(l.secret)} ${l.name}</span>
+            ${isAdmin() ? `<button class="icon-btn" onclick="startRenameLink('${l.secret}', this.parentElement.querySelector('.name'))" title="Rename">✏️</button>` : ""}
             <button class="icon-btn" onclick="copyText('${l.url}')" title="Copy link">📋</button>
             <a class="icon-btn" href="${l.url}" target="_blank" title="Open link">🔗</a>
             <button class="icon-btn" onclick="deleteSecret('${l.secret}')" title="Delete secret" style="color:#e53935">🗑️</button>
@@ -767,6 +772,53 @@ if (!tg || !tg.initData) {
         });
     }
 
+    function renderMe() {
+        const el = document.getElementById("current-user");
+        if (!meData || !el) return;
+        const roleBadge = meData.role === "admin" ? "👑 Admin" : "👤 Guest";
+        el.textContent = roleBadge;
+        updateTabVisibility();
+    }
+
+    function updateTabVisibility() {
+        const admin = isAdmin();
+        const sections = ["peers", "upstreams", "proxies", "dns", "users"];
+        const adminOnlyTabs = ["upstreams", "dns", "users"];
+        document.querySelectorAll("#app > .tabs > .tab").forEach((t, i) => {
+            if (adminOnlyTabs.includes(sections[i])) {
+                t.style.display = admin ? "" : "none";
+            }
+        });
+        // Toggle admin-only elements throughout the page
+        document.querySelectorAll(".admin-only").forEach((el) => {
+            el.style.display = admin ? "" : "none";
+        });
+        // For guests, hide non-mtproxy proxy sub-tabs and force mtproxy view
+        const proxySubTabs = document.querySelectorAll("#proxies > .sub-tabs > .tab");
+        const adminOnlyProxySubs = ["socks5", "http", "https"];
+        const proxySubs = ["mtproxy", "socks5", "http", "https"];
+        proxySubTabs.forEach((t, i) => {
+            if (adminOnlyProxySubs.includes(proxySubs[i])) {
+                t.style.display = admin ? "" : "none";
+            }
+        });
+        if (!admin) {
+            showProxySubTab("mtproxy");
+        }
+        // If guest is on a hidden tab, switch to peers
+        if (!admin) {
+            try {
+                const active = sessionStorage.getItem("activeTab");
+                if (active && adminOnlyTabs.includes(active)) {
+                    showTab("peers");
+                }
+            } catch (e) {}
+        }
+        // Re-render to update inline admin controls
+        if (data) render();
+        if (dnsData) renderDNS();
+    }
+
     function renderUsers() {
         const ul = document.getElementById("users-list");
         if (!usersData || usersData.length === 0) {
@@ -782,23 +834,43 @@ if (!tg || !tg.initData) {
                 const avatar = u.photo_url
                     ? `<img src="${u.photo_url}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">`
                     : `<div style="width:36px;height:36px;border-radius:50%;background:var(--btn);display:flex;align-items:center;justify-content:center;font-size:16px;color:var(--btn-text)">${(u.first_name || "?")[0]}</div>`;
-                const adminBadge = u.is_admin
-                    ? '<span style="background:var(--btn);color:var(--btn-text);font-size:10px;padding:1px 6px;border-radius:4px;margin-left:6px">admin</span>'
-                    : "";
-                const deleteBtn = u.is_admin
+                const isConfigAdmin = u.is_config_admin;
+                let roleHtml;
+                if (isConfigAdmin) {
+                    roleHtml = '<span style="background:var(--btn);color:var(--btn-text);font-size:10px;padding:1px 6px;border-radius:4px;margin-left:6px">admin</span>';
+                } else {
+                    const role = u.role || (u.is_admin ? "admin" : "guest");
+                    roleHtml = `<select class="role-select" onchange="changeUserRole(${u.user_id},this.value)" style="font-size:10px;padding:1px 4px;border-radius:4px;margin-left:6px;background:var(--bg);color:var(--text);border:1px solid var(--hint)">
+                        <option value="admin"${role === "admin" ? " selected" : ""}>admin</option>
+                        <option value="guest"${role === "guest" ? " selected" : ""}>guest</option>
+                    </select>`;
+                }
+                const deleteBtn = isConfigAdmin
                     ? ""
                     : `<button class="btn btn-sm btn-danger" onclick="deleteUser(${u.user_id},'${name.replace(/'/g, "\\'")}')">✕</button>`;
                 return `
       <div class="card" style="display:flex;align-items:center;gap:10px">
         ${avatar}
         <div style="flex:1;min-width:0">
-          <div class="name">${name}${adminBadge}</div>
+          <div class="name">${name}${roleHtml}</div>
           <div class="meta">${u.username ? "@" + u.username : ""} · ID: ${u.user_id}</div>
         </div>
         ${deleteBtn}
       </div>`;
             })
             .join("");
+    }
+
+    function changeUserRole(userId, role) {
+        api("PUT", "/api/users/" + userId, { role: role }).then((d) => {
+            if (d.error) {
+                showMsg("user-msg", d.error, true);
+                refreshUsers();
+                return;
+            }
+            showMsg("user-msg", "Role updated", false);
+            refreshUsers();
+        });
     }
 
     function addUser() {
@@ -939,7 +1011,7 @@ if (!tg || !tg.initData) {
           <span class="name">${actionIcon} ${r.name}</span>
           <div style="display:flex;align-items:center;gap:6px">
             <span class="meta">${actionLabel}</span>
-            <button class="btn btn-sm btn-danger" onclick="deleteDNSRule('${escapedName}')">✕</button>
+            ${isAdmin() ? `<button class="btn btn-sm btn-danger" onclick="deleteDNSRule('${escapedName}')">✕</button>` : ""}
           </div>
         </div>
         ${domainsHtml}
@@ -1239,6 +1311,12 @@ if (!tg || !tg.initData) {
     }
     ping();
     setInterval(ping, 10000);
+
+    // Fetch current user info
+    api("GET", "/api/me").then((d) => {
+        meData = d;
+        renderMe();
+    });
 
     // Initial load
     refresh();

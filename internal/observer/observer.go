@@ -108,6 +108,11 @@ type ConfigProvider interface {
 	CurrentConfig() *config.Config
 }
 
+// RoleChecker resolves the role of a Telegram user.
+type RoleChecker interface {
+	GetUserRole(userID int64) (string, error)
+}
+
 // Manager provides runtime peer and secret management operations.
 type Manager interface {
 	AddPeer(name string) (config.PeerConfig, error)
@@ -125,26 +130,29 @@ type Manager interface {
 
 // Observer sends periodic status updates and handles bot commands via Telegram.
 type Observer struct {
-	bot      *telegram.Bot
-	provider StatusProvider
-	cfgProv  ConfigProvider
-	manager  Manager
-	interval time.Duration
-	chatID   int64
-	logger   *slog.Logger
+	bot         *telegram.Bot
+	provider    StatusProvider
+	cfgProv     ConfigProvider
+	manager     Manager
+	roleChecker RoleChecker
+	interval    time.Duration
+	chatID      int64
+	logger      *slog.Logger
 }
 
 // New creates a new Observer. If chatID is 0, periodic push notifications
 // are disabled but the bot still responds to incoming commands.
-func New(bot *telegram.Bot, provider StatusProvider, cfgProv ConfigProvider, manager Manager, interval time.Duration, chatID int64, logger *slog.Logger) *Observer {
+// roleChecker may be nil when no database is configured.
+func New(bot *telegram.Bot, provider StatusProvider, cfgProv ConfigProvider, manager Manager, roleChecker RoleChecker, interval time.Duration, chatID int64, logger *slog.Logger) *Observer {
 	return &Observer{
-		bot:      bot,
-		provider: provider,
-		cfgProv:  cfgProv,
-		manager:  manager,
-		interval: interval,
-		chatID:   chatID,
-		logger:   logger,
+		bot:         bot,
+		provider:    provider,
+		cfgProv:     cfgProv,
+		manager:     manager,
+		roleChecker: roleChecker,
+		interval:    interval,
+		chatID:      chatID,
+		logger:      logger,
 	}
 }
 
@@ -226,7 +234,7 @@ func (o *Observer) pollLoop(ctx context.Context) {
 
 func (o *Observer) isAllowed(msg *telegram.Message) bool {
 	allowedUsers := o.cfgProv.CurrentConfig().Telegram.AllowedUsers
-	if len(allowedUsers) == 0 {
+	if len(allowedUsers) == 0 && o.roleChecker == nil {
 		return true
 	}
 	// Group/channel messages are allowed (filtered by chat_id if needed)
@@ -236,7 +244,30 @@ func (o *Observer) isAllowed(msg *telegram.Message) bool {
 	if msg.From == nil {
 		return false
 	}
-	return slices.Contains(allowedUsers, msg.From.ID)
+	if slices.Contains(allowedUsers, msg.From.ID) {
+		return true
+	}
+	// Check DB-stored users.
+	if o.roleChecker != nil {
+		if role, err := o.roleChecker.GetUserRole(msg.From.ID); err == nil && role != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (o *Observer) isAdmin(userID int64) bool {
+	// Config admins are always admin.
+	if slices.Contains(o.cfgProv.CurrentConfig().Telegram.AllowedUsers, userID) {
+		return true
+	}
+	// Check DB role.
+	if o.roleChecker != nil {
+		if role, err := o.roleChecker.GetUserRole(userID); err == nil {
+			return role == "admin"
+		}
+	}
+	return false
 }
 
 func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
@@ -286,7 +317,9 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 			html = true
 		}
 	case "/addpeer":
-		if o.manager == nil {
+		if !o.isAdmin(msg.From.ID) {
+			reply = "⛔ Admin access required"
+		} else if o.manager == nil {
 			reply = "⚠️ Management not available (database not configured)"
 		} else if args == "" {
 			reply = "Usage: /addpeer &lt;peer-name&gt;"
@@ -296,7 +329,9 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 			html = true
 		}
 	case "/delpeer":
-		if o.manager == nil {
+		if !o.isAdmin(msg.From.ID) {
+			reply = "⛔ Admin access required"
+		} else if o.manager == nil {
 			reply = "⚠️ Management not available (database not configured)"
 		} else if args == "" {
 			reply = "Usage: /delpeer &lt;peer-name&gt;"
@@ -305,14 +340,18 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 			reply = o.handleDelPeer(args)
 		}
 	case "/addsecret":
-		if o.manager == nil {
+		if !o.isAdmin(msg.From.ID) {
+			reply = "⛔ Admin access required"
+		} else if o.manager == nil {
 			reply = "⚠️ Management not available (database not configured)"
 		} else {
 			reply = o.handleAddSecret(args)
 			html = true
 		}
 	case "/delsecret":
-		if o.manager == nil {
+		if !o.isAdmin(msg.From.ID) {
+			reply = "⛔ Admin access required"
+		} else if o.manager == nil {
 			reply = "⚠️ Management not available (database not configured)"
 		} else if args == "" {
 			reply = "Usage: /delsecret &lt;secret-hex&gt;"
@@ -321,7 +360,9 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 			reply = o.handleDelSecret(args)
 		}
 	case "/addproxy":
-		if o.manager == nil {
+		if !o.isAdmin(msg.From.ID) {
+			reply = "⛔ Admin access required"
+		} else if o.manager == nil {
 			reply = "⚠️ Management not available (database not configured)"
 		} else if args == "" {
 			reply = "Usage: /addproxy &lt;type&gt; &lt;listen&gt; [name] [outline] [user:pass]\n\nExamples:\n/addproxy socks5 0.0.0.0:1080\n/addproxy http 0.0.0.0:8080 my-http default user:pass\n/addproxy socks5 0.0.0.0:1080 my-socks default user:pass"
@@ -331,7 +372,9 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 			html = true
 		}
 	case "/delproxy":
-		if o.manager == nil {
+		if !o.isAdmin(msg.From.ID) {
+			reply = "⛔ Admin access required"
+		} else if o.manager == nil {
 			reply = "⚠️ Management not available (database not configured)"
 		} else if args == "" {
 			reply = "Usage: /delproxy &lt;name&gt;"

@@ -18,6 +18,13 @@ import (
 	tgbot "github.com/bigbes/wireguard-outline-bridge/internal/telegram"
 )
 
+type contextKey int
+
+const (
+	ctxKeyUserID contextKey = iota
+	ctxKeyUserRole
+)
+
 // Server serves the Telegram Mini App web interface and JSON API.
 type Server struct {
 	provider     observer.StatusProvider
@@ -78,21 +85,33 @@ func (s *Server) URL() string {
 func (s *Server) Run(ctx context.Context) error {
 	mux := http.NewServeMux()
 
+	// adminOnly wraps a handler to reject non-admin users.
+	adminOnly := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if !isAdminRequest(r) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin access required"})
+				return
+			}
+			next.ServeHTTP(w, r)
+		}
+	}
+
 	// API routes (authenticated).
+	mux.HandleFunc("/api/me", s.authMiddleware(s.handleMe))
 	mux.HandleFunc("/api/status", s.authMiddleware(s.handleStatus))
 	mux.HandleFunc("/api/peers", s.authMiddleware(s.handleAddPeer))
 	mux.HandleFunc("/api/peers/", s.authMiddleware(s.handlePeersRoute))
 	mux.HandleFunc("/api/secrets", s.authMiddleware(s.handleAddSecret))
 	mux.HandleFunc("/api/secrets/", s.authMiddleware(s.handleSecretsRoute))
-	mux.HandleFunc("/api/proxies", s.authMiddleware(s.handleAddProxy))
-	mux.HandleFunc("/api/proxies/", s.authMiddleware(s.handleDeleteProxy))
-	mux.HandleFunc("/api/upstreams", s.authMiddleware(s.handleAddUpstream))
-	mux.HandleFunc("/api/upstreams/", s.authMiddleware(s.handleUpstreamsRoute))
-	mux.HandleFunc("/api/groups", s.authMiddleware(s.handleGroups))
-	mux.HandleFunc("/api/dns", s.authMiddleware(s.handleDNS))
-	mux.HandleFunc("/api/dns/rules/", s.authMiddleware(s.handleDeleteDNSRule))
-	mux.HandleFunc("/api/users", s.authMiddleware(s.handleUsers))
-	mux.HandleFunc("/api/users/", s.authMiddleware(s.handleDeleteUser))
+	mux.HandleFunc("/api/proxies", s.authMiddleware(adminOnly(s.handleAddProxy)))
+	mux.HandleFunc("/api/proxies/", s.authMiddleware(adminOnly(s.handleDeleteProxy)))
+	mux.HandleFunc("/api/upstreams", s.authMiddleware(adminOnly(s.handleAddUpstream)))
+	mux.HandleFunc("/api/upstreams/", s.authMiddleware(adminOnly(s.handleUpstreamsRoute)))
+	mux.HandleFunc("/api/groups", s.authMiddleware(adminOnly(s.handleGroups)))
+	mux.HandleFunc("/api/dns", s.authMiddleware(adminOnly(s.handleDNSRoute)))
+	mux.HandleFunc("/api/dns/rules/", s.authMiddleware(adminOnly(s.handleDeleteDNSRule)))
+	mux.HandleFunc("/api/users", s.authMiddleware(adminOnly(s.handleUsers)))
+	mux.HandleFunc("/api/users/", s.authMiddleware(adminOnly(s.handleUserRoute)))
 
 	// Health check (unauthenticated).
 	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) {
@@ -180,6 +199,24 @@ func (s *Server) handlePeersRoute(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 }
 
+func requestUserID(r *http.Request) int64 {
+	if v, ok := r.Context().Value(ctxKeyUserID).(int64); ok {
+		return v
+	}
+	return 0
+}
+
+func requestUserRole(r *http.Request) string {
+	if v, ok := r.Context().Value(ctxKeyUserRole).(string); ok {
+		return v
+	}
+	return ""
+}
+
+func isAdminRequest(r *http.Request) bool {
+	return requestUserRole(r) == statsdb.RoleAdmin
+}
+
 func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		initData := r.Header.Get("X-Telegram-Init-Data")
@@ -203,18 +240,24 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		allowed := slices.Contains(s.allowedUsers, userID)
-		if !allowed && s.store != nil {
-			if ok, err := s.store.IsAllowedUser(userID); err == nil && ok {
-				allowed = true
+		// Determine role: config admins are always admin.
+		role := ""
+		if slices.Contains(s.allowedUsers, userID) {
+			role = statsdb.RoleAdmin
+		}
+		if role == "" && s.store != nil {
+			if r, err := s.store.GetUserRole(userID); err == nil && r != "" {
+				role = r
 			}
 		}
-		if !allowed {
+		if role == "" {
 			s.logger.Debug("miniapp: unauthorized user", "user_id", userID)
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		ctx := context.WithValue(r.Context(), ctxKeyUserID, userID)
+		ctx = context.WithValue(ctx, ctxKeyUserRole, role)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	}
 }

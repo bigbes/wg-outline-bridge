@@ -66,6 +66,7 @@
             <div id="status-bar" class="status-bar">
                 <span id="alive-dot" class="alive-dot"></span>
                 <span id="uptime" class="uptime-text"></span>
+                <span id="current-user" class="uptime-text"></span>
             </div>
 
             <div class="tabs">
@@ -132,8 +133,9 @@
                 </div>
                 <div id="upstream-list-view">
                     <div id="upstreams-list"></div>
-                    <h2>Add Upstream</h2>
+                    <h2 class="admin-only">Add Upstream</h2>
                     <div
+                        class="admin-only"
                         style="display: flex; flex-direction: column; gap: 6px"
                     >
                         <div class="input-row">
@@ -198,8 +200,8 @@
                 </div>
                 <div id="upstream-groups-view" style="display: none">
                     <div id="groups-list"></div>
-                    <h2>Assign Upstream to Group</h2>
-                    <div class="input-row">
+                    <h2 class="admin-only">Assign Upstream to Group</h2>
+                    <div class="input-row admin-only">
                         <select
                             class="input"
                             id="group-upstream-select"
@@ -345,8 +347,8 @@
                 <div id="dns-status"></div>
                 <div id="dns-records"></div>
                 <div id="dns-rules"></div>
-                <h2>➕ Add Rule</h2>
-                <div style="display: flex; flex-direction: column; gap: 6px">
+                <h2 class="admin-only">➕ Add Rule</h2>
+                <div class="admin-only" style="display: flex; flex-direction: column; gap: 6px">
                     <div class="input-row">
                         <input
                             class="input"

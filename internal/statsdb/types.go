@@ -37,6 +37,12 @@ type MTSecretRecord struct {
 	BackendDialErrorsTotal int64
 }
 
+// User roles.
+const (
+	RoleAdmin = "admin"
+	RoleGuest = "guest"
+)
+
 // AllowedUser represents an authorized Telegram user stored in the database.
 type AllowedUser struct {
 	UserID    int64
@@ -44,5 +50,6 @@ type AllowedUser struct {
 	FirstName string
 	LastName  string
 	PhotoURL  string
+	Role      string // "admin" or "guest"
 	CreatedAt int64
 }
