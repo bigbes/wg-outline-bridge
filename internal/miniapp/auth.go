@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"sort"
@@ -77,28 +78,13 @@ func ValidateInitData(initData, botToken string) (int64, error) {
 	return userID, nil
 }
 
-// extractUserID extracts "id" from a JSON string like {"id":123,...}
-// without importing encoding/json to keep it lightweight.
+// extractUserID decodes the "id" field from a JSON string like {"id":123,...}.
 func extractUserID(userJSON string) (int64, error) {
-	// Simple extraction: find "id": followed by a number.
-	_, after, ok := strings.Cut(userJSON, `"id"`)
-	if !ok {
-		return 0, fmt.Errorf("no id field in user JSON")
+	var u struct {
+		ID int64 `json:"id"`
 	}
-	rest := after
-	// Skip whitespace and colon.
-	rest = strings.TrimLeft(rest, " \t\n\r:")
-	// Read digits.
-	var numStr string
-	for _, c := range rest {
-		if c >= '0' && c <= '9' {
-			numStr += string(c)
-		} else {
-			break
-		}
+	if err := json.NewDecoder(strings.NewReader(userJSON)).Decode(&u); err != nil {
+		return 0, fmt.Errorf("parsing user JSON: %w", err)
 	}
-	if numStr == "" {
-		return 0, fmt.Errorf("no numeric id value")
-	}
-	return strconv.ParseInt(numStr, 10, 64)
+	return u.ID, nil
 }

@@ -103,7 +103,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"user_id": requestUserID(r),
 		"role":    requestUserRole(r),
 	})
@@ -747,8 +747,8 @@ func (s *Server) handleUpdateUpstream(w http.ResponseWriter, r *http.Request) {
 	var existing *config.UpstreamConfig
 	for i := range cfg.Upstreams {
 		if cfg.Upstreams[i].Name == name {
-			copy := cfg.Upstreams[i]
-			existing = &copy
+			newUpstream := cfg.Upstreams[i]
+			existing = &newUpstream
 			break
 		}
 	}

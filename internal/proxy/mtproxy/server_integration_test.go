@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	mpcrypto "github.com/bigbes/wireguard-outline-bridge/internal/mtproxy/crypto"
-	"github.com/bigbes/wireguard-outline-bridge/internal/mtproxy/telegram"
+	mpcrypto "github.com/bigbes/wireguard-outline-bridge/internal/proxy/mtproxy/crypto"
+	"github.com/bigbes/wireguard-outline-bridge/internal/proxy/mtproxy/telegram"
 )
 
 // directDialer dials TCP directly (no proxy).

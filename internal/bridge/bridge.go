@@ -20,11 +20,11 @@ import (
 	"github.com/bigbes/wireguard-outline-bridge/internal/geoip"
 	"github.com/bigbes/wireguard-outline-bridge/internal/metrics"
 	"github.com/bigbes/wireguard-outline-bridge/internal/miniapp"
-	"github.com/bigbes/wireguard-outline-bridge/internal/mtproxy"
-	mpcrypto "github.com/bigbes/wireguard-outline-bridge/internal/mtproxy/crypto"
-	"github.com/bigbes/wireguard-outline-bridge/internal/mtproxy/telegram"
 	"github.com/bigbes/wireguard-outline-bridge/internal/observer"
 	"github.com/bigbes/wireguard-outline-bridge/internal/proxy"
+	mtproxy2 "github.com/bigbes/wireguard-outline-bridge/internal/proxy/mtproxy"
+	mpcrypto "github.com/bigbes/wireguard-outline-bridge/internal/proxy/mtproxy/crypto"
+	"github.com/bigbes/wireguard-outline-bridge/internal/proxy/mtproxy/telegram"
 	"github.com/bigbes/wireguard-outline-bridge/internal/proxyserver"
 	"github.com/bigbes/wireguard-outline-bridge/internal/routing"
 	"github.com/bigbes/wireguard-outline-bridge/internal/statsdb"
@@ -46,7 +46,7 @@ type Bridge struct {
 	upstreams  *upstream.Manager
 	tracker    *proxy.ConnTracker
 	peerMon    *peerMonitor
-	mtSrv      *mtproxy.Server
+	mtSrv      *mtproxy2.Server
 	dnsSrv     *dns.Server
 	statsStore *statsdb.Store
 }
@@ -431,7 +431,7 @@ func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) err
 	if group == "" {
 		group = "default"
 	}
-	var dialer mtproxy.StreamDialer
+	var dialer mtproxy2.StreamDialer
 	if d := b.upstreams.StreamDialerForGroup(group); d != nil {
 		dialer = d
 	} else {
@@ -440,20 +440,20 @@ func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) err
 
 	endpoints := telegram.NewEndpointManager(b.cfg.MTProxy.Endpoints)
 
-	serverCfg := mtproxy.ServerConfig{
+	serverCfg := mtproxy2.ServerConfig{
 		ListenAddrs: b.cfg.MTProxy.Listen,
 		Secrets:     secrets,
 		SecretHexes: b.cfg.MTProxy.Secrets,
 	}
 	if b.cfg.MTProxy.FakeTLS.Enabled {
-		serverCfg.FakeTLS = &mtproxy.FakeTLSConfig{
+		serverCfg.FakeTLS = &mtproxy2.FakeTLSConfig{
 			AllowedSNIs:         b.cfg.MTProxy.FakeTLS.SNI,
 			MaxClockSkewSec:     b.cfg.MTProxy.FakeTLS.MaxClockSkewSeconds,
 			ReplayCacheTTLHours: b.cfg.MTProxy.FakeTLS.ReplayCacheTTLHours,
 		}
 	}
 
-	srv := mtproxy.NewServer(serverCfg, dialer, endpoints, b.logger)
+	srv := mtproxy2.NewServer(serverCfg, dialer, endpoints, b.logger)
 	b.mtSrv = srv
 
 	if err := srv.Listen(); err != nil {
@@ -462,7 +462,7 @@ func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) err
 	go srv.Serve(ctx)
 
 	if b.cfg.MTProxy.StatsAddr != "" {
-		statsSrv := mtproxy.NewStatsServer(b.cfg.MTProxy.StatsAddr, srv, b.logger)
+		statsSrv := mtproxy2.NewStatsServer(b.cfg.MTProxy.StatsAddr, srv, b.logger)
 		go func() {
 			if err := statsSrv.Start(ctx); err != nil {
 				b.logger.Error("mtproxy stats server exited", "err", err)
@@ -604,7 +604,7 @@ func (b *Bridge) MTProxyStatus() observer.MTProxyStatus {
 	}
 
 	// Index session snapshots by hex.
-	sessionByHex := make(map[string]mtproxy.SecretSnapshot, len(secretSnap))
+	sessionByHex := make(map[string]mtproxy2.SecretSnapshot, len(secretSnap))
 	for _, ss := range secretSnap {
 		sessionByHex[ss.SecretHex] = ss
 	}

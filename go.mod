@@ -1,6 +1,6 @@
 module github.com/bigbes/wireguard-outline-bridge
 
-go 1.25.5
+go 1.26
 
 require (
 	github.com/amnezia-vpn/amneziawg-go v0.2.15
