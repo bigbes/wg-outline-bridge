@@ -760,7 +760,8 @@ func (s *Store) ListProxyServers() ([]config.ProxyServerConfig, error) {
 	var out []config.ProxyServerConfig
 	for rows.Next() {
 		var p config.ProxyServerConfig
-		if err := rows.Scan(&p.Name, &p.Type, &p.Listen, &p.Outline,
+		var deprecatedOutline string
+		if err := rows.Scan(&p.Name, &p.Type, &p.Listen, &deprecatedOutline,
 			&p.Username, &p.Password,
 			&p.TLS.CertFile, &p.TLS.KeyFile, &p.TLS.Domain, &p.TLS.ACMEEmail); err != nil {
 			return nil, fmt.Errorf("statsdb: scan proxy server: %w", err)
@@ -779,7 +780,7 @@ func (s *Store) AddProxyServer(p config.ProxyServerConfig) error {
 		`INSERT INTO proxy_servers (name, type, listen, outline, username, password,
 		                            tls_cert_file, tls_key_file, tls_domain, tls_acme_email)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Name, p.Type, p.Listen, p.Outline, p.Username, p.Password,
+		p.Name, p.Type, p.Listen, "", p.Username, p.Password,
 		p.TLS.CertFile, p.TLS.KeyFile, p.TLS.Domain, p.TLS.ACMEEmail,
 	)
 	if err != nil {
@@ -817,7 +818,7 @@ func (s *Store) ImportProxyServers(proxies []config.ProxyServerConfig) (int, err
 
 	var count int
 	for _, p := range proxies {
-		res, err := stmt.Exec(p.Name, p.Type, p.Listen, p.Outline, p.Username, p.Password,
+		res, err := stmt.Exec(p.Name, p.Type, p.Listen, "", p.Username, p.Password,
 			p.TLS.CertFile, p.TLS.KeyFile, p.TLS.Domain, p.TLS.ACMEEmail)
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: import proxy server %q: %w", p.Name, err)

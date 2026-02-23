@@ -71,15 +71,6 @@ type MTProxyClient struct {
 	BytesB2CTotal    int64
 }
 
-// OutlineStatus holds per-outline endpoint stats.
-type OutlineStatus struct {
-	Name              string
-	Default           bool
-	RxBytes           int64
-	TxBytes           int64
-	ActiveConnections int64
-}
-
 // UpstreamStatus holds per-upstream endpoint stats (new format).
 type UpstreamStatus struct {
 	Name              string
@@ -99,7 +90,6 @@ type StatusProvider interface {
 	PeerStatuses() []PeerStatus
 	DaemonStatus() DaemonStatus
 	MTProxyStatus() MTProxyStatus
-	OutlineStatuses() []OutlineStatus
 	UpstreamStatuses() []UpstreamStatus
 }
 
@@ -793,7 +783,7 @@ func (o *Observer) handleAddProxy(args string) string {
 	}
 
 	if len(parts) >= 4 {
-		p.Outline = parts[3]
+		p.UpstreamGroup = "upstream:" + parts[3]
 	}
 
 	if len(parts) >= 5 {
@@ -877,8 +867,6 @@ func (o *Observer) handleListProxy() string {
 
 		if p.UpstreamGroup != "" && p.UpstreamGroup != "default" {
 			fmt.Fprintf(&b, "  Upstream: %s\n", p.UpstreamGroup)
-		} else if p.Outline != "" && p.Outline != "default" {
-			fmt.Fprintf(&b, "  Upstream: %s\n", p.Outline)
 		}
 		b.WriteString("\n")
 	}

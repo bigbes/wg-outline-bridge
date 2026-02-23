@@ -15,7 +15,6 @@ type ActionType string
 
 const (
 	ActionDirect   ActionType = "direct"
-	ActionOutline  ActionType = "outline"
 	ActionUpstream ActionType = "upstream"
 	ActionDefault  ActionType = "default"
 )
@@ -23,7 +22,6 @@ const (
 type Decision struct {
 	Action        ActionType
 	UpstreamGroup string // group to select upstream from
-	OutlineName   string // deprecated: kept for backward compat
 	RuleName      string // for logging
 }
 
@@ -111,7 +109,6 @@ func NewRouter(cfg config.RoutingConfig, geoMgr *geoip.Manager, logger *slog.Log
 
 type ruleConfig interface {
 	actionType() string
-	outlineName() string
 	upstreamGroup() string
 	ruleName() string
 }
@@ -119,14 +116,12 @@ type ruleConfig interface {
 type ipRuleAdapter config.IPRuleConfig
 
 func (a ipRuleAdapter) actionType() string    { return a.Action }
-func (a ipRuleAdapter) outlineName() string   { return a.Outline }
 func (a ipRuleAdapter) upstreamGroup() string { return a.UpstreamGroup }
 func (a ipRuleAdapter) ruleName() string      { return a.Name }
 
 type sniRuleAdapter config.SNIRuleConfig
 
 func (a sniRuleAdapter) actionType() string    { return a.Action }
-func (a sniRuleAdapter) outlineName() string   { return a.Outline }
 func (a sniRuleAdapter) upstreamGroup() string { return a.UpstreamGroup }
 func (a sniRuleAdapter) ruleName() string      { return a.Name }
 
@@ -137,13 +132,9 @@ func parseAction(rule ruleConfig) Decision {
 	switch ActionType(rule.actionType()) {
 	case ActionDirect:
 		d.Action = ActionDirect
-	case ActionOutline, ActionUpstream:
+	case ActionUpstream:
 		d.Action = ActionUpstream
 		d.UpstreamGroup = rule.upstreamGroup()
-		d.OutlineName = rule.outlineName()
-		if d.UpstreamGroup == "" && d.OutlineName != "" {
-			d.UpstreamGroup = "upstream:" + d.OutlineName
-		}
 	default:
 		d.Action = ActionDefault
 	}

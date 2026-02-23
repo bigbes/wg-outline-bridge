@@ -33,7 +33,6 @@ type Config struct {
 	Telegram          TelegramConfig          `yaml:"telegram"`
 	MiniApp           MiniAppConfig           `yaml:"miniapp"`
 	Database          DatabaseConfig          `yaml:"database"`
-	Outlines          []OutlineConfig         `yaml:"outlines"`
 	Upstreams         []UpstreamConfig        `yaml:"upstreams"`
 	Routing           RoutingConfig           `yaml:"routing"`
 	GeoIP             []GeoIPConfig           `yaml:"geoip"`
@@ -122,7 +121,6 @@ type RoutingConfig struct {
 type IPRuleConfig struct {
 	Name          string         `yaml:"name"`
 	Action        string         `yaml:"action"`
-	Outline       string         `yaml:"outline"`
 	UpstreamGroup string         `yaml:"upstream_group"`
 	CIDRs         []string       `yaml:"cidrs"`
 	ASNs          []int          `yaml:"asns"`
@@ -137,16 +135,8 @@ type IPListConfig struct {
 type SNIRuleConfig struct {
 	Name          string   `yaml:"name"`
 	Action        string   `yaml:"action"`
-	Outline       string   `yaml:"outline"`
 	UpstreamGroup string   `yaml:"upstream_group"`
 	Domains       []string `yaml:"domains"`
-}
-
-type OutlineConfig struct {
-	Name        string            `yaml:"name"`
-	Transport   string            `yaml:"transport"`
-	Default     bool              `yaml:"default"`
-	HealthCheck HealthCheckConfig `yaml:"health_check"`
 }
 
 // UpstreamConfig describes a generic upstream endpoint.
@@ -183,7 +173,6 @@ type GeoIPConfig struct {
 type MTProxyConfig struct {
 	Enabled       bool             `yaml:"enabled"`
 	Listen        []string         `yaml:"listen"`
-	Outline       string           `yaml:"outline"`
 	UpstreamGroup string           `yaml:"upstream_group"`
 	Secrets       []string         `yaml:"secrets"`
 	StatsAddr     string           `yaml:"stats_addr"`
@@ -202,7 +191,6 @@ type ProxyServerConfig struct {
 	Name          string         `yaml:"name"`
 	Type          string         `yaml:"type"` // "socks5", "http", "https"
 	Listen        string         `yaml:"listen"`
-	Outline       string         `yaml:"outline"` // optional named outline, default = default
 	UpstreamGroup string         `yaml:"upstream_group"`
 	Username      string         `yaml:"username"` // optional auth
 	Password      string         `yaml:"password"`
@@ -287,70 +275,8 @@ func Load(path string) (*Config, error) {
 			cfg.CacheDir = filepath.Join(userCache, "wg-outline-bridge")
 		}
 	}
-	if len(cfg.Outlines) == 0 && len(cfg.Upstreams) == 0 {
-		return nil, fmt.Errorf("at least one outline or upstream entry is required")
-	}
-	hasDefault := false
-	for i := range cfg.Outlines {
-		if cfg.Outlines[i].Name == "" {
-			return nil, fmt.Errorf("outline entry %d: name is required", i)
-		}
-		if cfg.Outlines[i].Transport == "" {
-			return nil, fmt.Errorf("outline %q: transport is required", cfg.Outlines[i].Name)
-		}
-		if cfg.Outlines[i].Default {
-			if hasDefault {
-				return nil, fmt.Errorf("outline %q: only one outline can be default", cfg.Outlines[i].Name)
-			}
-			hasDefault = true
-		}
-		if cfg.Outlines[i].HealthCheck.Interval == 0 {
-			cfg.Outlines[i].HealthCheck.Interval = 30
-		}
-		if cfg.Outlines[i].HealthCheck.Target == "" {
-			cfg.Outlines[i].HealthCheck.Target = "1.1.1.1:80"
-		}
-	}
-	if !hasDefault && len(cfg.Outlines) > 0 {
-		cfg.Outlines[0].Default = true
-	}
-
-	// Normalize outlines → upstreams for backward compatibility.
-	if len(cfg.Upstreams) == 0 && len(cfg.Outlines) > 0 {
-		for _, o := range cfg.Outlines {
-			u := UpstreamConfig{
-				Name:        o.Name,
-				Type:        "outline",
-				Default:     o.Default,
-				Transport:   o.Transport,
-				HealthCheck: o.HealthCheck,
-			}
-			cfg.Upstreams = append(cfg.Upstreams, u)
-		}
-	}
-
-	// Normalize outline → upstream_group in routing rules.
-	for i := range cfg.Routing.IPRules {
-		if cfg.Routing.IPRules[i].UpstreamGroup == "" && cfg.Routing.IPRules[i].Outline != "" {
-			cfg.Routing.IPRules[i].UpstreamGroup = "upstream:" + cfg.Routing.IPRules[i].Outline
-		}
-	}
-	for i := range cfg.Routing.SNIRules {
-		if cfg.Routing.SNIRules[i].UpstreamGroup == "" && cfg.Routing.SNIRules[i].Outline != "" {
-			cfg.Routing.SNIRules[i].UpstreamGroup = "upstream:" + cfg.Routing.SNIRules[i].Outline
-		}
-	}
-
-	// Normalize outline → upstream_group in mtproxy.
-	if cfg.MTProxy.UpstreamGroup == "" && cfg.MTProxy.Outline != "" {
-		cfg.MTProxy.UpstreamGroup = "upstream:" + cfg.MTProxy.Outline
-	}
-
-	// Normalize outline → upstream_group in proxy servers.
-	for i := range cfg.Proxies {
-		if cfg.Proxies[i].UpstreamGroup == "" && cfg.Proxies[i].Outline != "" {
-			cfg.Proxies[i].UpstreamGroup = "upstream:" + cfg.Proxies[i].Outline
-		}
+	if len(cfg.Upstreams) == 0 {
+		return nil, fmt.Errorf("at least one upstream entry is required")
 	}
 
 	for i := range cfg.Routing.IPRules {
@@ -580,15 +506,6 @@ func Migrate(path string) (*Config, bool, error) {
 		return nil, false, err
 	}
 	return cfg, modified, nil
-}
-
-func (c *Config) DefaultOutline() *OutlineConfig {
-	for i := range c.Outlines {
-		if c.Outlines[i].Default {
-			return &c.Outlines[i]
-		}
-	}
-	return nil
 }
 
 // DefaultUpstream returns the default upstream config, or nil if none.

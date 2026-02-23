@@ -40,7 +40,6 @@ func sortByCreationOrder[T any](items []T, nameFunc func(T) string, order []stri
 type statusResponse struct {
 	Daemon    daemonInfo     `json:"daemon"`
 	Peers     []peerInfo     `json:"peers"`
-	Outlines  []outlineInfo  `json:"outlines"`
 	Upstreams []upstreamInfo `json:"upstreams"`
 	MTProxy   mtproxyInfo    `json:"mtproxy"`
 	Proxies   []proxyInfo    `json:"proxies"`
@@ -87,14 +86,6 @@ type secretInfo struct {
 	BytesB2C         int64  `json:"bytes_b2c"`
 }
 
-type outlineInfo struct {
-	Name              string `json:"name"`
-	Default           bool   `json:"default"`
-	RxBytes           int64  `json:"rx_bytes"`
-	TxBytes           int64  `json:"tx_bytes"`
-	ActiveConnections int64  `json:"active_connections"`
-}
-
 type upstreamInfo struct {
 	Name              string   `json:"name"`
 	Type              string   `json:"type"`
@@ -112,7 +103,6 @@ type proxyInfo struct {
 	Name          string `json:"name"`
 	Type          string `json:"type"`
 	Listen        string `json:"listen"`
-	Outline       string `json:"outline,omitempty"`
 	UpstreamGroup string `json:"upstream_group,omitempty"`
 	HasAuth       bool   `json:"has_auth"`
 	Link          string `json:"link"`
@@ -203,17 +193,6 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Outlines (backward compat).
-	for _, o := range s.provider.OutlineStatuses() {
-		resp.Outlines = append(resp.Outlines, outlineInfo{
-			Name:              o.Name,
-			Default:           o.Default,
-			RxBytes:           o.RxBytes,
-			TxBytes:           o.TxBytes,
-			ActiveConnections: o.ActiveConnections,
-		})
-	}
-
 	// MTProxy.
 	resp.MTProxy = mtproxyInfo{
 		Enabled:           mt.Enabled,
@@ -253,7 +232,6 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			Name:          p.Name,
 			Type:          p.Type,
 			Listen:        p.Listen,
-			Outline:       p.Outline,
 			UpstreamGroup: p.UpstreamGroup,
 			HasAuth:       p.Username != "",
 			Link:          buildProxyLink(p, serverIP),
@@ -693,7 +671,6 @@ func (s *Server) handleAddProxy(w http.ResponseWriter, r *http.Request) {
 		Name     string `json:"name"`
 		Type     string `json:"type"`
 		Listen   string `json:"listen"`
-		Outline  string `json:"outline"`
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
@@ -711,7 +688,6 @@ func (s *Server) handleAddProxy(w http.ResponseWriter, r *http.Request) {
 		Name:     req.Name,
 		Type:     req.Type,
 		Listen:   req.Listen,
-		Outline:  req.Outline,
 		Username: req.Username,
 		Password: req.Password,
 	}
@@ -973,7 +949,7 @@ func (s *Server) handleGetGroups(w http.ResponseWriter, r *http.Request) {
 
 	for _, p := range cfg.Proxies {
 		g := p.UpstreamGroup
-		if g == "" && p.Outline == "" {
+		if g == "" {
 			g = "default"
 		}
 		if g != "" {
@@ -982,7 +958,7 @@ func (s *Server) handleGetGroups(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, r := range cfg.Routing.IPRules {
 		g := r.UpstreamGroup
-		if g == "" && r.Outline == "" {
+		if g == "" {
 			g = "default"
 		}
 		if g != "" {
@@ -991,7 +967,7 @@ func (s *Server) handleGetGroups(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, r := range cfg.Routing.SNIRules {
 		g := r.UpstreamGroup
-		if g == "" && r.Outline == "" {
+		if g == "" {
 			g = "default"
 		}
 		if g != "" {

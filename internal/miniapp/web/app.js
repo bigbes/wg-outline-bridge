@@ -644,9 +644,8 @@ if (!tg || !tg.initData) {
         if (!mt || !mt.enabled) {
             document.getElementById("mtproxy-stat-secrets").textContent = "0";
             document.getElementById("mtproxy-stat-active").textContent = "0";
-            document.getElementById("mtproxy-link-list").innerHTML =
+            document.getElementById("mtproxy-secret-list").innerHTML =
                 '<div class="empty-state">MTProxy not enabled</div>';
-            document.getElementById("mtproxy-secret-list").innerHTML = "";
             return;
         }
 
@@ -657,22 +656,40 @@ if (!tg || !tg.initData) {
         document.getElementById("mtproxy-stat-active").textContent =
             mt.active_connections;
 
-        // Links
-        const linkEl = document.getElementById("mtproxy-link-list");
-        if (links.length === 0) {
-            linkEl.innerHTML = '<div class="empty-state">No proxy links</div>';
+        // Build a map from secret hex to its link
+        const linkBySecret = {};
+        for (const l of links) {
+            linkBySecret[l.secret] = l;
+        }
+
+        const secEl = document.getElementById("mtproxy-secret-list");
+        if (secrets.length === 0) {
+            secEl.innerHTML = '<div class="empty-state">No secrets</div>';
         } else {
-            linkEl.innerHTML = links
-                .map((l) => {
-                    const displayName = l.name || truncSecret(l.secret);
-                    const sType = secretType(l.secret);
+            secEl.innerHTML = secrets
+                .map((s) => {
+                    const link = linkBySecret[s.secret];
+                    const displayName = link
+                        ? link.name || truncSecret(s.secret)
+                        : truncSecret(s.secret);
+                    const sType = secretType(s.secret);
                     const typeBadge =
                         sType === "ee"
                             ? '<span class="secret-type-badge ee">EE</span>'
                             : sType === "dd"
                               ? '<span class="secret-type-badge dd">DD</span>'
                               : '<span class="secret-type-badge default">Default</span>';
-                    const escapedUrl = l.url.replace(/'/g, "\\'");
+                    const escapedSecret = s.secret.replace(/'/g, "\\'");
+                    const connectBtn = link
+                        ? '<button class="action-icon-btn" onclick="openProxyLink(\'' +
+                          link.url.replace(/'/g, "\\'") +
+                          "',event)\" title=\"Connect\"><svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\"/><path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\"/></svg></button>"
+                        : "";
+                    const copyBtn = link
+                        ? '<button class="action-icon-btn" onclick="copyText(\'' +
+                          link.url.replace(/'/g, "\\'") +
+                          "',event)\" title=\"Copy\"><svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><rect x=\"9\" y=\"9\" width=\"13\" height=\"13\" rx=\"2\" ry=\"2\"/><path d=\"M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1\"/></svg></button>"
+                        : "";
                     return (
                         '<div class="list-item">' +
                         '<div class="item-icon secret-' +
@@ -684,46 +701,6 @@ if (!tg || !tg.initData) {
                         "</div>" +
                         '<div class="item-subtitle">' +
                         typeBadge +
-                        " • " +
-                        (l.type || "tg") +
-                        "</div>" +
-                        "</div>" +
-                        '<div class="item-action">' +
-                        '<button class="copy-link-btn" onclick="copyText(\'' +
-                        escapedUrl +
-                        "',event)\">Copy</button>" +
-                        "</div></div>"
-                    );
-                })
-                .join("");
-        }
-
-        // Secrets
-        const secEl = document.getElementById("mtproxy-secret-list");
-        if (secrets.length === 0) {
-            secEl.innerHTML = '<div class="empty-state">No secrets</div>';
-        } else {
-            secEl.innerHTML = secrets
-                .map((s) => {
-                    const sType = secretType(s.secret);
-                    const typeBadge =
-                        sType === "ee"
-                            ? '<span class="secret-type-badge ee">EE</span>'
-                            : sType === "dd"
-                              ? '<span class="secret-type-badge dd">DD</span>'
-                              : '<span class="secret-type-badge default">Default</span>';
-                    const escapedSecret = s.secret.replace(/'/g, "\\'");
-                    return (
-                        '<div class="list-item">' +
-                        '<div class="item-icon secret-' +
-                        sType +
-                        '"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>' +
-                        '<div class="item-content">' +
-                        '<div class="item-title">' +
-                        truncSecret(s.secret) +
-                        "</div>" +
-                        '<div class="item-subtitle">' +
-                        typeBadge +
                         " • Conns: " +
                         s.connections_total +
                         " • ↓" +
@@ -732,6 +709,8 @@ if (!tg || !tg.initData) {
                         formatBytes(s.bytes_c2b) +
                         "</div></div>" +
                         '<div class="item-action">' +
+                        connectBtn +
+                        copyBtn +
                         '<button class="delete-btn" onclick="promptDelete(\'' +
                         escapedSecret +
                         '\',\'secret\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>' +
@@ -1229,6 +1208,16 @@ if (!tg || !tg.initData) {
             closeSecretModal();
             refresh();
         });
+    };
+
+    // --- Open proxy link ---
+    window.openProxyLink = function (url, e) {
+        if (e) e.stopPropagation();
+        try {
+            tg.openTelegramLink(url);
+        } catch (err) {
+            window.open(url, "_blank");
+        }
     };
 
     // --- Copy ---

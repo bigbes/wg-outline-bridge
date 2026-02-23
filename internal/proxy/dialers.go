@@ -45,17 +45,10 @@ func (ds *DialerSet) StreamDialerFor(dec routing.Decision) StreamDialer {
 	switch dec.Action {
 	case routing.ActionDirect:
 		return ds.Direct
-	case routing.ActionUpstream, routing.ActionOutline:
+	case routing.ActionUpstream:
 		if d := ds.Upstream.StreamDialerForGroup(dec.UpstreamGroup); d != nil {
 			return d
 		}
-		// Fallback: try by legacy OutlineName
-		if dec.OutlineName != "" {
-			if d := ds.Upstream.StreamDialerForGroup("upstream:" + dec.OutlineName); d != nil {
-				return d
-			}
-		}
-		// Final fallback to default group
 		if d := ds.Upstream.StreamDialerForGroup("default"); d != nil {
 			return d
 		}
@@ -73,14 +66,9 @@ func (ds *DialerSet) PacketDialerFor(dec routing.Decision) PacketDialer {
 	switch dec.Action {
 	case routing.ActionDirect:
 		return ds.Direct
-	case routing.ActionUpstream, routing.ActionOutline:
+	case routing.ActionUpstream:
 		if d := ds.Upstream.PacketDialerForGroup(dec.UpstreamGroup); d != nil {
 			return d
-		}
-		if dec.OutlineName != "" {
-			if d := ds.Upstream.PacketDialerForGroup("upstream:" + dec.OutlineName); d != nil {
-				return d
-			}
 		}
 		if d := ds.Upstream.PacketDialerForGroup("default"); d != nil {
 			return d

@@ -691,22 +691,6 @@ func (b *Bridge) UpstreamStatuses() []observer.UpstreamStatus {
 	return result
 }
 
-// OutlineStatuses implements observer.StatusProvider (backward compat).
-func (b *Bridge) OutlineStatuses() []observer.OutlineStatus {
-	statuses := b.upstreams.Statuses()
-	result := make([]observer.OutlineStatus, 0, len(statuses))
-	for _, st := range statuses {
-		result = append(result, observer.OutlineStatus{
-			Name:              st.Name,
-			Default:           st.Default,
-			RxBytes:           st.RxBytes,
-			TxBytes:           st.TxBytes,
-			ActiveConnections: st.ActiveConnections,
-		})
-	}
-	return result
-}
-
 // DaemonStatus implements observer.StatusProvider.
 func (b *Bridge) DaemonStatus() observer.DaemonStatus {
 	if b.statsStore == nil {
