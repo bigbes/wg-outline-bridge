@@ -123,6 +123,13 @@ func (s *Server) UpdateRules(ctx context.Context, rules []Rule) {
 	s.mu.Unlock()
 }
 
+// UpdateRecords replaces the current local records map.
+func (s *Server) UpdateRecords(records map[string]Record) {
+	s.mu.Lock()
+	s.records = records
+	s.mu.Unlock()
+}
+
 func (s *Server) ServeDNS(w dnspkg.ResponseWriter, r *dnspkg.Msg) {
 	if len(r.Question) == 0 {
 		return

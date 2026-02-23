@@ -107,8 +107,11 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/proxies/", s.authMiddleware(adminOnly(s.handleDeleteProxy)))
 	mux.HandleFunc("/api/upstreams", s.authMiddleware(adminOnly(s.handleAddUpstream)))
 	mux.HandleFunc("/api/upstreams/", s.authMiddleware(adminOnly(s.handleUpstreamsRoute)))
-	mux.HandleFunc("/api/groups", s.authMiddleware(adminOnly(s.handleGroups)))
+	mux.HandleFunc("/api/groups", s.authMiddleware(adminOnly(s.handleGroupsRoute)))
+	mux.HandleFunc("/api/groups/", s.authMiddleware(adminOnly(s.handleGroupsItemRoute)))
 	mux.HandleFunc("/api/dns", s.authMiddleware(adminOnly(s.handleDNSRoute)))
+	mux.HandleFunc("/api/dns/records", s.authMiddleware(adminOnly(s.handleDNSRecordsRoute)))
+	mux.HandleFunc("/api/dns/records/", s.authMiddleware(adminOnly(s.handleDNSRecordsRoute)))
 	mux.HandleFunc("/api/dns/rules/", s.authMiddleware(adminOnly(s.handleDeleteDNSRule)))
 	mux.HandleFunc("/api/users", s.authMiddleware(adminOnly(s.handleUsers)))
 	mux.HandleFunc("/api/users/", s.authMiddleware(adminOnly(s.handleUserRoute)))
@@ -186,10 +189,14 @@ func (s *Server) Run(ctx context.Context) error {
 	return nil
 }
 
-// handlePeersRoute dispatches GET /api/peers/<name>/conf and DELETE /api/peers/<name>.
+// handlePeersRoute dispatches GET /api/peers/<name>/conf, PUT /api/peers/<name>, and DELETE /api/peers/<name>.
 func (s *Server) handlePeersRoute(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/conf") {
 		s.handlePeerConf(w, r)
+		return
+	}
+	if r.Method == http.MethodPut {
+		s.handleUpdatePeer(w, r)
 		return
 	}
 	if r.Method == http.MethodDelete {

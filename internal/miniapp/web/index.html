@@ -2,17 +2,21 @@
 <html lang="en">
     <head>
         <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>WG-Outline Bridge Admin</title>
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+        />
+        <title>WG-Outline Bridge</title>
         <script src="https://telegram.org/js/telegram-web-app.js"></script>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+        <link
+            rel="stylesheet"
+            href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.18/index.min.css"
+        />
         <link rel="stylesheet" href="style.css" />
     </head>
     <body>
-        <div
-            id="unauthorized"
-            style="display: none; text-align: center; padding: 40px 20px"
-        >
+        <div id="unauthorized">
             <div style="font-size: 80px; line-height: 1; margin-bottom: 16px">
                 🕸️🕷️🕸️
             </div>
@@ -21,24 +25,21 @@
             </h1>
             <p
                 style="
-                    color: var(--hint);
+                    color: var(--text-secondary);
                     font-size: 14px;
                     max-width: 300px;
                     margin: 0 auto 16px;
                 "
             >
-                This admin panel only works inside Telegram.<br />
-                A wild spider has taken over this page in the meantime.
+                This admin panel only works inside Telegram.<br />A wild spider
+                has taken over this page in the meantime.
             </p>
-            <p style="font-size: 12px; color: var(--hint)">
+            <p style="font-size: 12px; color: var(--text-secondary)">
                 🚪 Please open this via the Telegram bot menu.
             </p>
         </div>
 
-        <div
-            id="forbidden"
-            style="display: none; text-align: center; padding: 40px 20px"
-        >
+        <div id="forbidden">
             <div style="font-size: 80px; line-height: 1; margin-bottom: 16px">
                 🐔🐔🐔
             </div>
@@ -47,379 +48,1092 @@
             </h1>
             <p
                 style="
-                    color: var(--hint);
+                    color: var(--text-secondary);
                     font-size: 14px;
                     max-width: 300px;
                     margin: 0 auto 16px;
                 "
             >
-                Only the farmer gets in here.<br />
-                You're just a chicken passing by. 🐣
+                Only the farmer gets in here.<br />You're just a chicken passing
+                by. 🐣
             </p>
-            <p style="font-size: 12px; color: var(--hint)">
+            <p style="font-size: 12px; color: var(--text-secondary)">
                 🚜 Ask the admin to add you to the coop.
             </p>
         </div>
 
+        <div id="loading">Loading...</div>
+
         <div id="app">
-            <h1>🌐 WG-Outline Bridge</h1>
-            <div id="status-bar" class="status-bar">
-                <span id="alive-dot" class="alive-dot"></span>
-                <span id="uptime" class="uptime-text"></span>
-                <span id="current-user" class="uptime-text"></span>
+            <div class="status-bar">
+                <span class="alive-dot" id="alive-dot"></span>
+                <span id="uptime"></span>
             </div>
 
-            <div class="tabs">
-                <button class="tab active" onclick="showTab('peers')">
-                    👥<span class="tab-label"> Peers</span>
-                </button>
-                <button class="tab" onclick="showTab('upstreams')">
-                    🔗<span class="tab-label"> Upstreams</span>
-                </button>
-                <button class="tab" onclick="showTab('proxies')">
-                    🔌<span class="tab-label"> Proxies</span>
-                </button>
-                <button class="tab" onclick="showTab('dns')">
-                    🔍<span class="tab-label"> DNS</span>
-                </button>
-                <button class="tab" onclick="showTab('users')">
-                    🔐<span class="tab-label"> Users</span>
-                </button>
+            <!-- Page: Peers (default) -->
+            <div class="page active" id="page-peers">
+                <header class="header">
+                    <div class="bot-icon wg">
+                        <svg
+                            width="40"
+                            height="40"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                        >
+                            <circle
+                                cx="12"
+                                cy="12"
+                                r="3"
+                                stroke="white"
+                                stroke-width="2"
+                            />
+                            <path
+                                d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"
+                                fill="white"
+                            />
+                        </svg>
+                    </div>
+                    <h1 class="bot-title">WireGuard Peers</h1>
+                    <p class="bot-subtitle">Manage client configurations</p>
+                </header>
+                <section class="stats-container">
+                    <div class="stat-card">
+                        <div class="stat-value" id="wg-stat-total">0</div>
+                        <div class="stat-label">Total Peers</div>
+                    </div>
+                    <div class="stat-card">
+                        <div
+                            class="stat-value"
+                            id="wg-stat-active"
+                            style="color: var(--active-green)"
+                        >
+                            0
+                        </div>
+                        <div class="stat-label">Connected</div>
+                    </div>
+                </section>
+                <div class="action-btn" onclick="openPeerModal()">
+                    <div class="action-icon-circle wg">
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                        >
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                    </div>
+                    <div class="action-text wg">Create Peer</div>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
+                    </svg>
+                </div>
+                <h2 class="section-title">Client Peers</h2>
+                <div class="list-group" id="peer-list"></div>
             </div>
 
-            <div id="loading" class="loading">Loading...</div>
+            <!-- Page: Upstreams -->
+            <div class="page" id="page-upstreams">
+                <header class="header">
+                    <div class="bot-icon upstream">
+                        <svg
+                            width="40"
+                            height="40"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                        >
+                            <circle
+                                cx="12"
+                                cy="12"
+                                r="10"
+                                stroke="white"
+                                stroke-width="2"
+                            />
+                            <path
+                                d="M12 6v6l4 2"
+                                stroke="white"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                            />
+                        </svg>
+                    </div>
+                    <h1 class="bot-title">Upstreams</h1>
+                    <p class="bot-subtitle">Configure backend connections</p>
+                </header>
+                <section class="stats-container">
+                    <div class="stat-card">
+                        <div class="stat-value" id="upstream-stat-total">0</div>
+                        <div class="stat-label">Total</div>
+                    </div>
+                    <div class="stat-card">
+                        <div
+                            class="stat-value"
+                            id="upstream-stat-active"
+                            style="color: var(--active-green)"
+                        >
+                            0
+                        </div>
+                        <div class="stat-label">Healthy</div>
+                    </div>
+                </section>
+                <div
+                    class="action-btn admin-only"
+                    onclick="openUpstreamModal()"
+                >
+                    <div class="action-icon-circle upstream">
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                        >
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                    </div>
+                    <div class="action-text upstream">Add Upstream</div>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
+                    </svg>
+                </div>
+                <div class="action-btn admin-only" onclick="openGroupModal()">
+                    <div class="action-icon-circle group">
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                        >
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                    </div>
+                    <div class="action-text group">Add Group</div>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
+                    </svg>
+                </div>
+                <h2 class="section-title">Upstream Groups</h2>
+                <div class="list-group" id="upstream-group-list"></div>
+                <h2 class="section-title">Upstreams</h2>
+                <div class="list-group" id="upstream-list"></div>
+            </div>
 
-            <div id="peers" class="section active">
-                <div id="peers-list"></div>
-                <div class="input-row">
+            <!-- Page: Proxies -->
+            <div class="page" id="page-proxies">
+                <header class="header">
+                    <div class="bot-icon">
+                        <svg
+                            width="40"
+                            height="40"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                        >
+                            <rect
+                                x="2"
+                                y="3"
+                                width="20"
+                                height="14"
+                                rx="2"
+                                ry="2"
+                                stroke="white"
+                                stroke-width="2"
+                            />
+                            <line
+                                x1="8"
+                                y1="21"
+                                x2="16"
+                                y2="21"
+                                stroke="white"
+                                stroke-width="2"
+                            />
+                            <line
+                                x1="12"
+                                y1="17"
+                                x2="12"
+                                y2="21"
+                                stroke="white"
+                                stroke-width="2"
+                            />
+                        </svg>
+                    </div>
+                    <h1 class="bot-title">Proxy Servers</h1>
+                    <p class="bot-subtitle">SOCKS5 / HTTP / HTTPS proxies</p>
+                </header>
+                <section class="stats-container">
+                    <div class="stat-card">
+                        <div class="stat-value" id="proxy-stat-total">0</div>
+                        <div class="stat-label">Total</div>
+                    </div>
+                    <div class="stat-card">
+                        <div
+                            class="stat-value"
+                            id="proxy-stat-types"
+                            style="color: var(--accent-blue)"
+                        >
+                            —
+                        </div>
+                        <div class="stat-label">Types</div>
+                    </div>
+                </section>
+                <div class="action-btn admin-only" onclick="openProxyModal()">
+                    <div class="action-icon-circle">
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                        >
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                    </div>
+                    <div class="action-text">Add Proxy Server</div>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
+                    </svg>
+                </div>
+                <h2 class="section-title">Proxy Servers</h2>
+                <div class="list-group" id="proxy-list"></div>
+            </div>
+
+            <!-- Page: DNS -->
+            <div class="page" id="page-dns">
+                <header class="header">
+                    <div class="bot-icon dns">
+                        <svg
+                            width="40"
+                            height="40"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                        >
+                            <circle
+                                cx="12"
+                                cy="12"
+                                r="10"
+                                stroke="white"
+                                stroke-width="2"
+                            />
+                            <path
+                                d="M12 6v6l4 2"
+                                stroke="white"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                            />
+                            <circle cx="12" cy="12" r="3" fill="white" />
+                        </svg>
+                    </div>
+                    <h1 class="bot-title">DNS Settings</h1>
+                    <p class="bot-subtitle">Configure DNS resolution</p>
+                </header>
+                <div class="list-group" style="margin: 0 16px 24px">
+                    <div class="list-item">
+                        <div class="item-icon dns-record">
+                            <svg
+                                width="18"
+                                height="18"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                            >
+                                <circle cx="12" cy="12" r="10" />
+                                <path d="M12 6v6l4 2" />
+                            </svg>
+                        </div>
+                        <div class="item-content">
+                            <div class="item-title">DNS Resolution</div>
+                            <div class="item-subtitle" id="dns-status-text">
+                                Disabled
+                            </div>
+                        </div>
+                        <div class="item-action">
+                            <span class="status-badge" id="dns-status-badge"
+                                >OFF</span
+                            >
+                        </div>
+                    </div>
+                </div>
+                <div class="action-btn admin-only" onclick="openDNSRuleModal()">
+                    <div class="action-icon-circle dns">
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                        >
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                    </div>
+                    <div class="action-text dns">Add DNS Rule</div>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
+                    </svg>
+                </div>
+                <div
+                    class="action-btn admin-only"
+                    onclick="openDNSRecordModal()"
+                >
+                    <div class="action-icon-circle dns">
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                        >
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                    </div>
+                    <div class="action-text dns">Add DNS Record</div>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
+                    </svg>
+                </div>
+                <h2 class="section-title">DNS Records</h2>
+                <div class="list-group" id="dns-record-list"></div>
+                <h2 class="section-title">DNS Rules</h2>
+                <div class="list-group" id="dns-rule-list"></div>
+            </div>
+
+            <!-- Page: Users -->
+            <div class="page" id="page-users">
+                <header class="header">
+                    <div class="bot-icon users">
+                        <svg
+                            width="40"
+                            height="40"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                        >
+                            <path
+                                d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"
+                                stroke="white"
+                                stroke-width="2"
+                            />
+                            <circle
+                                cx="12"
+                                cy="7"
+                                r="4"
+                                stroke="white"
+                                stroke-width="2"
+                            />
+                        </svg>
+                    </div>
+                    <h1 class="bot-title">Users</h1>
+                    <p class="bot-subtitle">Manage access control</p>
+                </header>
+                <section class="stats-container">
+                    <div class="stat-card">
+                        <div class="stat-value" id="user-stat-total">0</div>
+                        <div class="stat-label">Total</div>
+                    </div>
+                    <div class="stat-card">
+                        <div
+                            class="stat-value"
+                            id="user-stat-admin"
+                            style="color: var(--admin-gold)"
+                        >
+                            0
+                        </div>
+                        <div class="stat-label">Admins</div>
+                    </div>
+                </section>
+                <div class="action-btn admin-only" onclick="openUserModal()">
+                    <div class="action-icon-circle users">
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                        >
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                    </div>
+                    <div class="action-text users">Add User</div>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
+                    </svg>
+                </div>
+                <h2 class="section-title">All Users</h2>
+                <div class="list-group" id="user-list"></div>
+            </div>
+
+            <!-- Page: MTProxy -->
+            <div class="page" id="page-mtproxy">
+                <header class="header">
+                    <div class="bot-icon mtproxy">
+                        <svg
+                            width="40"
+                            height="40"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                        >
+                            <path
+                                d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"
+                                stroke="white"
+                                stroke-width="2"
+                            />
+                        </svg>
+                    </div>
+                    <h1 class="bot-title">MTProxy</h1>
+                    <p class="bot-subtitle">Telegram MTProto Proxy</p>
+                </header>
+                <section class="stats-container">
+                    <div class="stat-card">
+                        <div class="stat-value" id="mtproxy-stat-secrets">
+                            0
+                        </div>
+                        <div class="stat-label">Secrets</div>
+                    </div>
+                    <div class="stat-card">
+                        <div
+                            class="stat-value"
+                            id="mtproxy-stat-active"
+                            style="color: var(--active-green)"
+                        >
+                            0
+                        </div>
+                        <div class="stat-label">Connections</div>
+                    </div>
+                </section>
+                <div class="action-btn" onclick="openSecretModal()">
+                    <div class="action-icon-circle mtproxy">
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                        >
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                    </div>
+                    <div class="action-text mtproxy">Add Secret</div>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
+                    </svg>
+                </div>
+                <h2 class="section-title">Proxy Links</h2>
+                <div class="list-group" id="mtproxy-link-list"></div>
+                <h2 class="section-title">Secrets</h2>
+                <div class="list-group" id="mtproxy-secret-list"></div>
+            </div>
+
+            <!-- Tab Navigation -->
+            <nav class="tab-nav">
+                <div
+                    class="tab-item active"
+                    data-page="peers"
+                    onclick="switchTab('peers')"
+                >
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                    >
+                        <circle cx="12" cy="12" r="3" />
+                        <path
+                            d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"
+                        />
+                    </svg>
+                    <span>Peers</span>
+                </div>
+                <div
+                    class="tab-item mtproxy"
+                    data-page="mtproxy"
+                    onclick="switchTab('mtproxy')"
+                >
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                    >
+                        <path
+                            d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"
+                        />
+                    </svg>
+                    <span>MTProxy</span>
+                </div>
+                <div
+                    class="tab-item"
+                    data-page="upstreams"
+                    onclick="switchTab('upstreams')"
+                >
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                    >
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M12 6v6l4 2" />
+                    </svg>
+                    <span>Upstreams</span>
+                </div>
+                <div
+                    class="tab-item"
+                    data-page="proxies"
+                    onclick="switchTab('proxies')"
+                >
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                    >
+                        <rect
+                            x="2"
+                            y="3"
+                            width="20"
+                            height="14"
+                            rx="2"
+                            ry="2"
+                        />
+                        <line x1="8" y1="21" x2="16" y2="21" />
+                        <line x1="12" y1="17" x2="12" y2="21" />
+                    </svg>
+                    <span>Proxies</span>
+                </div>
+                <div
+                    class="tab-item dns"
+                    data-page="dns"
+                    onclick="switchTab('dns')"
+                >
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                    >
+                        <circle cx="12" cy="12" r="10" />
+                        <path d="M12 6v6l4 2" />
+                        <circle cx="12" cy="12" r="3" />
+                    </svg>
+                    <span>DNS</span>
+                </div>
+                <div
+                    class="tab-item users"
+                    data-page="users"
+                    onclick="switchTab('users')"
+                >
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                    >
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                        <circle cx="12" cy="7" r="4" />
+                    </svg>
+                    <span>Users</span>
+                </div>
+            </nav>
+        </div>
+
+        <!-- Peer Modal -->
+        <div
+            class="modal-backdrop"
+            id="peer-modal-backdrop"
+            onclick="closePeerModal()"
+        ></div>
+        <div class="modal-sheet" id="peer-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closePeerModal()">
+                    Cancel
+                </button>
+                <span class="modal-title">New Peer</span>
+                <button class="modal-btn done wg" onclick="savePeer()">
+                    Done
+                </button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">Peer Name</label>
                     <input
-                        class="input"
-                        id="new-peer-name"
-                        placeholder="New peer name"
+                        type="text"
+                        class="tg-input"
+                        id="inp-peer-name"
+                        placeholder="iPhone 15 Pro"
                     />
-                    <button class="btn btn-sm" onclick="addPeer()">
-                        + Add
-                    </button>
-                </div>
-                <div id="peer-msg"></div>
-            </div>
-
-            <div id="upstreams" class="section">
-                <div class="sub-tabs">
-                    <button
-                        class="tab active"
-                        onclick="
-                            showSubTab(
-                                'upstream-list-view',
-                                'upstream-groups-view',
-                                this,
-                            )
-                        "
-                    >
-                        🔗 List
-                    </button>
-                    <button
-                        class="tab"
-                        onclick="
-                            showSubTab(
-                                'upstream-groups-view',
-                                'upstream-list-view',
-                                this,
-                            )
-                        "
-                    >
-                        📦 Groups
-                    </button>
-                </div>
-                <div id="upstream-list-view">
-                    <div id="upstreams-list"></div>
-                    <h2 class="admin-only">Add Upstream</h2>
-                    <div
-                        class="admin-only"
-                        style="display: flex; flex-direction: column; gap: 6px"
-                    >
-                        <div class="input-row">
-                            <input
-                                class="input"
-                                id="new-upstream-name"
-                                placeholder="Name"
-                            />
-                            <select
-                                class="input"
-                                id="new-upstream-type"
-                                style="flex: 0.5"
-                            >
-                                <option value="outline">Outline</option>
-                            </select>
-                        </div>
-                        <div class="input-row">
-                            <input
-                                class="input"
-                                id="new-upstream-transport"
-                                placeholder="Transport URI (ss://...)"
-                            />
-                        </div>
-                        <div class="input-row">
-                            <label
-                                style="
-                                    display: flex;
-                                    align-items: center;
-                                    gap: 4px;
-                                    font-size: 13px;
-                                    color: var(--hint);
-                                "
-                            >
-                                <input
-                                    type="checkbox"
-                                    id="new-upstream-default"
-                                />
-                                Default
-                            </label>
-                            <label
-                                style="
-                                    display: flex;
-                                    align-items: center;
-                                    gap: 4px;
-                                    font-size: 13px;
-                                    color: var(--hint);
-                                "
-                            >
-                                <input
-                                    type="checkbox"
-                                    id="new-upstream-hc"
-                                    checked
-                                />
-                                Health check
-                            </label>
-                            <button class="btn btn-sm" onclick="addUpstream()">
-                                + Add
-                            </button>
-                        </div>
-                    </div>
-                    <div id="upstream-msg"></div>
-                </div>
-                <div id="upstream-groups-view" style="display: none">
-                    <div id="groups-list"></div>
-                    <h2 class="admin-only">Assign Upstream to Group</h2>
-                    <div class="input-row admin-only">
-                        <select
-                            class="input"
-                            id="group-upstream-select"
-                            style="flex: 1"
-                        >
-                            <option value="">Select upstream…</option>
-                        </select>
-                        <input
-                            class="input"
-                            id="group-name-input"
-                            placeholder="Group name"
-                            style="flex: 1"
-                        />
-                        <button class="btn btn-sm" onclick="addToGroup()">
-                            + Add
-                        </button>
-                    </div>
-                    <div id="group-msg"></div>
                 </div>
             </div>
+        </div>
 
-            <div id="proxies" class="section">
-                <div class="sub-tabs">
-                    <button
-                        class="tab active"
-                        onclick="showProxySubTab('mtproxy')"
-                    >
-                        📡 MTProxy
-                    </button>
-                    <button class="tab" onclick="showProxySubTab('socks5')">
-                        🧦 SOCKS5
-                    </button>
-                    <button class="tab" onclick="showProxySubTab('http')">
-                        🌐 HTTP
-                    </button>
-                    <button class="tab" onclick="showProxySubTab('https')">
-                        🔒 HTTPS
-                    </button>
-                </div>
-                <div id="proxy-sub-mtproxy">
-                    <div id="mtproxy-status"></div>
-                    <div id="proxy-links"></div>
-                    <div class="input-row">
-                        <select
-                            class="input"
-                            id="new-secret-type"
-                            style="flex: 0.6"
-                        >
-                            <option value="faketls">FakeTLS (ee)</option>
-                            <option value="padded">Padded (dd)</option>
-                            <option value="default">Default</option>
-                        </select>
-                        <button class="btn btn-sm" onclick="addSecret()">
-                            + Add Secret
-                        </button>
-                    </div>
-                    <div id="secret-msg"></div>
-                </div>
-                <div id="proxy-sub-socks5" style="display: none">
-                    <div id="proxies-list-socks5"></div>
-                    <h2>Add SOCKS5 Proxy</h2>
-                    <div
-                        style="display: flex; flex-direction: column; gap: 6px"
-                    >
-                        <div class="input-row">
-                            <input
-                                class="input"
-                                id="new-proxy-listen-socks5"
-                                placeholder="0.0.0.0:1080"
-                            />
-                            <input
-                                class="input"
-                                id="new-proxy-name-socks5"
-                                placeholder="Name (optional)"
-                            />
-                            <button
-                                class="btn btn-sm"
-                                onclick="addProxyTyped('socks5')"
-                            >
-                                + Add
-                            </button>
-                        </div>
-                    </div>
-                    <div id="proxy-msg-socks5"></div>
-                </div>
-                <div id="proxy-sub-http" style="display: none">
-                    <div id="proxies-list-http"></div>
-                    <h2>Add HTTP Proxy</h2>
-                    <div
-                        style="display: flex; flex-direction: column; gap: 6px"
-                    >
-                        <div class="input-row">
-                            <input
-                                class="input"
-                                id="new-proxy-listen-http"
-                                placeholder="0.0.0.0:8080"
-                            />
-                            <input
-                                class="input"
-                                id="new-proxy-name-http"
-                                placeholder="Name (optional)"
-                            />
-                            <button
-                                class="btn btn-sm"
-                                onclick="addProxyTyped('http')"
-                            >
-                                + Add
-                            </button>
-                        </div>
-                    </div>
-                    <div id="proxy-msg-http"></div>
-                </div>
-                <div id="proxy-sub-https" style="display: none">
-                    <div id="proxies-list-https"></div>
-                    <h2>Add HTTPS Proxy</h2>
-                    <div
-                        style="display: flex; flex-direction: column; gap: 6px"
-                    >
-                        <div class="input-row">
-                            <input
-                                class="input"
-                                id="new-proxy-listen-https"
-                                placeholder="0.0.0.0:8443"
-                            />
-                            <input
-                                class="input"
-                                id="new-proxy-name-https"
-                                placeholder="Name (optional)"
-                            />
-                            <button
-                                class="btn btn-sm"
-                                onclick="addProxyTyped('https')"
-                            >
-                                + Add
-                            </button>
-                        </div>
-                    </div>
-                    <div id="proxy-msg-https"></div>
-                </div>
+        <!-- Upstream Modal -->
+        <div
+            class="modal-backdrop"
+            id="upstream-modal-backdrop"
+            onclick="closeUpstreamModal()"
+        ></div>
+        <div class="modal-sheet" id="upstream-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closeUpstreamModal()">
+                    Cancel
+                </button>
+                <span class="modal-title" id="upstream-modal-title"
+                    >New Upstream</span
+                >
+                <button
+                    class="modal-btn done upstream"
+                    onclick="saveUpstream()"
+                >
+                    Done
+                </button>
             </div>
-
-            <div id="dns" class="section">
-                <div id="dns-status"></div>
-                <div id="dns-records"></div>
-                <div id="dns-rules"></div>
-                <h2 class="admin-only">➕ Add Rule</h2>
-                <div class="admin-only" style="display: flex; flex-direction: column; gap: 6px">
-                    <div class="input-row">
-                        <input
-                            class="input"
-                            id="new-dns-rule-name"
-                            placeholder="Rule name"
-                        />
-                        <select
-                            class="input"
-                            id="new-dns-rule-action"
-                            style="flex: 0.6"
-                            onchange="dnsActionChanged()"
-                        >
-                            <option value="block">🚫 Block</option>
-                            <option value="upstream">↗️ Upstream</option>
-                        </select>
-                    </div>
-                    <div
-                        class="input-row"
-                        id="dns-upstream-row"
-                        style="display: none"
-                    >
-                        <input
-                            class="input"
-                            id="new-dns-rule-upstream"
-                            placeholder="Upstream (e.g. 8.8.8.8:53)"
-                        />
-                    </div>
-                    <div class="input-row">
-                        <input
-                            class="input"
-                            id="new-dns-rule-domains"
-                            placeholder="Domains (comma-separated, e.g. *.ads.com, tracker.net)"
-                        />
-                    </div>
-                    <div class="input-row">
-                        <input
-                            class="input"
-                            id="new-dns-rule-list-url"
-                            placeholder="Blocklist URL (optional)"
-                        />
-                        <select
-                            class="input"
-                            id="new-dns-rule-list-format"
-                            style="flex: 0.5"
-                        >
-                            <option value="domains">domains</option>
-                            <option value="hosts">hosts</option>
-                        </select>
-                    </div>
-                    <button class="btn btn-sm" onclick="addDNSRule()">
-                        + Add Rule
-                    </button>
-                </div>
-                <div id="dns-msg"></div>
-            </div>
-
-            <div id="users" class="section">
-                <div id="users-list"></div>
-                <h2>Grant Access</h2>
-                <div class="input-row">
-                    <input
-                        class="input"
-                        id="new-user"
-                        placeholder="@username or user ID"
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">Name</label
+                    ><input
+                        type="text"
+                        class="tg-input"
+                        id="inp-upstream-name"
+                        placeholder="My Upstream"
                     />
-                    <button class="btn btn-sm" onclick="addUser()">
-                        + Add
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Transport URI</label
+                    ><input
+                        type="text"
+                        class="tg-input"
+                        id="inp-upstream-transport"
+                        placeholder="ss://..."
+                    />
+                </div>
+                <div class="toggle-row">
+                    <div>
+                        <div class="toggle-label">Default</div>
+                        <div class="toggle-sublabel">
+                            Use as default upstream
+                        </div>
+                    </div>
+                    <div
+                        class="toggle-switch"
+                        id="inp-upstream-default"
+                        onclick="toggleUpstreamDefault()"
+                    >
+                        <div class="toggle-knob"></div>
+                    </div>
+                </div>
+                <div class="toggle-row">
+                    <div>
+                        <div class="toggle-label">Health Check</div>
+                        <div class="toggle-sublabel">Monitor availability</div>
+                    </div>
+                    <div
+                        class="toggle-switch"
+                        id="inp-upstream-health"
+                        onclick="toggleUpstreamHealth()"
+                    >
+                        <div class="toggle-knob"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Group Modal -->
+        <div
+            class="modal-backdrop"
+            id="group-modal-backdrop"
+            onclick="closeGroupModal()"
+        ></div>
+        <div class="modal-sheet" id="group-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closeGroupModal()">
+                    Cancel
+                </button>
+                <span class="modal-title">New Group</span>
+                <button class="modal-btn done upstream" onclick="saveGroup()">
+                    Done
+                </button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">Group Name</label
+                    ><input
+                        type="text"
+                        class="tg-input"
+                        id="inp-group-name"
+                        placeholder="my-group"
+                    />
+                </div>
+            </div>
+        </div>
+
+        <!-- Proxy Server Modal -->
+        <div
+            class="modal-backdrop"
+            id="proxy-modal-backdrop"
+            onclick="closeProxyModal()"
+        ></div>
+        <div class="modal-sheet" id="proxy-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closeProxyModal()">
+                    Cancel
+                </button>
+                <span class="modal-title">Add Proxy Server</span>
+                <button class="modal-btn done" onclick="saveProxy()">
+                    Done
+                </button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">Name (optional)</label
+                    ><input
+                        type="text"
+                        class="tg-input"
+                        id="inp-proxy-name"
+                        placeholder="my-proxy"
+                    />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Type</label
+                    ><select class="tg-input" id="inp-proxy-type">
+                        <option value="socks5">SOCKS5</option>
+                        <option value="http">HTTP</option>
+                        <option value="https">HTTPS</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Listen Address</label
+                    ><input
+                        type="text"
+                        class="tg-input"
+                        id="inp-proxy-listen"
+                        placeholder="0.0.0.0:1080"
+                    />
+                </div>
+            </div>
+        </div>
+
+        <!-- DNS Rule Modal -->
+        <div
+            class="modal-backdrop"
+            id="dns-rule-modal-backdrop"
+            onclick="closeDNSRuleModal()"
+        ></div>
+        <div class="modal-sheet" id="dns-rule-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closeDNSRuleModal()">
+                    Cancel
+                </button>
+                <span class="modal-title">New DNS Rule</span>
+                <button class="modal-btn done dns" onclick="saveDNSRule()">
+                    Done
+                </button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">Rule Name</label
+                    ><input
+                        type="text"
+                        class="tg-input"
+                        id="inp-dns-rule-name"
+                        placeholder="Block Ads"
+                    />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Action</label
+                    ><select
+                        class="tg-input"
+                        id="inp-dns-rule-action"
+                        onchange="toggleDNSRuleAction()"
+                    >
+                        <option value="block">Block (NXDOMAIN)</option>
+                        <option value="upstream">Use Specific Upstream</option>
+                    </select>
+                </div>
+                <div
+                    class="input-group"
+                    id="dns-rule-upstream-group"
+                    style="display: none"
+                >
+                    <label class="input-label">Upstream Address</label
+                    ><input
+                        type="text"
+                        class="tg-input"
+                        id="inp-dns-rule-upstream"
+                        placeholder="8.8.8.8:53"
+                    />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Domains (comma-separated)</label
+                    ><input
+                        type="text"
+                        class="tg-input"
+                        id="inp-dns-rule-domains"
+                        placeholder="*.ads.com, tracker.net"
+                    />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Blocklist URL (optional)</label
+                    ><input
+                        type="text"
+                        class="tg-input"
+                        id="inp-dns-rule-list-url"
+                        placeholder="https://example.com/blocklist.txt"
+                    />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">List Format</label
+                    ><select class="tg-input" id="inp-dns-rule-list-format">
+                        <option value="domains">Domains</option>
+                        <option value="hosts">Hosts file</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- DNS Record Modal -->
+        <div
+            class="modal-backdrop"
+            id="dns-record-modal-backdrop"
+            onclick="closeDNSRecordModal()"
+        ></div>
+        <div class="modal-sheet" id="dns-record-modal-sheet">
+            <div class="modal-header">
+                <button
+                    class="modal-btn cancel"
+                    onclick="closeDNSRecordModal()"
+                >
+                    Cancel
+                </button>
+                <span class="modal-title" id="dns-record-modal-title"
+                    >New DNS Record</span
+                >
+                <button class="modal-btn done dns" onclick="saveDNSRecord()">
+                    Done
+                </button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">Domain Name</label
+                    ><input
+                        type="text"
+                        class="tg-input"
+                        id="inp-dns-record-name"
+                        placeholder="example.com"
+                    />
+                </div>
+                <div class="input-group">
+                    <label class="input-label"
+                        >A Records (comma-separated IPv4)</label
+                    ><input
+                        type="text"
+                        class="tg-input"
+                        id="inp-dns-record-a"
+                        placeholder="1.2.3.4, 5.6.7.8"
+                    />
+                </div>
+                <div class="input-group">
+                    <label class="input-label"
+                        >AAAA Records (comma-separated IPv6)</label
+                    ><input
+                        type="text"
+                        class="tg-input"
+                        id="inp-dns-record-aaaa"
+                        placeholder="::1"
+                    />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">TTL (seconds)</label
+                    ><input
+                        type="number"
+                        class="tg-input"
+                        id="inp-dns-record-ttl"
+                        value="3600"
+                    />
+                </div>
+            </div>
+        </div>
+
+        <!-- User Modal -->
+        <div
+            class="modal-backdrop"
+            id="user-modal-backdrop"
+            onclick="closeUserModal()"
+        ></div>
+        <div class="modal-sheet" id="user-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closeUserModal()">
+                    Cancel
+                </button>
+                <span class="modal-title">Add User</span>
+                <button class="modal-btn done users" onclick="saveUser()">
+                    Done
+                </button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label"
+                        >@username or Telegram User ID</label
+                    ><input
+                        type="text"
+                        class="tg-input"
+                        id="inp-user-input"
+                        placeholder="@username or 123456789"
+                    />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Role</label
+                    ><select class="tg-input" id="inp-user-role">
+                        <option value="guest">Guest</option>
+                        <option value="admin">Admin</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Secret Modal -->
+        <div
+            class="modal-backdrop"
+            id="secret-modal-backdrop"
+            onclick="closeSecretModal()"
+        ></div>
+        <div class="modal-sheet" id="secret-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closeSecretModal()">
+                    Cancel
+                </button>
+                <span class="modal-title">New Secret</span>
+                <button class="modal-btn done mtproxy" onclick="saveSecret()">
+                    Done
+                </button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">Secret Type</label
+                    ><select class="tg-input" id="inp-secret-type">
+                        <option value="faketls">FakeTLS (ee)</option>
+                        <option value="padded">Padded (dd)</option>
+                        <option value="default">Default</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Comment (optional)</label
+                    ><input
+                        type="text"
+                        class="tg-input"
+                        id="inp-secret-comment"
+                        placeholder="Main proxy"
+                    />
+                </div>
+            </div>
+        </div>
+
+        <!-- Config/QR Modal -->
+        <div
+            class="modal-backdrop"
+            id="config-modal-backdrop"
+            onclick="closeConfigModal()"
+        ></div>
+        <div class="modal-sheet" id="config-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closeConfigModal()">
+                    Close
+                </button>
+                <span class="modal-title" id="config-modal-title">Config</span>
+                <button
+                    class="modal-btn done wg"
+                    id="config-copy-btn"
+                    onclick="copyConfig()"
+                >
+                    Copy
+                </button>
+            </div>
+            <div class="modal-content" id="config-modal-content"></div>
+        </div>
+
+        <!-- Delete Alert -->
+        <div class="alert-overlay" id="alert-overlay">
+            <div class="alert-box">
+                <div class="alert-title">Delete Item?</div>
+                <div class="alert-message" id="alert-message">
+                    Are you sure? This action cannot be undone.
+                </div>
+                <div class="alert-buttons">
+                    <button class="alert-btn cancel" onclick="closeAlert()">
+                        Cancel
+                    </button>
+                    <button class="alert-btn delete" id="confirm-delete-btn">
+                        Delete
                     </button>
                 </div>
-                <div id="user-msg"></div>
             </div>
+        </div>
+
+        <!-- Toast -->
+        <div class="toast" id="toast">
+            <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+            >
+                <polyline points="20 6 9 17 4 12" />
+            </svg>
+            <span id="toast-message">Done</span>
         </div>
 
         <script src="app.js"></script>

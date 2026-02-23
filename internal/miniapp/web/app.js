@@ -2,23 +2,46 @@ const tg = window.Telegram && window.Telegram.WebApp;
 
 if (!tg || !tg.initData) {
     document.getElementById("unauthorized").style.display = "block";
-    document.getElementById("app").style.display = "none";
+    document.getElementById("loading").style.display = "none";
 } else {
     tg.ready();
     tg.expand();
+    try {
+        tg.setHeaderColor("#161617");
+        tg.setBackgroundColor("#161617");
+    } catch (e) {}
 
     const initData = tg.initData;
-    let data = null;
+    let statusData = null;
     let groupsData = null;
-    let groupsLoaded = false;
     let dnsData = null;
-    let dnsLoaded = false;
+    let usersData = null;
     let meData = null;
+    let groupsLoaded = false;
+    let dnsLoaded = false;
+    let usersLoaded = false;
+    let currentConfigText = "";
+    let deleteCallback = null;
+
+    // Modal toggle state
+    let upstreamDefaultOn = false;
+    let upstreamHealthOn = false;
+
+    function haptic(type, val) {
+        try {
+            if (type === "selection") tg.HapticFeedback.selectionChanged();
+            else if (type === "impact")
+                tg.HapticFeedback.impactOccurred(val || "light");
+            else if (type === "notification")
+                tg.HapticFeedback.notificationOccurred(val || "success");
+        } catch (e) {}
+    }
 
     function isAdmin() {
         return meData && meData.role === "admin";
     }
 
+    // --- API ---
     function api(method, path, body) {
         const opts = {
             method,
@@ -38,52 +61,7 @@ if (!tg || !tg.initData) {
         });
     }
 
-    function showTab(name) {
-        const sections = ["peers", "upstreams", "proxies", "dns", "users"];
-        document.querySelectorAll("#app > .tabs > .tab").forEach((t, i) => {
-            t.classList.toggle("active", sections[i] === name);
-        });
-        document.querySelectorAll(".section").forEach((s) => {
-            s.classList.toggle("active", s.id === name);
-        });
-        if (name === "users" && !usersLoaded) refreshUsers();
-        if (name === "upstreams" && !groupsLoaded) refreshGroups();
-        if (name === "dns" && !dnsLoaded) refreshDNS();
-        try {
-            sessionStorage.setItem("activeTab", name);
-        } catch (e) {}
-    }
-
-    function showSubTab(showId, hideId, btn) {
-        document.getElementById(showId).style.display = "";
-        document.getElementById(hideId).style.display = "none";
-        btn.parentElement
-            .querySelectorAll(".tab")
-            .forEach((t) => t.classList.remove("active"));
-        btn.classList.add("active");
-        if (showId === "upstream-groups-view" && !groupsLoaded) refreshGroups();
-        try {
-            sessionStorage.setItem("activeUpstreamSubTab", showId);
-        } catch (e) {}
-    }
-
-    let activeProxySubTab = "mtproxy";
-    function showProxySubTab(type) {
-        activeProxySubTab = type;
-        const subs = ["mtproxy", "socks5", "http", "https"];
-        const container = document.querySelector("#proxies > .sub-tabs");
-        container.querySelectorAll(".tab").forEach((t, i) => {
-            t.classList.toggle("active", subs[i] === type);
-        });
-        subs.forEach((s) => {
-            document.getElementById("proxy-sub-" + s).style.display =
-                s === type ? "" : "none";
-        });
-        try {
-            sessionStorage.setItem("activeProxySubTab", type);
-        } catch (e) {}
-    }
-
+    // --- Helpers ---
     function formatBytes(b) {
         if (b >= 1073741824) return (b / 1073741824).toFixed(1) + " GB";
         if (b >= 1048576) return (b / 1048576).toFixed(1) + " MB";
@@ -110,10 +88,10 @@ if (!tg || !tg.initData) {
     }
 
     function peerStatusClass(unix) {
-        if (!unix || unix <= 0) return "offline";
+        if (!unix || unix <= 0) return "inactive";
         const sec = Math.floor(Date.now() / 1000) - unix;
-        if (sec < 180) return "online";
-        return "recent";
+        if (sec < 180) return "active";
+        return "inactive";
     }
 
     function truncSecret(s) {
@@ -123,646 +101,79 @@ if (!tg || !tg.initData) {
         return d.length > 8 ? d.slice(0, 8) + "…" : d;
     }
 
-    function copyText(text) {
-        navigator.clipboard.writeText(text).then(() => {
-            tg.showAlert("Copied!");
-        });
+    function secretType(hex) {
+        if (hex.startsWith("ee")) return "ee";
+        if (hex.startsWith("dd")) return "dd";
+        return "default";
     }
 
-    function render() {
-        if (!data) return;
-        document.getElementById("loading").style.display = "none";
-        document.getElementById("uptime").textContent =
-            "⏱ " + formatDuration(data.daemon.uptime_seconds);
-
-        // Peers
-        const pl = document.getElementById("peers-list");
-        if (!data.peers || data.peers.length === 0) {
-            pl.innerHTML = '<div class="empty">No peers configured</div>';
-        } else {
-            pl.innerHTML = data.peers
-                .map((p) => {
-                    const status = peerStatusClass(p.last_handshake_unix);
-                    const name = p.name || p.public_key.slice(0, 8) + "...";
-                    const stats = [
-                        {
-                            icon: "↓",
-                            val: formatBytes(p.rx_bytes),
-                            lbl: "Down",
-                        },
-                        { icon: "↑", val: formatBytes(p.tx_bytes), lbl: "Up" },
-                    ];
-                    if (p.rx_total > 0) {
-                        stats.push({
-                            icon: "⬇",
-                            val: formatBytes(p.rx_total),
-                            lbl: "Σ Down",
-                        });
-                        stats.push({
-                            icon: "⬆",
-                            val: formatBytes(p.tx_total),
-                            lbl: "Σ Up",
-                        });
-                    }
-                    const esc = name.replace(/'/g, "\\'");
-                    return `
-      <div class="card">
-        <div class="peer-card">
-          <div class="peer-left">
-            <div class="peer-name-row">
-              <span class="status-dot ${status}"></span>
-              <span class="name">${name}</span>
-              <span class="handshake">${timeAgo(p.last_handshake_unix)}</span>
-            </div>
-            <div class="peer-stats">
-              ${stats.map((s) => `<div class="peer-stat"><span class="ps-icon">${s.icon}</span><span class="ps-val">${s.val}</span><span class="ps-lbl">${s.lbl}</span></div>`).join("")}
-              <div class="peer-stat" style="grid-column:1/-1"><span class="ps-icon">🌐</span><span class="ps-val">${p.allowed_ips || "—"}</span><span class="ps-lbl">IP</span></div>
-            </div>
-          </div>
-          <div class="peer-right">
-            <div class="peer-btn-row">
-              <button class="peer-btn wide action" onclick="showPeerConf('${esc}')">🔧 Config</button>
-              <button class="peer-btn sq action" onclick="copyPeerConf('${esc}')" title="Copy config">📋</button>
-            </div>
-            <div class="peer-btn-row">
-              <button class="peer-btn wide action" onclick="showPeerQR('${esc}')">📱 QR Code</button>
-              <button class="peer-btn sq action" onclick="copyPeerQR('${esc}')" title="Copy QR">📋</button>
-            </div>
-            <button class="peer-btn delete danger" style="margin-top:5px" onclick="deletePeer('${esc}')">🗑️ Delete</button>
-          </div>
-        </div>
-      </div>`;
-                })
-                .join("");
-        }
-
-        // Upstreams
-        const ul = document.getElementById("upstreams-list");
-        if (!data.upstreams || data.upstreams.length === 0) {
-            ul.innerHTML = '<div class="empty">No upstreams configured</div>';
-        } else {
-            ul.innerHTML = data.upstreams
-                .map((u) => {
-                    const stateIcon =
-                        u.state === "healthy"
-                            ? "🟢"
-                            : u.state === "degraded"
-                              ? "🟡"
-                              : "🔴";
-                    const badges = [];
-                    if (u.default) badges.push("default");
-                    if (!u.enabled) badges.push("disabled");
-                    const badgeHtml = badges
-                        .map((b) => `<span class="meta">(${b})</span>`)
-                        .join(" ");
-                    const groupsHtml =
-                        u.groups && u.groups.length > 0
-                            ? `<span>Groups: ${u.groups.join(", ")}</span>`
-                            : "";
-                    return `
-      <div class="card">
-        <div class="card-header">
-          <span class="name">${stateIcon} ${u.name} <span class="meta">${u.type}</span> ${badgeHtml}</span>
-          ${isAdmin() ? `<div style="display:flex;gap:4px">
-            ${u.enabled ? `<button class="btn btn-sm" style="background:var(--hint)" onclick="toggleUpstream('${u.name}',false)">Disable</button>` : `<button class="btn btn-sm" onclick="toggleUpstream('${u.name}',true)">Enable</button>`}
-            <button class="btn btn-sm btn-danger" onclick="deleteUpstream('${u.name}')">✕</button>
-          </div>` : ""}
-        </div>
-        <div class="meta">
-          <span>↓${formatBytes(u.rx_bytes)} ↑${formatBytes(u.tx_bytes)}</span>
-          <span>Conns: ${u.active_connections}</span>
-        </div>
-        ${groupsHtml ? `<div class="meta">${groupsHtml}</div>` : ""}
-        ${u.last_error ? `<div class="error-msg">${u.last_error}</div>` : ""}
-      </div>`;
-                })
-                .join("");
-        }
-
-        // MTProxy
-        const ms = document.getElementById("mtproxy-status");
-        if (!data.mtproxy.enabled) {
-            ms.innerHTML = '<div class="empty">MTProxy not enabled</div>';
-            document.getElementById("proxy-links").innerHTML = "";
-        } else {
-            const tiles = [
-                {
-                    icon: "⚡",
-                    value: data.mtproxy.active_connections,
-                    label: "Active",
-                },
-                {
-                    icon: "🔗",
-                    value: data.mtproxy.connections,
-                    label: "Session",
-                },
-                {
-                    icon: "↑",
-                    value: formatBytes(data.mtproxy.bytes_c2b),
-                    label: "Upload",
-                },
-                {
-                    icon: "↓",
-                    value: formatBytes(data.mtproxy.bytes_b2c),
-                    label: "Download",
-                },
-            ];
-            if (data.mtproxy.bytes_c2b_total > 0) {
-                tiles.push({
-                    icon: "⬆",
-                    value: formatBytes(data.mtproxy.bytes_c2b_total),
-                    label: "Total Up",
-                });
-                tiles.push({
-                    icon: "⬇",
-                    value: formatBytes(data.mtproxy.bytes_b2c_total),
-                    label: "Total Down",
-                });
-            }
-            ms.innerHTML = `<div class="card"><div class="stats-grid">${tiles
-                .map(
-                    (t) =>
-                        `<div class="stat-tile">
-        <span class="stat-icon">${t.icon}</span>
-        <span class="stat-value">${t.value}</span>
-        <span class="stat-label">${t.label}</span>
-      </div>`,
-                )
-                .join("")}</div></div>`;
-
-            const ll = document.getElementById("proxy-links");
-            const secretMap = {};
-            (data.mtproxy.secrets || []).forEach((s) => {
-                secretMap[s.secret] = s;
-            });
-
-            function secretTypeBadge(secret) {
-                if (secret.startsWith("ee"))
-                    return '<span title="FakeTLS" style="cursor:default">🛡️</span>';
-                if (secret.startsWith("dd"))
-                    return '<span title="Padded" style="cursor:default">📦</span>';
-                return '<span title="Basic" style="cursor:default">🔓</span>';
-            }
-
-            if (data.mtproxy.links && data.mtproxy.links.length > 0) {
-                ll.innerHTML =
-                    '<hr style="border:none;border-top:1px solid color-mix(in srgb,var(--hint) 30%,transparent);margin:12px 0"><h2>🔗 Proxy Links</h2>' +
-                    data.mtproxy.links
-                        .map((l) => {
-                            const s = secretMap[l.secret];
-                            const statsHtml = s
-                                ? `<div class="meta">
-            <span>Last: ${timeAgo(s.last_connection_unix)}</span>
-            <span>Conns: ${s.connections}${s.connections_total > 0 ? " / " + s.connections_total + " total" : ""}</span>
-          </div>`
-                                : "";
-                            return `
-        <div class="card" id="plink-${l.secret}">
-          <div class="proxy-link-card">
-            <span class="name"${isAdmin() ? ` onclick="startRenameLink('${l.secret}', this)"` : ""}>${secretTypeBadge(l.secret)} ${l.name}</span>
-            ${isAdmin() ? `<button class="icon-btn" onclick="startRenameLink('${l.secret}', this.parentElement.querySelector('.name'))" title="Rename">✏️</button>` : ""}
-            <button class="icon-btn" onclick="copyText('${l.url}')" title="Copy link">📋</button>
-            <a class="icon-btn" href="${l.url}" target="_blank" title="Open link">🔗</a>
-            <button class="icon-btn" onclick="deleteSecret('${l.secret}')" title="Delete secret" style="color:#e53935">🗑️</button>
-          </div>
-          ${statsHtml}
-        </div>`;
-                        })
-                        .join("");
-            } else {
-                ll.innerHTML = '<div class="empty">No secrets</div>';
-            }
-        }
-
-        // Proxies (per-type sub-tabs)
-        ["socks5", "http", "https"].forEach((type) => {
-            const el = document.getElementById("proxies-list-" + type);
-            const filtered = (data.proxies || []).filter(
-                (p) => p.type === type,
-            );
-            if (filtered.length === 0) {
-                el.innerHTML =
-                    '<div class="empty">No ' +
-                    type.toUpperCase() +
-                    " proxies</div>";
-            } else {
-                el.innerHTML = filtered
-                    .map(
-                        (p) => `
-        <div class="card">
-          <div class="card-header">
-            <span class="name">${p.name}</span>
-            <button class="btn btn-sm btn-danger" onclick="deleteProxy('${p.name}')">Delete</button>
-          </div>
-          <div class="meta">
-            <span>Listen: ${p.listen}</span>
-            ${p.has_auth ? "<span>🔒 Auth</span>" : ""}
-          </div>
-          <div class="meta">
-            <span class="link-text">${p.link}</span>
-            <button class="copy-btn" onclick="copyText('${p.link}')">📋</button>
-          </div>
-        </div>
-      `,
-                    )
-                    .join("");
-            }
-        });
+    function escapeHtml(s) {
+        const d = document.createElement("div");
+        d.textContent = s;
+        return d.innerHTML;
     }
 
+    // --- Toast ---
+    function showToast(message) {
+        const t = document.getElementById("toast");
+        document.getElementById("toast-message").textContent = message;
+        t.classList.add("show");
+        setTimeout(() => t.classList.remove("show"), 2000);
+    }
+
+    // --- Tab Navigation ---
+    function switchTab(page) {
+        haptic("selection");
+        document
+            .querySelectorAll(".page")
+            .forEach((p) => p.classList.remove("active"));
+        document
+            .querySelectorAll(".tab-item")
+            .forEach((t) => t.classList.remove("active"));
+        const pageEl = document.getElementById("page-" + page);
+        if (pageEl) pageEl.classList.add("active");
+        const tabEl = document.querySelector(
+            '.tab-item[data-page="' + page + '"]',
+        );
+        if (tabEl) tabEl.classList.add("active");
+
+        if (page === "upstreams" && !groupsLoaded) refreshGroups();
+        if (page === "dns" && !dnsLoaded) refreshDNS();
+        if (page === "users" && !usersLoaded) refreshUsers();
+
+        try {
+            sessionStorage.setItem("activeTab", page);
+        } catch (e) {}
+    }
+
+    // --- Refresh Functions ---
     function refresh() {
-        api("GET", "/api/status")
-            .then((d) => {
-                data = d;
-                render();
-                if (groupsLoaded) refreshGroups();
-            })
-            .catch((err) => {
-                document.getElementById("loading").textContent =
-                    "Error: " + err.message;
-            });
-    }
-
-    function showMsg(id, text, isError) {
-        const el = document.getElementById(id);
-        el.className = isError ? "error-msg" : "success-msg";
-        el.textContent = text;
-        setTimeout(() => {
-            el.textContent = "";
-        }, 3000);
-    }
-
-    function fetchPeerConf(name) {
-        return api("GET", "/api/peers/" + encodeURIComponent(name) + "/conf");
-    }
-
-    function showPeerConf(name) {
-        fetchPeerConf(name).then((d) => {
-            if (d.error) {
-                showMsg("peer-msg", d.error, true);
-                return;
-            }
-            const overlay = document.createElement("div");
-            overlay.className = "modal-overlay";
-            overlay.onclick = (e) => {
-                if (e.target === overlay) overlay.remove();
-            };
-            overlay.innerHTML = `
-      <div class="modal-content">
-        <div class="modal-header">
-          <span class="name">📋 ${name}</span>
-          <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button>
-        </div>
-        <pre>${d.config}</pre>
-        <div class="btn-row" style="justify-content:center">
-          <button class="btn btn-sm" onclick="copyText(this.closest('.modal-content').querySelector('pre').textContent)">📄 Copy</button>
-        </div>
-      </div>`;
-            document.body.appendChild(overlay);
+        api("GET", "/api/status").then((d) => {
+            statusData = d;
+            renderPeers();
+            renderUpstreams();
+            renderProxies();
+            renderMTProxy();
+            document.getElementById("uptime").textContent =
+                "⏱ " + formatDuration(d.daemon.uptime_seconds);
         });
     }
 
-    function copyPeerConf(name) {
-        fetchPeerConf(name).then((d) => {
-            if (d.error) {
-                showMsg("peer-msg", d.error, true);
-                return;
-            }
-            copyText(d.config);
+    function refreshGroups() {
+        api("GET", "/api/groups").then((d) => {
+            groupsData = d;
+            groupsLoaded = true;
+            renderGroups();
         });
     }
 
-    function showPeerQR(name) {
-        fetchPeerConf(name).then((d) => {
-            if (d.error) {
-                showMsg("peer-msg", d.error, true);
-                return;
-            }
-            const overlay = document.createElement("div");
-            overlay.className = "modal-overlay";
-            overlay.onclick = (e) => {
-                if (e.target === overlay) overlay.remove();
-            };
-            overlay.innerHTML = `
-      <div class="modal-content">
-        <div class="modal-header">
-          <span class="name">📱 ${name}</span>
-          <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button>
-        </div>
-        <div id="qr-container" style="display:flex;justify-content:center"></div>
-        <div class="btn-row" style="justify-content:center">
-          <button class="btn btn-sm" onclick="copyQRFromModal()">🖼️ Copy QR</button>
-        </div>
-      </div>`;
-            document.body.appendChild(overlay);
-            new QRCode(document.getElementById("qr-container"), {
-                text: d.config,
-                width: 280,
-                height: 280,
-                colorDark: "#000000",
-                colorLight: "#ffffff",
-                correctLevel: QRCode.CorrectLevel.M,
-            });
+    function refreshDNS() {
+        api("GET", "/api/dns").then((d) => {
+            dnsData = d;
+            dnsLoaded = true;
+            renderDNS();
         });
     }
-
-    function copyPeerQR(name) {
-        fetchPeerConf(name).then((d) => {
-            if (d.error) {
-                showMsg("peer-msg", d.error, true);
-                return;
-            }
-            const tmp = document.createElement("div");
-            tmp.style.position = "absolute";
-            tmp.style.left = "-9999px";
-            document.body.appendChild(tmp);
-            new QRCode(tmp, {
-                text: d.config,
-                width: 280,
-                height: 280,
-                colorDark: "#000000",
-                colorLight: "#ffffff",
-                correctLevel: QRCode.CorrectLevel.M,
-            });
-            setTimeout(() => {
-                const canvas = tmp.querySelector("canvas");
-                if (canvas) {
-                    canvas.toBlob((blob) => {
-                        navigator.clipboard
-                            .write([new ClipboardItem({ "image/png": blob })])
-                            .then(() => {
-                                tg.showAlert("QR code copied!");
-                            })
-                            .catch(() => {
-                                tg.showAlert("Could not copy QR code");
-                            });
-                        tmp.remove();
-                    });
-                } else {
-                    tmp.remove();
-                    tg.showAlert("Could not generate QR code");
-                }
-            }, 100);
-        });
-    }
-
-    function copyQRFromModal() {
-        const container = document.getElementById("qr-container");
-        if (!container) return;
-        const canvas = container.querySelector("canvas");
-        if (!canvas) return;
-        canvas.toBlob((blob) => {
-            navigator.clipboard
-                .write([new ClipboardItem({ "image/png": blob })])
-                .then(() => {
-                    tg.showAlert("QR code copied!");
-                })
-                .catch(() => {
-                    tg.showAlert("Could not copy QR code");
-                });
-        });
-    }
-
-    function addPeer() {
-        const name = document.getElementById("new-peer-name").value.trim();
-        if (!name) return;
-        api("POST", "/api/peers", { name }).then((d) => {
-            if (d.error) {
-                showMsg("peer-msg", d.error, true);
-                return;
-            }
-            document.getElementById("new-peer-name").value = "";
-            showMsg("peer-msg", 'Peer "' + name + '" added', false);
-            refresh();
-        });
-    }
-
-    function deletePeer(name) {
-        tg.showConfirm('Delete peer "' + name + '"?', (ok) => {
-            if (!ok) return;
-            api("DELETE", "/api/peers/" + encodeURIComponent(name)).then(
-                (d) => {
-                    if (d.error) {
-                        showMsg("peer-msg", d.error, true);
-                        return;
-                    }
-                    refresh();
-                },
-            );
-        });
-    }
-
-    function addSecret() {
-        const type = document.getElementById("new-secret-type").value;
-        api("POST", "/api/secrets", { type }).then((d) => {
-            if (d.error) {
-                showMsg("secret-msg", d.error, true);
-                return;
-            }
-            showMsg(
-                "secret-msg",
-                "Secret added (send SIGHUP to reload)",
-                false,
-            );
-            refresh();
-        });
-    }
-
-    function startRenameLink(secret, nameEl) {
-        const card = document.getElementById("plink-" + secret);
-        if (!card || card.querySelector(".rename-form")) return;
-        const oldName = nameEl.textContent.replace(/^[🛡️📦🔓]\s*/u, "");
-        const form = document.createElement("div");
-        form.className = "rename-form";
-        const input = document.createElement("input");
-        input.type = "text";
-        input.value = oldName;
-        const okBtn = document.createElement("button");
-        okBtn.className = "icon-btn-sm";
-        okBtn.textContent = "✅";
-        okBtn.title = "Apply";
-        const cancelBtn = document.createElement("button");
-        cancelBtn.className = "icon-btn-sm";
-        cancelBtn.textContent = "❌";
-        cancelBtn.title = "Cancel";
-        form.appendChild(input);
-        form.appendChild(okBtn);
-        form.appendChild(cancelBtn);
-
-        nameEl.style.display = "none";
-        const editBtn = card.querySelector('.icon-btn[title="Rename"]');
-        if (editBtn) editBtn.style.display = "none";
-        nameEl.parentElement.insertBefore(form, nameEl);
-        input.focus();
-        input.select();
-
-        function apply() {
-            const newName = input.value.trim();
-            if (!newName || newName === oldName) {
-                cancel();
-                return;
-            }
-            api("PUT", "/api/secrets/" + encodeURIComponent(secret) + "/name", {
-                name: newName,
-            }).then((d) => {
-                if (d.error) {
-                    tg.showAlert(d.error);
-                    cancel();
-                    return;
-                }
-                refresh();
-            });
-        }
-        function cancel() {
-            form.remove();
-            nameEl.style.display = "";
-            if (editBtn) editBtn.style.display = "";
-        }
-        okBtn.addEventListener("click", apply);
-        cancelBtn.addEventListener("click", cancel);
-        input.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") {
-                e.preventDefault();
-                apply();
-            }
-            if (e.key === "Escape") {
-                e.preventDefault();
-                cancel();
-            }
-        });
-    }
-
-    function deleteSecret(hex) {
-        tg.showConfirm("Delete this secret?", (ok) => {
-            if (!ok) return;
-            api("DELETE", "/api/secrets/" + encodeURIComponent(hex)).then(
-                (d) => {
-                    if (d.error) {
-                        showMsg("secret-msg", d.error, true);
-                        return;
-                    }
-                    showMsg(
-                        "secret-msg",
-                        "Secret deleted (send SIGHUP to reload)",
-                        false,
-                    );
-                    refresh();
-                },
-            );
-        });
-    }
-
-    function addProxyTyped(type) {
-        const listen = document
-            .getElementById("new-proxy-listen-" + type)
-            .value.trim();
-        const name = document
-            .getElementById("new-proxy-name-" + type)
-            .value.trim();
-        if (!listen) return;
-        api("POST", "/api/proxies", {
-            type,
-            listen,
-            name: name || undefined,
-        }).then((d) => {
-            if (d.error) {
-                showMsg("proxy-msg-" + type, d.error, true);
-                return;
-            }
-            document.getElementById("new-proxy-listen-" + type).value = "";
-            document.getElementById("new-proxy-name-" + type).value = "";
-            showMsg(
-                "proxy-msg-" + type,
-                "Proxy added (restart required)",
-                false,
-            );
-            refresh();
-        });
-    }
-
-    function deleteProxy(name) {
-        tg.showConfirm('Delete proxy "' + name + '"?', (ok) => {
-            if (!ok) return;
-            api("DELETE", "/api/proxies/" + encodeURIComponent(name)).then(
-                (d) => {
-                    const msgId = "proxy-msg-" + activeProxySubTab;
-                    if (d.error) {
-                        showMsg(msgId, d.error, true);
-                        return;
-                    }
-                    showMsg(msgId, "Proxy deleted (restart required)", false);
-                    refresh();
-                },
-            );
-        });
-    }
-
-    // Upstreams
-    function addUpstream() {
-        const name = document.getElementById("new-upstream-name").value.trim();
-        const type = document.getElementById("new-upstream-type").value;
-        const transport = document
-            .getElementById("new-upstream-transport")
-            .value.trim();
-        const isDefault = document.getElementById(
-            "new-upstream-default",
-        ).checked;
-        const hcEnabled = document.getElementById("new-upstream-hc").checked;
-        if (!name || !transport) return;
-        api("POST", "/api/upstreams", {
-            name,
-            type,
-            transport,
-            default: isDefault,
-            health_check: {
-                enabled: hcEnabled,
-                interval: 30,
-                target: "1.1.1.1:80",
-            },
-        }).then((d) => {
-            if (d.error) {
-                showMsg("upstream-msg", d.error, true);
-                return;
-            }
-            document.getElementById("new-upstream-name").value = "";
-            document.getElementById("new-upstream-transport").value = "";
-            document.getElementById("new-upstream-default").checked = false;
-            showMsg("upstream-msg", 'Upstream "' + name + '" added', false);
-            refresh();
-        });
-    }
-
-    function deleteUpstream(name) {
-        tg.showConfirm('Delete upstream "' + name + '"?', (ok) => {
-            if (!ok) return;
-            api("DELETE", "/api/upstreams/" + encodeURIComponent(name)).then(
-                (d) => {
-                    if (d.error) {
-                        showMsg("upstream-msg", d.error, true);
-                        return;
-                    }
-                    showMsg("upstream-msg", "Upstream deleted", false);
-                    refresh();
-                },
-            );
-        });
-    }
-
-    function toggleUpstream(name, enable) {
-        api("PUT", "/api/upstreams/" + encodeURIComponent(name), {
-            enabled: enable,
-        }).then((d) => {
-            if (d.error) {
-                showMsg("upstream-msg", d.error, true);
-                return;
-            }
-            refresh();
-        });
-    }
-
-    // Users
-    let usersLoaded = false;
-    let usersData = [];
 
     function refreshUsers() {
         api("GET", "/api/users").then((d) => {
@@ -772,279 +183,851 @@ if (!tg || !tg.initData) {
         });
     }
 
-    function renderMe() {
-        const el = document.getElementById("current-user");
-        if (!meData || !el) return;
-        const roleBadge = meData.role === "admin" ? "👑 Admin" : "👤 Guest";
-        el.textContent = roleBadge;
-        updateTabVisibility();
-    }
+    // --- Render: Peers ---
+    function renderPeers() {
+        if (!statusData) return;
+        const peers = statusData.peers || [];
+        const el = document.getElementById("peer-list");
+        const now = Math.floor(Date.now() / 1000);
+        const connected = peers.filter(
+            (p) =>
+                p.last_handshake_unix > 0 && now - p.last_handshake_unix < 180,
+        ).length;
 
-    function updateTabVisibility() {
-        const admin = isAdmin();
-        const sections = ["peers", "upstreams", "proxies", "dns", "users"];
-        const adminOnlyTabs = ["upstreams", "dns", "users"];
-        document.querySelectorAll("#app > .tabs > .tab").forEach((t, i) => {
-            if (adminOnlyTabs.includes(sections[i])) {
-                t.style.display = admin ? "" : "none";
-            }
-        });
-        // Toggle admin-only elements throughout the page
-        document.querySelectorAll(".admin-only").forEach((el) => {
-            el.style.display = admin ? "" : "none";
-        });
-        // For guests, hide non-mtproxy proxy sub-tabs and force mtproxy view
-        const proxySubTabs = document.querySelectorAll("#proxies > .sub-tabs > .tab");
-        const adminOnlyProxySubs = ["socks5", "http", "https"];
-        const proxySubs = ["mtproxy", "socks5", "http", "https"];
-        proxySubTabs.forEach((t, i) => {
-            if (adminOnlyProxySubs.includes(proxySubs[i])) {
-                t.style.display = admin ? "" : "none";
-            }
-        });
-        if (!admin) {
-            showProxySubTab("mtproxy");
-        }
-        // If guest is on a hidden tab, switch to peers
-        if (!admin) {
-            try {
-                const active = sessionStorage.getItem("activeTab");
-                if (active && adminOnlyTabs.includes(active)) {
-                    showTab("peers");
-                }
-            } catch (e) {}
-        }
-        // Re-render to update inline admin controls
-        if (data) render();
-        if (dnsData) renderDNS();
-    }
+        document.getElementById("wg-stat-total").textContent = peers.length;
+        document.getElementById("wg-stat-active").textContent = connected;
 
-    function renderUsers() {
-        const ul = document.getElementById("users-list");
-        if (!usersData || usersData.length === 0) {
-            ul.innerHTML =
-                '<div class="empty">No additional users granted access</div>';
+        if (peers.length === 0) {
+            el.innerHTML = '<div class="empty-state">No peers configured</div>';
             return;
         }
-        ul.innerHTML = usersData
-            .map((u) => {
-                const name =
-                    [u.first_name, u.last_name].filter(Boolean).join(" ") ||
-                    (u.is_admin ? "Admin (ID: " + u.user_id + ")" : "Unknown");
-                const avatar = u.photo_url
-                    ? `<img src="${u.photo_url}" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">`
-                    : `<div style="width:36px;height:36px;border-radius:50%;background:var(--btn);display:flex;align-items:center;justify-content:center;font-size:16px;color:var(--btn-text)">${(u.first_name || "?")[0]}</div>`;
-                const isConfigAdmin = u.is_config_admin;
-                let roleHtml;
-                if (isConfigAdmin) {
-                    roleHtml = '<span style="background:var(--btn);color:var(--btn-text);font-size:10px;padding:1px 6px;border-radius:4px;margin-left:6px">admin</span>';
-                } else {
-                    const role = u.role || (u.is_admin ? "admin" : "guest");
-                    roleHtml = `<select class="role-select" onchange="changeUserRole(${u.user_id},this.value)" style="font-size:10px;padding:1px 4px;border-radius:4px;margin-left:6px;background:var(--bg);color:var(--text);border:1px solid var(--hint)">
-                        <option value="admin"${role === "admin" ? " selected" : ""}>admin</option>
-                        <option value="guest"${role === "guest" ? " selected" : ""}>guest</option>
-                    </select>`;
-                }
-                const deleteBtn = isConfigAdmin
-                    ? ""
-                    : `<button class="btn btn-sm btn-danger" onclick="deleteUser(${u.user_id},'${name.replace(/'/g, "\\'")}')">✕</button>`;
-                return `
-      <div class="card" style="display:flex;align-items:center;gap:10px">
-        ${avatar}
-        <div style="flex:1;min-width:0">
-          <div class="name">${name}${roleHtml}</div>
-          <div class="meta">${u.username ? "@" + u.username : ""} · ID: ${u.user_id}</div>
-        </div>
-        ${deleteBtn}
-      </div>`;
+
+        el.innerHTML = peers
+            .map((p) => {
+                const name = p.name || p.public_key.slice(0, 8) + "...";
+                const status = peerStatusClass(p.last_handshake_unix);
+                const esc = escapeHtml(name);
+                const escapedName = name.replace(/'/g, "\\'");
+                return (
+                    '<div class="list-item">' +
+                    '<div class="item-icon wg-peer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div>' +
+                    '<div class="item-content">' +
+                    '<div class="item-title">' +
+                    esc +
+                    "</div>" +
+                    '<div class="item-subtitle">' +
+                    '<span class="status-badge ' +
+                    status +
+                    '">' +
+                    (status === "active" ? "Online" : "Offline") +
+                    "</span>" +
+                    (p.disabled
+                        ? ' <span class="status-badge inactive">disabled</span>'
+                        : "") +
+                    " ↓" +
+                    formatBytes(p.rx_bytes) +
+                    " ↑" +
+                    formatBytes(p.tx_bytes) +
+                    (p.last_handshake_unix > 0
+                        ? " • " + timeAgo(p.last_handshake_unix)
+                        : "") +
+                    "</div></div>" +
+                    '<div class="item-action">' +
+                    '<div class="toggle-switch ' +
+                    (p.disabled ? "" : "active") +
+                    '" onclick="togglePeer(\'' +
+                    escapedName +
+                    "'," +
+                    p.disabled +
+                    ',event)"><div class="toggle-knob"></div></div>' +
+                    '<button class="action-icon-btn" onclick="showPeerConf(\'' +
+                    escapedName +
+                    '\')" title="Config"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>' +
+                    '<button class="action-icon-btn" onclick="showPeerQR(\'' +
+                    escapedName +
+                    '\')" title="QR"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></button>' +
+                    '<button class="delete-btn" onclick="promptDelete(\'' +
+                    escapedName +
+                    '\',\'peer\')" title="Delete"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>' +
+                    "</div></div>"
+                );
             })
             .join("");
     }
 
-    function changeUserRole(userId, role) {
-        api("PUT", "/api/users/" + userId, { role: role }).then((d) => {
-            if (d.error) {
-                showMsg("user-msg", d.error, true);
-                refreshUsers();
-                return;
-            }
-            showMsg("user-msg", "Role updated", false);
-            refreshUsers();
-        });
-    }
+    // --- Render: Upstreams ---
+    function renderUpstreams() {
+        if (!statusData) return;
+        const ups = statusData.upstreams || [];
+        const el = document.getElementById("upstream-list");
 
-    function addUser() {
-        const input = document.getElementById("new-user").value.trim();
-        if (!input) return;
-        api("POST", "/api/users", { user: input }).then((d) => {
-            if (d.error) {
-                showMsg("user-msg", d.error, true);
-                return;
-            }
-            document.getElementById("new-user").value = "";
-            showMsg("user-msg", "User added", false);
-            refreshUsers();
-        });
-    }
+        document.getElementById("upstream-stat-total").textContent = ups.length;
+        document.getElementById("upstream-stat-active").textContent =
+            ups.filter((u) => u.state === "healthy").length;
 
-    function deleteUser(id, name) {
-        tg.showConfirm('Revoke access for "' + name + '"?', (ok) => {
-            if (!ok) return;
-            api("DELETE", "/api/users/" + id).then((d) => {
-                if (d.error) {
-                    showMsg("user-msg", d.error, true);
-                    return;
-                }
-                showMsg("user-msg", "Access revoked", false);
-                refreshUsers();
-            });
-        });
-    }
-
-    // DNS
-    function refreshDNS() {
-        api("GET", "/api/dns").then((d) => {
-            dnsData = d;
-            dnsLoaded = true;
-            renderDNS();
-        });
-    }
-
-    function renderDNS() {
-        if (!dnsData) return;
-
-        // Status card
-        const ds = document.getElementById("dns-status");
-        if (!dnsData.enabled) {
-            ds.innerHTML = '<div class="empty">DNS proxy not enabled</div>';
-            document.getElementById("dns-records").innerHTML = "";
-            document.getElementById("dns-rules").innerHTML = "";
+        if (ups.length === 0) {
+            el.innerHTML =
+                '<div class="empty-state">No upstreams configured</div>';
             return;
         }
 
-        ds.innerHTML = `<div class="card">
-    <div class="card-header">
-      <span class="name">🔍 DNS Proxy</span>
-      <span style="color:#4caf50;font-size:12px">● Enabled</span>
-    </div>
-    <div class="meta">
-      <span>Listen: ${dnsData.listen}</span>
-      <span>Upstream: ${dnsData.upstream}</span>
-    </div>
-  </div>`;
+        el.innerHTML = ups
+            .map((u) => {
+                const iconClass =
+                    u.type === "outline"
+                        ? "item-icon outline"
+                        : "item-icon amnezia";
+                const healthClass =
+                    u.state === "healthy"
+                        ? "ok"
+                        : u.state === "degraded"
+                          ? "checking"
+                          : "error";
+                const healthText =
+                    u.state === "healthy"
+                        ? "Healthy"
+                        : u.state === "degraded"
+                          ? "Degraded"
+                          : u.state || "Unknown";
+                const badges = [];
+                if (u.default) badges.push("default");
+                if (!u.enabled) badges.push("disabled");
+                const badgeHtml = badges
+                    .map(
+                        (b) =>
+                            '<span class="status-badge inactive">' +
+                            b +
+                            "</span>",
+                    )
+                    .join(" ");
+                const esc = escapeHtml(u.name);
+                const escapedName = u.name.replace(/'/g, "\\'");
+                return (
+                    '<div class="list-item">' +
+                    '<div class="' +
+                    iconClass +
+                    '"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div>' +
+                    '<div class="item-content">' +
+                    '<div class="item-title">' +
+                    esc +
+                    "</div>" +
+                    '<div class="item-subtitle">' +
+                    u.type.toUpperCase() +
+                    " • " +
+                    '<span class="health-indicator"><span class="health-dot ' +
+                    healthClass +
+                    '"></span>' +
+                    healthText +
+                    "</span>" +
+                    " " +
+                    badgeHtml +
+                    " • ↓" +
+                    formatBytes(u.rx_bytes) +
+                    " ↑" +
+                    formatBytes(u.tx_bytes) +
+                    "</div></div>" +
+                    (isAdmin()
+                        ? '<div class="item-action">' +
+                          '<div class="toggle-switch ' +
+                          (u.enabled ? "active" : "") +
+                          '" onclick="toggleUpstream(\'' +
+                          escapedName +
+                          "'," +
+                          !u.enabled +
+                          ',event)"><div class="toggle-knob"></div></div>' +
+                          '<button class="delete-btn" onclick="promptDelete(\'' +
+                          escapedName +
+                          '\',\'upstream\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>' +
+                          "</div>"
+                        : "") +
+                    "</div>"
+                );
+            })
+            .join("");
+    }
+
+    // --- Render: Groups ---
+    function renderGroups() {
+        const el = document.getElementById("upstream-group-list");
+        if (!groupsData || groupsData.length === 0) {
+            el.innerHTML = '<div class="empty-state">No groups found</div>';
+            return;
+        }
+        el.innerHTML = groupsData
+            .map((g) => {
+                const memberNames = (g.members || [])
+                    .map((m) => m.name)
+                    .join(", ");
+                const count = (g.members || []).length;
+                const escapedName = g.name.replace(/'/g, "\\'");
+                return (
+                    '<div class="list-item">' +
+                    '<div class="item-icon group"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>' +
+                    '<div class="item-content">' +
+                    '<div class="item-title">' +
+                    escapeHtml(g.name) +
+                    "</div>" +
+                    '<div class="item-subtitle">' +
+                    count +
+                    " member" +
+                    (count !== 1 ? "s" : "") +
+                    (memberNames
+                        ? " • " +
+                          escapeHtml(memberNames.substring(0, 40)) +
+                          (memberNames.length > 40 ? "…" : "")
+                        : "") +
+                    "</div></div>" +
+                    (isAdmin()
+                        ? '<div class="item-action"><button class="delete-btn" onclick="promptDelete(\'' +
+                          escapedName +
+                          '\',\'group\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></div>'
+                        : "") +
+                    "</div>"
+                );
+            })
+            .join("");
+    }
+
+    // --- Render: Proxies ---
+    function renderProxies() {
+        if (!statusData) return;
+        const proxies = statusData.proxies || [];
+        const el = document.getElementById("proxy-list");
+
+        document.getElementById("proxy-stat-total").textContent =
+            proxies.length;
+        const types = [...new Set(proxies.map((p) => p.type))];
+        document.getElementById("proxy-stat-types").textContent =
+            types.length > 0 ? types.join(", ").toUpperCase() : "—";
+
+        if (proxies.length === 0) {
+            el.innerHTML =
+                '<div class="empty-state">No proxy servers configured</div>';
+            return;
+        }
+
+        el.innerHTML = proxies
+            .map((p) => {
+                const iconClass =
+                    p.type === "socks5" ? "item-icon socks" : "item-icon http";
+                const escapedName = p.name.replace(/'/g, "\\'");
+                return (
+                    '<div class="list-item">' +
+                    '<div class="' +
+                    iconClass +
+                    '"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></div>' +
+                    '<div class="item-content">' +
+                    '<div class="item-title">' +
+                    escapeHtml(p.name) +
+                    "</div>" +
+                    '<div class="item-subtitle">' +
+                    p.type.toUpperCase() +
+                    " • " +
+                    escapeHtml(p.listen) +
+                    (p.has_auth ? " • 🔑" : "") +
+                    "</div></div>" +
+                    '<div class="item-action">' +
+                    (p.link
+                        ? '<button class="copy-link-btn" onclick="copyText(\'' +
+                          p.link.replace(/'/g, "\\'") +
+                          "',event)\">Copy</button>"
+                        : "") +
+                    (isAdmin()
+                        ? '<button class="delete-btn" onclick="promptDelete(\'' +
+                          escapedName +
+                          '\',\'proxy\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>'
+                        : "") +
+                    "</div></div>"
+                );
+            })
+            .join("");
+    }
+
+    // --- Render: DNS ---
+    function renderDNS() {
+        if (!dnsData) return;
+
+        // Status
+        const badge = document.getElementById("dns-status-badge");
+        const text = document.getElementById("dns-status-text");
+        if (dnsData.enabled) {
+            badge.textContent = "ON";
+            badge.className = "status-badge active";
+            text.textContent =
+                "Listening on " +
+                (dnsData.listen || "—") +
+                " → " +
+                (dnsData.upstream || "—");
+        } else {
+            badge.textContent = "OFF";
+            badge.className = "status-badge inactive";
+            text.textContent = "Disabled";
+        }
 
         // Records
-        const rl = document.getElementById("dns-records");
-        if (!dnsData.records || dnsData.records.length === 0) {
-            rl.innerHTML =
-                '<h2>📋 Static Records</h2><div class="empty">No static records configured</div>';
+        const recEl = document.getElementById("dns-record-list");
+        const records = dnsData.records || [];
+        if (records.length === 0) {
+            recEl.innerHTML = '<div class="empty-state">No DNS records</div>';
         } else {
-            rl.innerHTML =
-                "<h2>📋 Static Records</h2>" +
-                dnsData.records
-                    .map(
-                        (r) => `
-      <div class="card">
-        <div class="card-header">
-          <span class="name" style="font-family:monospace;font-size:13px">${r.name}</span>
-          <span class="meta">TTL: ${r.ttl || 60}s</span>
-        </div>
-        <div class="meta">
-          ${r.a && r.a.length > 0 ? "<span>A: " + r.a.join(", ") + "</span>" : ""}
-          ${r.aaaa && r.aaaa.length > 0 ? "<span>AAAA: " + r.aaaa.join(", ") + "</span>" : ""}
-        </div>
-      </div>
-    `,
-                    )
-                    .join("");
+            recEl.innerHTML = records
+                .map((r) => {
+                    const values = (r.a || []).concat(r.aaaa || []);
+                    const escapedName = r.name.replace(/'/g, "\\'");
+                    return (
+                        '<div class="list-item">' +
+                        '<div class="item-icon dns-record"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div>' +
+                        '<div class="item-content">' +
+                        '<div class="item-title">' +
+                        escapeHtml(r.name) +
+                        "</div>" +
+                        '<div class="item-subtitle">' +
+                        (r.a && r.a.length ? "A" : "") +
+                        (r.aaaa && r.aaaa.length ? " AAAA" : "") +
+                        " → " +
+                        escapeHtml(values.join(", ")) +
+                        " • TTL: " +
+                        (r.ttl || 0) +
+                        "s</div>" +
+                        "</div>" +
+                        (isAdmin()
+                            ? '<div class="item-action">' +
+                              '<button class="action-icon-btn" onclick="editDNSRecord(\'' +
+                              escapedName +
+                              '\')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
+                              '<button class="delete-btn" onclick="promptDelete(\'' +
+                              escapedName +
+                              '\',\'dns-record\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>' +
+                              "</div>"
+                            : "") +
+                        "</div>"
+                    );
+                })
+                .join("");
         }
 
         // Rules
-        const ul = document.getElementById("dns-rules");
-        if (!dnsData.rules || dnsData.rules.length === 0) {
-            ul.innerHTML =
-                '<h2>📜 Rules</h2><div class="empty">No DNS rules configured</div>';
+        const ruleEl = document.getElementById("dns-rule-list");
+        const rules = dnsData.rules || [];
+        if (rules.length === 0) {
+            ruleEl.innerHTML = '<div class="empty-state">No DNS rules</div>';
         } else {
-            ul.innerHTML =
-                "<h2>📜 Rules</h2>" +
-                dnsData.rules
-                    .map((r) => {
-                        const actionIcon = r.action === "block" ? "🚫" : "↗️";
-                        const actionLabel =
-                            r.action === "block"
-                                ? "Block"
-                                : "Upstream: " + r.upstream;
-                        const domainsHtml =
-                            r.domains && r.domains.length > 0
-                                ? '<div class="meta" style="margin-top:4px"><span>Domains: ' +
-                                  r.domains
-                                      .map(
-                                          (d) =>
-                                              '<code style="background:var(--bg);padding:1px 4px;border-radius:3px;font-size:11px">' +
-                                              d +
-                                              "</code>",
-                                      )
-                                      .join(" ") +
-                                  "</span></div>"
-                                : "";
-                        const listsHtml =
-                            r.lists && r.lists.length > 0
-                                ? '<div class="meta" style="margin-top:4px">' +
-                                  r.lists
-                                      .map(
-                                          (l) =>
-                                              "<div><span>📥 " +
-                                              l.url +
-                                              '</span><span class="meta"> (' +
-                                              (l.format || "domains") +
-                                              ", refresh: " +
-                                              formatRefresh(l.refresh) +
-                                              ")</span></div>",
-                                      )
-                                      .join("") +
-                                  "</div>"
-                                : "";
-                        const escapedName = r.name.replace(/'/g, "\\'");
-                        return `
-      <div class="card">
-        <div class="card-header">
-          <span class="name">${actionIcon} ${r.name}</span>
-          <div style="display:flex;align-items:center;gap:6px">
-            <span class="meta">${actionLabel}</span>
-            ${isAdmin() ? `<button class="btn btn-sm btn-danger" onclick="deleteDNSRule('${escapedName}')">✕</button>` : ""}
-          </div>
-        </div>
-        ${domainsHtml}
-        ${listsHtml}
-      </div>`;
-                    })
-                    .join("");
+            ruleEl.innerHTML = rules
+                .map((r) => {
+                    const actionBadge =
+                        r.action === "block"
+                            ? '<span class="rule-type-badge block">Block</span>'
+                            : '<span class="rule-type-badge upstream">Upstream</span>';
+                    const domainCount = (r.domains || []).length;
+                    const listCount = (r.lists || []).length;
+                    const info = [];
+                    if (domainCount > 0)
+                        info.push(
+                            domainCount +
+                                " domain" +
+                                (domainCount > 1 ? "s" : ""),
+                        );
+                    if (listCount > 0)
+                        info.push(
+                            listCount + " list" + (listCount > 1 ? "s" : ""),
+                        );
+                    if (r.upstream) info.push("→ " + r.upstream);
+                    const escapedName = r.name.replace(/'/g, "\\'");
+                    return (
+                        '<div class="list-item">' +
+                        '<div class="item-icon dns-rule"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>' +
+                        '<div class="item-content">' +
+                        '<div class="item-title">' +
+                        escapeHtml(r.name) +
+                        "</div>" +
+                        '<div class="item-subtitle">' +
+                        actionBadge +
+                        " • " +
+                        info.join(" • ") +
+                        "</div>" +
+                        "</div>" +
+                        (isAdmin()
+                            ? '<div class="item-action"><button class="delete-btn" onclick="promptDelete(\'' +
+                              escapedName +
+                              '\',\'dns-rule\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></div>'
+                            : "") +
+                        "</div>"
+                    );
+                })
+                .join("");
         }
     }
 
-    function dnsActionChanged() {
-        const action = document.getElementById("new-dns-rule-action").value;
-        document.getElementById("dns-upstream-row").style.display =
-            action === "upstream" ? "" : "none";
+    // --- Render: Users ---
+    function renderUsers() {
+        if (!usersData) return;
+        const el = document.getElementById("user-list");
+
+        document.getElementById("user-stat-total").textContent =
+            usersData.length;
+        document.getElementById("user-stat-admin").textContent =
+            usersData.filter((u) => u.is_admin).length;
+
+        if (usersData.length === 0) {
+            el.innerHTML = '<div class="empty-state">No users</div>';
+            return;
+        }
+
+        el.innerHTML = usersData
+            .map((u) => {
+                const displayName =
+                    (u.first_name || "") +
+                        (u.last_name ? " " + u.last_name : "") ||
+                    u.username ||
+                    "User " + u.user_id;
+                const iconClass = u.is_admin
+                    ? "item-icon user"
+                    : "item-icon user-guest";
+                const roleBadge = u.is_admin
+                    ? '<span class="status-badge admin">Admin</span>'
+                    : '<span class="status-badge guest">Guest</span>';
+                const initial = displayName.charAt(0).toUpperCase();
+                const avatarContent = u.photo_url
+                    ? '<img src="' +
+                      escapeHtml(u.photo_url) +
+                      '" alt="' +
+                      initial +
+                      '">'
+                    : initial;
+                const canDelete = !u.is_config_admin && isAdmin();
+                const canToggleRole = !u.is_config_admin && isAdmin();
+                return (
+                    '<div class="list-item">' +
+                    '<div class="' +
+                    iconClass +
+                    '"><div class="user-avatar">' +
+                    avatarContent +
+                    "</div></div>" +
+                    '<div class="item-content">' +
+                    '<div class="item-title">' +
+                    escapeHtml(displayName) +
+                    "</div>" +
+                    '<div class="item-subtitle">' +
+                    (u.username ? "@" + escapeHtml(u.username) + " • " : "") +
+                    "ID: " +
+                    u.user_id +
+                    " • " +
+                    roleBadge +
+                    (u.is_config_admin
+                        ? ' <span class="status-badge inactive">config</span>'
+                        : "") +
+                    "</div></div>" +
+                    '<div class="item-action">' +
+                    (canToggleRole
+                        ? '<button class="action-icon-btn" onclick="toggleUserRole(' +
+                          u.user_id +
+                          ",'" +
+                          (u.is_admin ? "guest" : "admin") +
+                          '\')" title="Toggle role"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>'
+                        : "") +
+                    (canDelete
+                        ? '<button class="delete-btn" onclick="promptDelete(' +
+                          u.user_id +
+                          ',\'user\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>'
+                        : "") +
+                    "</div></div>"
+                );
+            })
+            .join("");
     }
 
-    function addDNSRule() {
-        const name = document.getElementById("new-dns-rule-name").value.trim();
-        const action = document.getElementById("new-dns-rule-action").value;
+    // --- Render: MTProxy ---
+    function renderMTProxy() {
+        if (!statusData) return;
+        const mt = statusData.mtproxy;
+
+        if (!mt || !mt.enabled) {
+            document.getElementById("mtproxy-stat-secrets").textContent = "0";
+            document.getElementById("mtproxy-stat-active").textContent = "0";
+            document.getElementById("mtproxy-link-list").innerHTML =
+                '<div class="empty-state">MTProxy not enabled</div>';
+            document.getElementById("mtproxy-secret-list").innerHTML = "";
+            return;
+        }
+
+        const secrets = mt.secrets || [];
+        const links = mt.links || [];
+        document.getElementById("mtproxy-stat-secrets").textContent =
+            secrets.length;
+        document.getElementById("mtproxy-stat-active").textContent =
+            mt.active_connections;
+
+        // Links
+        const linkEl = document.getElementById("mtproxy-link-list");
+        if (links.length === 0) {
+            linkEl.innerHTML = '<div class="empty-state">No proxy links</div>';
+        } else {
+            linkEl.innerHTML = links
+                .map((l) => {
+                    const displayName = l.name || truncSecret(l.secret);
+                    const sType = secretType(l.secret);
+                    const typeBadge =
+                        sType === "ee"
+                            ? '<span class="secret-type-badge ee">EE</span>'
+                            : sType === "dd"
+                              ? '<span class="secret-type-badge dd">DD</span>'
+                              : '<span class="secret-type-badge default">Default</span>';
+                    const escapedUrl = l.url.replace(/'/g, "\\'");
+                    return (
+                        '<div class="list-item">' +
+                        '<div class="item-icon secret-' +
+                        sType +
+                        '"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>' +
+                        '<div class="item-content">' +
+                        '<div class="item-title">' +
+                        escapeHtml(displayName) +
+                        "</div>" +
+                        '<div class="item-subtitle">' +
+                        typeBadge +
+                        " • " +
+                        (l.type || "tg") +
+                        "</div>" +
+                        "</div>" +
+                        '<div class="item-action">' +
+                        '<button class="copy-link-btn" onclick="copyText(\'' +
+                        escapedUrl +
+                        "',event)\">Copy</button>" +
+                        "</div></div>"
+                    );
+                })
+                .join("");
+        }
+
+        // Secrets
+        const secEl = document.getElementById("mtproxy-secret-list");
+        if (secrets.length === 0) {
+            secEl.innerHTML = '<div class="empty-state">No secrets</div>';
+        } else {
+            secEl.innerHTML = secrets
+                .map((s) => {
+                    const sType = secretType(s.secret);
+                    const typeBadge =
+                        sType === "ee"
+                            ? '<span class="secret-type-badge ee">EE</span>'
+                            : sType === "dd"
+                              ? '<span class="secret-type-badge dd">DD</span>'
+                              : '<span class="secret-type-badge default">Default</span>';
+                    const escapedSecret = s.secret.replace(/'/g, "\\'");
+                    return (
+                        '<div class="list-item">' +
+                        '<div class="item-icon secret-' +
+                        sType +
+                        '"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>' +
+                        '<div class="item-content">' +
+                        '<div class="item-title">' +
+                        truncSecret(s.secret) +
+                        "</div>" +
+                        '<div class="item-subtitle">' +
+                        typeBadge +
+                        " • Conns: " +
+                        s.connections_total +
+                        " • ↓" +
+                        formatBytes(s.bytes_b2c) +
+                        " ↑" +
+                        formatBytes(s.bytes_c2b) +
+                        "</div></div>" +
+                        '<div class="item-action">' +
+                        '<button class="delete-btn" onclick="promptDelete(\'' +
+                        escapedSecret +
+                        '\',\'secret\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>' +
+                        "</div></div>"
+                    );
+                })
+                .join("");
+        }
+    }
+
+    // --- Modal Helpers ---
+    function openModal(id) {
+        haptic("impact");
+        document.getElementById(id + "-backdrop").classList.add("open");
+        document.getElementById(id + "-sheet").classList.add("open");
+    }
+
+    function closeModal(id) {
+        document.getElementById(id + "-backdrop").classList.remove("open");
+        document.getElementById(id + "-sheet").classList.remove("open");
+    }
+
+    // --- Peers ---
+    window.openPeerModal = function () {
+        openModal("peer-modal");
+        document.getElementById("inp-peer-name").value = "";
+    };
+    window.closePeerModal = function () {
+        closeModal("peer-modal");
+    };
+    window.savePeer = function () {
+        const name = document.getElementById("inp-peer-name").value.trim();
+        if (!name) {
+            haptic("notification", "error");
+            return;
+        }
+        api("POST", "/api/peers", { name }).then((d) => {
+            if (d.error) {
+                haptic("notification", "error");
+                showToast(d.error);
+                return;
+            }
+            haptic("notification", "success");
+            showToast("Peer created");
+            closePeerModal();
+            refresh();
+        });
+    };
+
+    window.showPeerConf = function (name) {
+        api("GET", "/api/peers/" + encodeURIComponent(name) + "/conf").then(
+            (d) => {
+                if (d.error) {
+                    showToast(d.error);
+                    return;
+                }
+                currentConfigText = d.config;
+                document.getElementById("config-modal-title").textContent =
+                    name;
+                document.getElementById("config-copy-btn").style.display = "";
+                document.getElementById("config-modal-content").innerHTML =
+                    '<pre class="config-pre">' +
+                    escapeHtml(d.config) +
+                    "</pre>";
+                openModal("config-modal");
+            },
+        );
+    };
+
+    window.showPeerQR = function (name) {
+        api("GET", "/api/peers/" + encodeURIComponent(name) + "/conf").then(
+            (d) => {
+                if (d.error) {
+                    showToast(d.error);
+                    return;
+                }
+                currentConfigText = d.config;
+                document.getElementById("config-modal-title").textContent =
+                    name + " QR";
+                document.getElementById("config-copy-btn").style.display =
+                    "none";
+                const container = document.getElementById(
+                    "config-modal-content",
+                );
+                container.innerHTML =
+                    '<div class="qr-container"><div id="qr-code"></div></div>';
+                try {
+                    new QRCode(document.getElementById("qr-code"), {
+                        text: d.config,
+                        width: 256,
+                        height: 256,
+                        colorDark: "#000000",
+                        colorLight: "#ffffff",
+                    });
+                } catch (e) {
+                    container.innerHTML =
+                        '<div class="empty-state">QR generation failed</div>';
+                }
+                openModal("config-modal");
+            },
+        );
+    };
+
+    window.closeConfigModal = function () {
+        closeModal("config-modal");
+    };
+    window.copyConfig = function () {
+        navigator.clipboard.writeText(currentConfigText).then(() => {
+            haptic("notification", "success");
+            showToast("Copied to clipboard");
+        });
+    };
+
+    // --- Upstreams ---
+    window.openUpstreamModal = function () {
+        openModal("upstream-modal");
+        document.getElementById("upstream-modal-title").textContent =
+            "New Upstream";
+        document.getElementById("inp-upstream-name").value = "";
+        document.getElementById("inp-upstream-transport").value = "";
+        upstreamDefaultOn = false;
+        upstreamHealthOn = true;
+        updateToggle("inp-upstream-default", upstreamDefaultOn);
+        updateToggle("inp-upstream-health", upstreamHealthOn);
+    };
+    window.closeUpstreamModal = function () {
+        closeModal("upstream-modal");
+    };
+    window.toggleUpstreamDefault = function () {
+        upstreamDefaultOn = !upstreamDefaultOn;
+        updateToggle("inp-upstream-default", upstreamDefaultOn);
+        haptic("selection");
+    };
+    window.toggleUpstreamHealth = function () {
+        upstreamHealthOn = !upstreamHealthOn;
+        updateToggle("inp-upstream-health", upstreamHealthOn);
+        haptic("selection");
+    };
+    window.saveUpstream = function () {
+        const name = document.getElementById("inp-upstream-name").value.trim();
+        const transport = document
+            .getElementById("inp-upstream-transport")
+            .value.trim();
+        if (!name || !transport) {
+            haptic("notification", "error");
+            return;
+        }
+        api("POST", "/api/upstreams", {
+            name,
+            type: "outline",
+            transport,
+            default: upstreamDefaultOn,
+            health_check: { enabled: upstreamHealthOn },
+        }).then((d) => {
+            if (d.error) {
+                haptic("notification", "error");
+                showToast(d.error);
+                return;
+            }
+            haptic("notification", "success");
+            showToast("Upstream added");
+            closeUpstreamModal();
+            refresh();
+            if (groupsLoaded) refreshGroups();
+        });
+    };
+
+    // --- Groups ---
+    window.openGroupModal = function () {
+        openModal("group-modal");
+        document.getElementById("inp-group-name").value = "";
+    };
+    window.closeGroupModal = function () {
+        closeModal("group-modal");
+    };
+    window.saveGroup = function () {
+        const name = document.getElementById("inp-group-name").value.trim();
+        if (!name) {
+            haptic("notification", "error");
+            return;
+        }
+        api("POST", "/api/groups", { name }).then((d) => {
+            if (d.error) {
+                haptic("notification", "error");
+                showToast(d.error);
+                return;
+            }
+            haptic("notification", "success");
+            showToast("Group created");
+            closeGroupModal();
+            refreshGroups();
+        });
+    };
+
+    window.togglePeer = function (name, currentlyDisabled, e) {
+        if (e) e.stopPropagation();
+        haptic("selection");
+        api("PUT", "/api/peers/" + encodeURIComponent(name), {
+            disabled: !currentlyDisabled,
+        }).then((d) => {
+            if (d.error) {
+                showToast(d.error);
+                return;
+            }
+            refresh();
+        });
+    };
+
+    window.toggleUpstream = function (name, enabled, e) {
+        if (e) e.stopPropagation();
+        haptic("selection");
+        api("PUT", "/api/upstreams/" + encodeURIComponent(name), {
+            enabled,
+        }).then((d) => {
+            if (d.error) {
+                showToast(d.error);
+                return;
+            }
+            refresh();
+        });
+    };
+
+    // --- Proxies ---
+    window.openProxyModal = function () {
+        openModal("proxy-modal");
+        document.getElementById("inp-proxy-name").value = "";
+        document.getElementById("inp-proxy-listen").value = "";
+    };
+    window.closeProxyModal = function () {
+        closeModal("proxy-modal");
+    };
+    window.saveProxy = function () {
+        const type = document.getElementById("inp-proxy-type").value;
+        const listen = document.getElementById("inp-proxy-listen").value.trim();
+        const name = document.getElementById("inp-proxy-name").value.trim();
+        if (!listen) {
+            haptic("notification", "error");
+            return;
+        }
+        api("POST", "/api/proxies", { name, type, listen }).then((d) => {
+            if (d.error) {
+                haptic("notification", "error");
+                showToast(d.error);
+                return;
+            }
+            haptic("notification", "success");
+            showToast("Proxy added");
+            closeProxyModal();
+            refresh();
+        });
+    };
+
+    // --- DNS Rules ---
+    window.openDNSRuleModal = function () {
+        openModal("dns-rule-modal");
+        document.getElementById("inp-dns-rule-name").value = "";
+        document.getElementById("inp-dns-rule-action").value = "block";
+        document.getElementById("inp-dns-rule-upstream").value = "";
+        document.getElementById("inp-dns-rule-domains").value = "";
+        document.getElementById("inp-dns-rule-list-url").value = "";
+        document.getElementById("inp-dns-rule-list-format").value = "domains";
+        toggleDNSRuleAction();
+    };
+    window.closeDNSRuleModal = function () {
+        closeModal("dns-rule-modal");
+    };
+    window.toggleDNSRuleAction = function () {
+        const action = document.getElementById("inp-dns-rule-action").value;
+        document.getElementById("dns-rule-upstream-group").style.display =
+            action === "upstream" ? "" : "none";
+    };
+    window.saveDNSRule = function () {
+        const name = document.getElementById("inp-dns-rule-name").value.trim();
+        const action = document.getElementById("inp-dns-rule-action").value;
         const upstream = document
-            .getElementById("new-dns-rule-upstream")
+            .getElementById("inp-dns-rule-upstream")
             .value.trim();
         const domainsRaw = document
-            .getElementById("new-dns-rule-domains")
+            .getElementById("inp-dns-rule-domains")
             .value.trim();
         const listUrl = document
-            .getElementById("new-dns-rule-list-url")
+            .getElementById("inp-dns-rule-list-url")
             .value.trim();
         const listFormat = document.getElementById(
-            "new-dns-rule-list-format",
+            "inp-dns-rule-list-format",
         ).value;
 
-        if (!name) return;
+        if (!name) {
+            haptic("notification", "error");
+            return;
+        }
+        if (action === "upstream" && !upstream) {
+            haptic("notification", "error");
+            showToast("Upstream required");
+            return;
+        }
 
         const domains = domainsRaw
             ? domainsRaw
@@ -1052,252 +1035,304 @@ if (!tg || !tg.initData) {
                   .map((d) => d.trim())
                   .filter(Boolean)
             : [];
-        const lists = [];
-        if (listUrl) {
-            lists.push({ url: listUrl, format: listFormat, refresh: 86400 });
-        }
+        const lists = listUrl ? [{ url: listUrl, format: listFormat }] : [];
 
         if (domains.length === 0 && lists.length === 0) {
-            showMsg(
-                "dns-msg",
-                "At least one domain or blocklist URL is required",
-                true,
-            );
+            haptic("notification", "error");
+            showToast("Add domains or a list URL");
             return;
         }
 
-        const body = { name, action, domains, lists };
-        if (action === "upstream") body.upstream = upstream;
-
-        api("POST", "/api/dns", body).then((d) => {
+        api("POST", "/api/dns", {
+            name,
+            action,
+            upstream: action === "upstream" ? upstream : "",
+            domains,
+            lists,
+        }).then((d) => {
             if (d.error) {
-                showMsg("dns-msg", d.error, true);
+                haptic("notification", "error");
+                showToast(d.error);
                 return;
             }
-            document.getElementById("new-dns-rule-name").value = "";
-            document.getElementById("new-dns-rule-upstream").value = "";
-            document.getElementById("new-dns-rule-domains").value = "";
-            document.getElementById("new-dns-rule-list-url").value = "";
-            showMsg("dns-msg", 'Rule "' + name + '" added', false);
+            haptic("notification", "success");
+            showToast('Rule "' + name + '" added');
+            closeDNSRuleModal();
             refreshDNS();
         });
-    }
+    };
 
-    function deleteDNSRule(name) {
-        tg.showConfirm('Delete DNS rule "' + name + '"?', (ok) => {
-            if (!ok) return;
-            api("DELETE", "/api/dns/rules/" + encodeURIComponent(name)).then(
+    // --- DNS Records ---
+    let editingDNSRecord = null;
+
+    window.openDNSRecordModal = function (name, a, aaaa, ttl) {
+        openModal("dns-record-modal");
+        editingDNSRecord = name || null;
+        document.getElementById("dns-record-modal-title").textContent = name
+            ? "Edit DNS Record"
+            : "New DNS Record";
+        const nameInput = document.getElementById("inp-dns-record-name");
+        nameInput.value = name || "";
+        nameInput.disabled = !!name;
+        document.getElementById("inp-dns-record-a").value = (a || []).join(
+            ", ",
+        );
+        document.getElementById("inp-dns-record-aaaa").value = (
+            aaaa || []
+        ).join(", ");
+        document.getElementById("inp-dns-record-ttl").value = ttl || 3600;
+    };
+    window.closeDNSRecordModal = function () {
+        closeModal("dns-record-modal");
+        editingDNSRecord = null;
+    };
+
+    window.editDNSRecord = function (name) {
+        if (!dnsData) return;
+        const rec = (dnsData.records || []).find((r) => r.name === name);
+        if (!rec) return;
+        openDNSRecordModal(name, rec.a, rec.aaaa, rec.ttl);
+    };
+
+    window.saveDNSRecord = function () {
+        const name = document
+            .getElementById("inp-dns-record-name")
+            .value.trim();
+        const aRaw = document.getElementById("inp-dns-record-a").value.trim();
+        const aaaaRaw = document
+            .getElementById("inp-dns-record-aaaa")
+            .value.trim();
+        const ttl =
+            parseInt(document.getElementById("inp-dns-record-ttl").value) ||
+            3600;
+
+        if (!name) {
+            haptic("notification", "error");
+            return;
+        }
+
+        const a = aRaw
+            ? aRaw
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter(Boolean)
+            : [];
+        const aaaa = aaaaRaw
+            ? aaaaRaw
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter(Boolean)
+            : [];
+
+        if (a.length === 0 && aaaa.length === 0) {
+            haptic("notification", "error");
+            showToast("Add at least one A or AAAA record");
+            return;
+        }
+
+        if (editingDNSRecord) {
+            api(
+                "PUT",
+                "/api/dns/records/" + encodeURIComponent(editingDNSRecord),
+                { a, aaaa, ttl },
+            ).then((d) => {
+                if (d.error) {
+                    haptic("notification", "error");
+                    showToast(d.error);
+                    return;
+                }
+                haptic("notification", "success");
+                showToast("Record updated");
+                closeDNSRecordModal();
+                refreshDNS();
+            });
+        } else {
+            api("POST", "/api/dns/records", { name, a, aaaa, ttl }).then(
                 (d) => {
                     if (d.error) {
-                        showMsg("dns-msg", d.error, true);
+                        haptic("notification", "error");
+                        showToast(d.error);
                         return;
                     }
-                    showMsg("dns-msg", "Rule deleted", false);
+                    haptic("notification", "success");
+                    showToast("Record added");
+                    closeDNSRecordModal();
                     refreshDNS();
                 },
             );
-        });
-    }
-
-    function formatRefresh(seconds) {
-        if (!seconds) return "24h";
-        if (seconds >= 86400) return Math.floor(seconds / 86400) + "d";
-        if (seconds >= 3600) return Math.floor(seconds / 3600) + "h";
-        if (seconds >= 60) return Math.floor(seconds / 60) + "m";
-        return seconds + "s";
-    }
-
-    // Groups
-    function refreshGroups() {
-        api("GET", "/api/groups").then((d) => {
-            groupsData = d;
-            groupsLoaded = true;
-            renderGroups();
-        });
-    }
-
-    function renderGroups() {
-        if (!groupsData) return;
-        const gl = document.getElementById("groups-list");
-        if (!groupsData || groupsData.length === 0) {
-            gl.innerHTML = '<div class="empty">No groups found</div>';
-        } else {
-            gl.innerHTML = groupsData
-                .map((g) => {
-                    const membersHtml =
-                        g.members && g.members.length > 0
-                            ? g.members
-                                  .map((m) => {
-                                      const stateIcon =
-                                          m.state === "healthy"
-                                              ? "🟢"
-                                              : m.state === "degraded"
-                                                ? "🟡"
-                                                : "🔴";
-                                      const disabledTag = !m.enabled
-                                          ? ' <span class="meta">(disabled)</span>'
-                                          : "";
-                                      return `<div style="display:flex;align-items:center;justify-content:space-between;padding:2px 0">
-              <span>${stateIcon} ${m.name} <span class="meta">${m.type}</span>${disabledTag}</span>
-              <button class="btn btn-sm btn-danger" style="padding:2px 6px;font-size:11px" onclick="removeFromGroup('${m.name}','${g.name}')">✕</button>
-            </div>`;
-                                  })
-                                  .join("")
-                            : '<div class="meta" style="padding:2px 0">No members</div>';
-                    const consumersHtml =
-                        g.consumers && g.consumers.length > 0
-                            ? g.consumers
-                                  .map((c) => {
-                                      const icon =
-                                          c.type === "proxy"
-                                              ? "🔌"
-                                              : c.type === "mtproxy"
-                                                ? "📡"
-                                                : c.type === "ip_rule"
-                                                  ? "🌐"
-                                                  : "🔗";
-                                      return `<span class="meta" style="margin-right:8px">${icon} ${c.name} (${c.type})</span>`;
-                                  })
-                                  .join("")
-                            : "";
-                    return `
-      <div class="card">
-        <div class="card-header">
-          <span class="name">📦 ${g.name}</span>
-          <span class="meta">${g.members ? g.members.length : 0} member${g.members && g.members.length !== 1 ? "s" : ""}</span>
-        </div>
-        <div style="margin:4px 0">${membersHtml}</div>
-        ${consumersHtml ? `<div style="margin-top:4px;padding-top:4px;border-top:1px solid var(--hint)">${consumersHtml}</div>` : ""}
-      </div>`;
-                })
-                .join("");
         }
+    };
 
-        // Populate upstream select for the "assign" form
-        const sel = document.getElementById("group-upstream-select");
-        const currentVal = sel.value;
-        sel.innerHTML = '<option value="">Select upstream…</option>';
-        if (data && data.upstreams) {
-            data.upstreams.forEach((u) => {
-                sel.innerHTML += `<option value="${u.name}">${u.name}</option>`;
-            });
-        }
-        sel.value = currentVal;
-    }
-
-    function addToGroup() {
-        const upstreamName = document.getElementById(
-            "group-upstream-select",
-        ).value;
-        const groupName = document
-            .getElementById("group-name-input")
-            .value.trim();
-        if (!upstreamName || !groupName) return;
-        // Find the upstream's current groups from the status data
-        const upstream = data.upstreams.find((u) => u.name === upstreamName);
-        if (!upstream) return;
-        // Get the upstream's custom groups (filter out implicit ones)
-        const currentGroups = (upstream.groups || []).filter(
-            (g) => g !== "default" && !g.startsWith("upstream:"),
-        );
-        if (currentGroups.includes(groupName)) {
-            showMsg(
-                "group-msg",
-                'Upstream already in group "' + groupName + '"',
-                true,
-            );
+    // --- Users ---
+    window.openUserModal = function () {
+        openModal("user-modal");
+        document.getElementById("inp-user-input").value = "";
+        document.getElementById("inp-user-role").value = "guest";
+    };
+    window.closeUserModal = function () {
+        closeModal("user-modal");
+    };
+    window.saveUser = function () {
+        const user = document.getElementById("inp-user-input").value.trim();
+        const role = document.getElementById("inp-user-role").value;
+        if (!user) {
+            haptic("notification", "error");
             return;
         }
-        const newGroups = [...currentGroups, groupName];
-        api("PUT", "/api/upstreams/" + encodeURIComponent(upstreamName), {
-            groups: newGroups,
-        }).then((d) => {
+        api("POST", "/api/users", { user, role }).then((d) => {
             if (d.error) {
-                showMsg("group-msg", d.error, true);
+                haptic("notification", "error");
+                showToast(d.error);
                 return;
             }
-            document.getElementById("group-name-input").value = "";
-            showMsg(
-                "group-msg",
-                upstreamName + ' added to group "' + groupName + '"',
-                false,
-            );
+            haptic("notification", "success");
+            showToast("User added");
+            closeUserModal();
+            refreshUsers();
+        });
+    };
+
+    window.toggleUserRole = function (userId, newRole) {
+        haptic("selection");
+        api("PUT", "/api/users/" + userId, { role: newRole }).then((d) => {
+            if (d.error) {
+                showToast(d.error);
+                return;
+            }
+            showToast("Role updated");
+            refreshUsers();
+        });
+    };
+
+    // --- Secrets ---
+    window.openSecretModal = function () {
+        openModal("secret-modal");
+        document.getElementById("inp-secret-type").value = "faketls";
+        document.getElementById("inp-secret-comment").value = "";
+    };
+    window.closeSecretModal = function () {
+        closeModal("secret-modal");
+    };
+    window.saveSecret = function () {
+        const type = document.getElementById("inp-secret-type").value;
+        const comment = document
+            .getElementById("inp-secret-comment")
+            .value.trim();
+        api("POST", "/api/secrets", { type, comment }).then((d) => {
+            if (d.error) {
+                haptic("notification", "error");
+                showToast(d.error);
+                return;
+            }
+            haptic("notification", "success");
+            showToast("Secret created");
+            closeSecretModal();
             refresh();
         });
-    }
+    };
 
-    function removeFromGroup(upstreamName, groupName) {
-        // Cannot remove the implicit upstream:<name> group
-        if (groupName.startsWith("upstream:")) {
-            showMsg(
-                "group-msg",
-                'Cannot remove implicit group "' + groupName + '"',
-                true,
-            );
-            return;
-        }
-        const upstream = data.upstreams.find((u) => u.name === upstreamName);
-        if (!upstream) return;
-        // Removing from "default" means unsetting the default flag
-        if (groupName === "default") {
-            api("PUT", "/api/upstreams/" + encodeURIComponent(upstreamName), {
-                default: false,
-            }).then((d) => {
+    // --- Copy ---
+    window.copyText = function (text, e) {
+        if (e) e.stopPropagation();
+        navigator.clipboard.writeText(text).then(() => {
+            haptic("notification", "success");
+            showToast("Copied!");
+        });
+    };
+
+    // --- Delete ---
+    window.promptDelete = function (id, type) {
+        haptic("impact");
+        const messages = {
+            peer: "Are you sure you want to remove this peer?",
+            upstream: "Are you sure you want to remove this upstream?",
+            group: "Are you sure you want to remove this group? Upstreams will be unassigned from it.",
+            proxy: "Are you sure you want to remove this proxy server?",
+            "dns-record": "Are you sure you want to remove this DNS record?",
+            "dns-rule": "Are you sure you want to remove this DNS rule?",
+            user: "Are you sure you want to remove this user?",
+            secret: "Are you sure you want to remove this secret?",
+        };
+        document.getElementById("alert-message").textContent =
+            (messages[type] || "Are you sure?") +
+            " This action cannot be undone.";
+        document.getElementById("alert-overlay").classList.add("open");
+
+        deleteCallback = function () {
+            const endpoints = {
+                peer: {
+                    method: "DELETE",
+                    path: "/api/peers/" + encodeURIComponent(id),
+                },
+                upstream: {
+                    method: "DELETE",
+                    path: "/api/upstreams/" + encodeURIComponent(id),
+                },
+                group: {
+                    method: "DELETE",
+                    path: "/api/groups/" + encodeURIComponent(id),
+                },
+                proxy: {
+                    method: "DELETE",
+                    path: "/api/proxies/" + encodeURIComponent(id),
+                },
+                "dns-record": {
+                    method: "DELETE",
+                    path: "/api/dns/records/" + encodeURIComponent(id),
+                },
+                "dns-rule": {
+                    method: "DELETE",
+                    path: "/api/dns/rules/" + encodeURIComponent(id),
+                },
+                user: { method: "DELETE", path: "/api/users/" + id },
+                secret: {
+                    method: "DELETE",
+                    path: "/api/secrets/" + encodeURIComponent(id),
+                },
+            };
+            const ep = endpoints[type];
+            if (!ep) return;
+            api(ep.method, ep.path).then((d) => {
                 if (d.error) {
-                    showMsg("group-msg", d.error, true);
+                    haptic("notification", "error");
+                    showToast(d.error);
                     return;
                 }
-                showMsg(
-                    "group-msg",
-                    upstreamName + ' removed from group "default"',
-                    false,
-                );
-                refresh();
+                haptic("notification", "success");
+                showToast("Deleted");
+                closeAlert();
+                if (
+                    type === "peer" ||
+                    type === "upstream" ||
+                    type === "proxy" ||
+                    type === "secret"
+                )
+                    refresh();
+                if (type === "dns-record" || type === "dns-rule") refreshDNS();
+                if (type === "user") refreshUsers();
+                if ((type === "upstream" || type === "group") && groupsLoaded)
+                    refreshGroups();
             });
-            return;
-        }
-        const currentGroups = (upstream.groups || []).filter(
-            (g) => g !== "default" && !g.startsWith("upstream:"),
-        );
-        const newGroups = currentGroups.filter((g) => g !== groupName);
-        api("PUT", "/api/upstreams/" + encodeURIComponent(upstreamName), {
-            groups: newGroups,
-        }).then((d) => {
-            if (d.error) {
-                showMsg("group-msg", d.error, true);
-                return;
-            }
-            showMsg(
-                "group-msg",
-                upstreamName + ' removed from group "' + groupName + '"',
-                false,
-            );
-            refresh();
-        });
+        };
+    };
+
+    window.closeAlert = function () {
+        document.getElementById("alert-overlay").classList.remove("open");
+        deleteCallback = null;
+    };
+
+    document.getElementById("confirm-delete-btn").onclick = function () {
+        if (deleteCallback) deleteCallback();
+    };
+
+    // --- Toggle helper ---
+    function updateToggle(id, on) {
+        const el = document.getElementById(id);
+        if (on) el.classList.add("active");
+        else el.classList.remove("active");
     }
 
-    // Restore active tab from session on reload.
-    try {
-        const savedTab = sessionStorage.getItem("activeTab");
-        if (savedTab) showTab(savedTab);
-        const savedProxy = sessionStorage.getItem("activeProxySubTab");
-        if (savedProxy) showProxySubTab(savedProxy);
-        const savedUpstream = sessionStorage.getItem("activeUpstreamSubTab");
-        if (savedUpstream) {
-            const hideId =
-                savedUpstream === "upstream-groups-view"
-                    ? "upstream-list-view"
-                    : "upstream-groups-view";
-            const btns = document.querySelectorAll(
-                "#upstreams > .sub-tabs > .tab",
-            );
-            const btn =
-                savedUpstream === "upstream-groups-view" ? btns[1] : btns[0];
-            showSubTab(savedUpstream, hideId, btn);
-        }
-    } catch (e) {}
-
-    // Keep-alive ping
+    // --- Keep-alive ---
     function ping() {
         const dot = document.getElementById("alive-dot");
         fetch("/api/ping", { method: "GET" })
@@ -1312,14 +1347,26 @@ if (!tg || !tg.initData) {
     ping();
     setInterval(ping, 10000);
 
-    // Fetch current user info
-    api("GET", "/api/me").then((d) => {
-        meData = d;
-        renderMe();
-    });
+    // --- Init ---
+    api("GET", "/api/me")
+        .then((d) => {
+            meData = d;
+            if (d.role === "admin") document.body.classList.add("is-admin");
+            document.getElementById("loading").style.display = "none";
+            document.getElementById("app").style.display = "block";
+            refresh();
+        })
+        .catch((err) => {
+            document.getElementById("loading").textContent =
+                "Failed to load: " + err.message;
+        });
 
-    // Initial load
-    refresh();
-    // Auto-refresh every 30s
+    // Restore tab
+    try {
+        const savedTab = sessionStorage.getItem("activeTab");
+        if (savedTab) switchTab(savedTab);
+    } catch (e) {}
+
+    // Auto-refresh
     setInterval(refresh, 30000);
-} // end else (Telegram gate)
+}

@@ -137,6 +137,20 @@ CREATE TABLE IF NOT EXISTS allowed_users (
   created_unix INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
+CREATE TABLE IF NOT EXISTS upstream_groups (
+  name TEXT PRIMARY KEY,
+  created_unix INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE TABLE IF NOT EXISTS dns_records (
+  name TEXT PRIMARY KEY,
+  a_json TEXT NOT NULL DEFAULT '[]',
+  aaaa_json TEXT NOT NULL DEFAULT '[]',
+  ttl INTEGER NOT NULL DEFAULT 3600,
+  created_unix INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_unix INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
 CREATE TABLE IF NOT EXISTS dns_rules (
   name TEXT PRIMARY KEY,
   action TEXT NOT NULL,
@@ -168,6 +182,7 @@ func (s *Store) migrateSchema() error {
 		{"allowed_users", "role", `ALTER TABLE allowed_users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'`},
 		{"wg_peers", "owner_user_id", `ALTER TABLE wg_peers ADD COLUMN owner_user_id INTEGER`},
 		{"mtproxy_secrets", "owner_user_id", `ALTER TABLE mtproxy_secrets ADD COLUMN owner_user_id INTEGER`},
+		{"daemon", "dns_enabled", `ALTER TABLE daemon ADD COLUMN dns_enabled INTEGER`},
 	}
 	for _, m := range migrations {
 		var count int
@@ -208,6 +223,34 @@ func (s *Store) GetDaemonStartTime() (time.Time, error) {
 		return time.Time{}, fmt.Errorf("statsdb: get daemon start time: %w", err)
 	}
 	return time.Unix(unix, 0), nil
+}
+
+// SetDNSEnabled persists the DNS enabled state (upsert into daemon row).
+func (s *Store) SetDNSEnabled(enabled bool) error {
+	v := 0
+	if enabled {
+		v = 1
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO daemon (id, start_time_unix, dns_enabled) VALUES (1, 0, ?)
+		 ON CONFLICT(id) DO UPDATE SET dns_enabled = excluded.dns_enabled`,
+		v,
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: set dns_enabled: %w", err)
+	}
+	return nil
+}
+
+// GetDNSEnabled returns the stored DNS enabled state.
+// Returns (value, true) if stored, or (false, false) if not set.
+func (s *Store) GetDNSEnabled() (bool, bool) {
+	var v sql.NullInt64
+	err := s.db.QueryRow(`SELECT dns_enabled FROM daemon WHERE id = 1`).Scan(&v)
+	if err != nil || !v.Valid {
+		return false, false
+	}
+	return v.Int64 != 0, true
 }
 
 // FlushWireGuardPeers performs delta-accumulation for a batch of WireGuard peer snapshots.
@@ -949,6 +992,91 @@ func (s *Store) ImportUpstreams(upstreams []config.UpstreamConfig) (int, error) 
 }
 
 // ---------------------------------------------------------------------------
+// Upstream Groups CRUD
+// ---------------------------------------------------------------------------
+
+// ListGroups returns all explicitly created group names.
+func (s *Store) ListGroups() ([]string, error) {
+	rows, err := s.db.Query(`SELECT name FROM upstream_groups ORDER BY created_unix ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list groups: %w", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("statsdb: scan group: %w", err)
+		}
+		out = append(out, name)
+	}
+	return out, rows.Err()
+}
+
+// CreateGroup creates a named upstream group.
+func (s *Store) CreateGroup(name string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO upstream_groups (name) VALUES (?)`, name)
+	if err != nil {
+		return fmt.Errorf("statsdb: create group %q: %w", name, err)
+	}
+	return nil
+}
+
+// DeleteGroup removes a named upstream group. Returns true if a row was deleted.
+func (s *Store) DeleteGroup(name string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM upstream_groups WHERE name = ?`, name)
+	if err != nil {
+		return false, fmt.Errorf("statsdb: delete group %q: %w", name, err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// RemoveGroupFromUpstreams removes the given group name from the groups column
+// of all upstreams that reference it.
+func (s *Store) RemoveGroupFromUpstreams(group string) (int, error) {
+	rows, err := s.db.Query(`SELECT name, groups FROM upstreams WHERE groups LIKE '%' || ? || '%'`, group)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: query upstreams for group %q: %w", group, err)
+	}
+	defer rows.Close()
+
+	type upd struct {
+		name   string
+		groups string
+	}
+	var updates []upd
+	for rows.Next() {
+		var name, groups string
+		if err := rows.Scan(&name, &groups); err != nil {
+			return 0, fmt.Errorf("statsdb: scan upstream: %w", err)
+		}
+		parts := strings.Split(groups, ",")
+		var filtered []string
+		for _, p := range parts {
+			if p != group {
+				filtered = append(filtered, p)
+			}
+		}
+		updates = append(updates, upd{name: name, groups: strings.Join(filtered, ",")})
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	var count int
+	for _, u := range updates {
+		if _, err := s.db.Exec(`UPDATE upstreams SET groups = ?, updated_unix = unixepoch() WHERE name = ?`, u.groups, u.name); err != nil {
+			return count, fmt.Errorf("statsdb: update upstream %q groups: %w", u.name, err)
+		}
+		count++
+	}
+	return count, nil
+}
+
+// ---------------------------------------------------------------------------
 // Allowed Users CRUD
 // ---------------------------------------------------------------------------
 
@@ -1079,6 +1207,105 @@ func (s *Store) ListDNSRules() ([]config.DNSRuleConfig, error) {
 		return nil, fmt.Errorf("statsdb: iterate dns rules: %w", err)
 	}
 	return out, nil
+}
+
+// UpsertDNSRecord inserts or updates a DNS record.
+func (s *Store) UpsertDNSRecord(name string, rec config.DNSRecordConfig) error {
+	aJSON, err := json.Marshal(rec.A)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal A records: %w", err)
+	}
+	aaaaJSON, err := json.Marshal(rec.AAAA)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal AAAA records: %w", err)
+	}
+	_, err = s.db.Exec(
+		`INSERT INTO dns_records (name, a_json, aaaa_json, ttl)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(name) DO UPDATE SET
+		   a_json = excluded.a_json,
+		   aaaa_json = excluded.aaaa_json,
+		   ttl = excluded.ttl,
+		   updated_unix = unixepoch()`,
+		name, string(aJSON), string(aaaaJSON), rec.TTL,
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: upsert dns record %q: %w", name, err)
+	}
+	return nil
+}
+
+// DeleteDNSRecord deletes a DNS record by name.
+func (s *Store) DeleteDNSRecord(name string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM dns_records WHERE name = ?`, name)
+	if err != nil {
+		return false, fmt.Errorf("statsdb: delete dns record %q: %w", name, err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ListDNSRecords returns all DNS records from the database.
+func (s *Store) ListDNSRecords() (map[string]config.DNSRecordConfig, error) {
+	rows, err := s.db.Query(`SELECT name, a_json, aaaa_json, ttl FROM dns_records ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list dns records: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]config.DNSRecordConfig)
+	for rows.Next() {
+		var name, aJSON, aaaaJSON string
+		var ttl uint32
+		if err := rows.Scan(&name, &aJSON, &aaaaJSON, &ttl); err != nil {
+			return nil, fmt.Errorf("statsdb: scan dns record: %w", err)
+		}
+		var rec config.DNSRecordConfig
+		rec.TTL = ttl
+		if err := json.Unmarshal([]byte(aJSON), &rec.A); err != nil {
+			return nil, fmt.Errorf("statsdb: unmarshal A for %q: %w", name, err)
+		}
+		if err := json.Unmarshal([]byte(aaaaJSON), &rec.AAAA); err != nil {
+			return nil, fmt.Errorf("statsdb: unmarshal AAAA for %q: %w", name, err)
+		}
+		out[name] = rec
+	}
+	return out, rows.Err()
+}
+
+// ImportDNSRecords inserts DNS records from a map, skipping names that already exist.
+func (s *Store) ImportDNSRecords(records map[string]config.DNSRecordConfig) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(
+		`INSERT OR IGNORE INTO dns_records (name, a_json, aaaa_json, ttl) VALUES (?, ?, ?, ?)`,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: prepare: %w", err)
+	}
+	defer stmt.Close()
+
+	imported := 0
+	for name, rec := range records {
+		aJSON, _ := json.Marshal(rec.A)
+		aaaaJSON, _ := json.Marshal(rec.AAAA)
+		res, err := stmt.Exec(name, string(aJSON), string(aaaaJSON), rec.TTL)
+		if err != nil {
+			return imported, fmt.Errorf("statsdb: import dns record %q: %w", name, err)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			imported++
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("statsdb: commit: %w", err)
+	}
+	return imported, nil
 }
 
 // AddDNSRule inserts a new DNS rule with the next available priority.
@@ -1272,4 +1499,53 @@ func (s *Store) ListSecretHexByOwner(ownerID int64) (map[string]struct{}, error)
 		out[hex] = struct{}{}
 	}
 	return out, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
+// Creation-order helpers
+// ---------------------------------------------------------------------------
+
+// namesOrdered runs a query that returns a single TEXT column and collects the
+// results into an ordered slice.
+func (s *Store) namesOrdered(query string) ([]string, error) {
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out = append(out, name)
+	}
+	return out, rows.Err()
+}
+
+// PeerNamesOrdered returns peer names sorted by creation time (oldest first).
+func (s *Store) PeerNamesOrdered() ([]string, error) {
+	return s.namesOrdered(`SELECT name FROM wg_peers ORDER BY created_unix ASC`)
+}
+
+// UpstreamNamesOrdered returns upstream names sorted by creation time (oldest first).
+func (s *Store) UpstreamNamesOrdered() ([]string, error) {
+	return s.namesOrdered(`SELECT name FROM upstreams ORDER BY created_unix ASC`)
+}
+
+// ProxyNamesOrdered returns proxy server names sorted by creation time (oldest first).
+func (s *Store) ProxyNamesOrdered() ([]string, error) {
+	return s.namesOrdered(`SELECT name FROM proxy_servers ORDER BY created_unix ASC`)
+}
+
+// SecretHexOrdered returns secret hex strings sorted by creation time (oldest first).
+func (s *Store) SecretHexOrdered() ([]string, error) {
+	return s.namesOrdered(`SELECT secret_hex FROM mtproxy_secrets ORDER BY created_unix ASC`)
+}
+
+// DNSRecordNamesOrdered returns DNS record names sorted by creation time (oldest first).
+func (s *Store) DNSRecordNamesOrdered() ([]string, error) {
+	return s.namesOrdered(`SELECT name FROM dns_records ORDER BY created_unix ASC`)
 }

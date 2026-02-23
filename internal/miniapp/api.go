@@ -17,6 +17,26 @@ import (
 const guestMaxPeers = 5
 const guestMaxSecrets = 5
 
+// sortByCreationOrder reorders items so that names appearing in order come
+// first (in the given order) and unknown names are appended at the end.
+func sortByCreationOrder[T any](items []T, nameFunc func(T) string, order []string) {
+	orderMap := make(map[string]int, len(order))
+	for i, name := range order {
+		orderMap[name] = i
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		oi, oki := orderMap[nameFunc(items[i])]
+		oj, okj := orderMap[nameFunc(items[j])]
+		if !oki {
+			oi = len(order)
+		}
+		if !okj {
+			oj = len(order)
+		}
+		return oi < oj
+	})
+}
+
 type statusResponse struct {
 	Daemon    daemonInfo     `json:"daemon"`
 	Peers     []peerInfo     `json:"peers"`
@@ -241,6 +261,22 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		resp.Proxies = append(resp.Proxies, pi)
 	}
 
+	// Sort all lists by creation time.
+	if s.store != nil {
+		if order, err := s.store.PeerNamesOrdered(); err == nil {
+			sortByCreationOrder(resp.Peers, func(p peerInfo) string { return p.Name }, order)
+		}
+		if order, err := s.store.UpstreamNamesOrdered(); err == nil {
+			sortByCreationOrder(resp.Upstreams, func(u upstreamInfo) string { return u.Name }, order)
+		}
+		if order, err := s.store.ProxyNamesOrdered(); err == nil {
+			sortByCreationOrder(resp.Proxies, func(p proxyInfo) string { return p.Name }, order)
+		}
+		if order, err := s.store.SecretHexOrdered(); err == nil {
+			sortByCreationOrder(resp.MTProxy.Secrets, func(s secretInfo) string { return s.Secret }, order)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -329,6 +365,44 @@ func (s *Server) handleDeletePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/peers/")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer name is required"})
+		return
+	}
+
+	// Guests can only update their own peers.
+	if !isAdminRequest(r) && s.store != nil {
+		owner, err := s.store.GetPeerOwner(name)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if owner == nil || *owner != requestUserID(r) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
+			return
+		}
+	}
+
+	var req struct {
+		Disabled *bool `json:"disabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.Disabled != nil {
+		if err := s.manager.SetPeerDisabled(name, *req.Disabled); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "ok"})
 }
 
 func (s *Server) handlePeerConf(w http.ResponseWriter, r *http.Request) {
@@ -855,12 +929,18 @@ type groupInfo struct {
 	Consumers []groupConsumer `json:"consumers"`
 }
 
-func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+func (s *Server) handleGroupsRoute(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleGetGroups(w, r)
+	case http.MethodPost:
+		s.handleCreateGroup(w, r)
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
 	}
+}
 
+func (s *Server) handleGetGroups(w http.ResponseWriter, r *http.Request) {
 	groups := make(map[string]*groupInfo)
 
 	ensureGroup := func(name string) *groupInfo {
@@ -925,6 +1005,14 @@ func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
+	// Merge in explicitly created groups from DB (may have no members).
+	if s.store != nil {
+		dbGroups, _ := s.store.ListGroups()
+		for _, name := range dbGroups {
+			ensureGroup(name)
+		}
+	}
+
 	result := make([]groupInfo, 0, len(groups))
 	for _, g := range groups {
 		result = append(result, *g)
@@ -934,6 +1022,47 @@ func (s *Server) handleGroups(w http.ResponseWriter, r *http.Request) {
 	})
 
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
+
+	if err := s.manager.CreateGroup(req.Name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"name": req.Name, "status": "ok"})
+}
+
+func (s *Server) handleGroupsItemRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	name := strings.TrimPrefix(r.URL.Path, "/api/groups/")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "group name is required"})
+		return
+	}
+
+	if err := s.manager.DeleteGroup(name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -1235,6 +1364,8 @@ func (s *Server) handleDNSRoute(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		s.handleDNS(w, r)
+	case http.MethodPut:
+		s.handleUpdateDNS(w, r)
 	case http.MethodPost:
 		s.handleAddDNSRule(w, r)
 	default:
@@ -1261,9 +1392,15 @@ func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
 			TTL:  rec.TTL,
 		})
 	}
-	sort.Slice(resp.Records, func(i, j int) bool {
-		return resp.Records[i].Name < resp.Records[j].Name
-	})
+	if s.store != nil {
+		if order, err := s.store.DNSRecordNamesOrdered(); err == nil {
+			sortByCreationOrder(resp.Records, func(r dnsRecordInfo) string { return r.Name }, order)
+		}
+	} else {
+		sort.Slice(resp.Records, func(i, j int) bool {
+			return resp.Records[i].Name < resp.Records[j].Name
+		})
+	}
 
 	// Rules.
 	for _, rule := range dns.Rules {
@@ -1284,6 +1421,126 @@ func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleUpdateDNS(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.Enabled == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "enabled is required"})
+		return
+	}
+
+	if err := s.manager.SetDNSEnabled(*req.Enabled); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleDNSRecordsRoute(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/dns/records/")
+	if name == "" {
+		// /api/dns/records — POST only
+		if r.Method == http.MethodPost {
+			s.handleAddDNSRecord(w, r)
+			return
+		}
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// /api/dns/records/<name>
+	switch r.Method {
+	case http.MethodPut:
+		s.handleUpdateDNSRecord(w, r, name)
+	case http.MethodDelete:
+		s.handleDeleteDNSRecord(w, r, name)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleAddDNSRecord(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string   `json:"name"`
+		A    []string `json:"a"`
+		AAAA []string `json:"aaaa"`
+		TTL  uint32   `json:"ttl"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
+	if len(req.A) == 0 && len(req.AAAA) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one A or AAAA record is required"})
+		return
+	}
+	if req.TTL == 0 {
+		req.TTL = 3600
+	}
+
+	rec := config.DNSRecordConfig{A: req.A, AAAA: req.AAAA, TTL: req.TTL}
+	if err := s.manager.AddDNSRecord(req.Name, rec); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"name": req.Name, "status": "ok"})
+}
+
+func (s *Server) handleUpdateDNSRecord(w http.ResponseWriter, r *http.Request, name string) {
+	var req struct {
+		A    []string `json:"a"`
+		AAAA []string `json:"aaaa"`
+		TTL  *uint32  `json:"ttl"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	cfg := s.cfgProv.CurrentConfig()
+	existing, ok := cfg.DNS.Records[name]
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "dns record not found"})
+		return
+	}
+
+	if req.A != nil {
+		existing.A = req.A
+	}
+	if req.AAAA != nil {
+		existing.AAAA = req.AAAA
+	}
+	if req.TTL != nil {
+		existing.TTL = *req.TTL
+	}
+
+	if err := s.manager.UpdateDNSRecord(name, existing); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "ok"})
+}
+
+func (s *Server) handleDeleteDNSRecord(w http.ResponseWriter, r *http.Request, name string) {
+	if err := s.manager.DeleteDNSRecord(name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleAddDNSRule(w http.ResponseWriter, r *http.Request) {

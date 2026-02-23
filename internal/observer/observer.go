@@ -124,8 +124,15 @@ type Manager interface {
 	AddUpstream(u config.UpstreamConfig) error
 	UpdateUpstream(u config.UpstreamConfig) error
 	DeleteUpstream(name string) error
+	SetPeerDisabled(name string, disabled bool) error
+	AddDNSRecord(name string, rec config.DNSRecordConfig) error
+	UpdateDNSRecord(name string, rec config.DNSRecordConfig) error
+	DeleteDNSRecord(name string) error
+	SetDNSEnabled(enabled bool) error
 	AddDNSRule(r config.DNSRuleConfig) error
 	DeleteDNSRule(name string) error
+	CreateGroup(name string) error
+	DeleteGroup(name string) error
 }
 
 // Observer sends periodic status updates and handles bot commands via Telegram.

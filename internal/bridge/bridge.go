@@ -176,6 +176,23 @@ func (b *Bridge) Run(ctx context.Context) error {
 			b.logger.Error("failed to re-apply upstream specs from db", "err", err)
 		}
 
+		// Seed config-file DNS records into DB, then use DB as source of truth.
+		if len(b.cfg.DNS.Records) > 0 {
+			imported, err := store.ImportDNSRecords(b.cfg.DNS.Records)
+			if err != nil {
+				b.logger.Error("failed to import dns records to database", "err", err)
+			} else if imported > 0 {
+				b.logger.Info("imported file dns records to database", "count", imported)
+			}
+		}
+		dbDNSRecords, err := store.ListDNSRecords()
+		if err != nil {
+			b.logger.Error("failed to list db dns records", "err", err)
+		}
+		if len(dbDNSRecords) > 0 {
+			b.cfg.DNS.Records = dbDNSRecords
+		}
+
 		// Seed config-file DNS rules into DB, then use DB as source of truth.
 		if len(b.cfg.DNS.Rules) > 0 {
 			imported, err := store.ImportDNSRules(b.cfg.DNS.Rules)
@@ -191,6 +208,11 @@ func (b *Bridge) Run(ctx context.Context) error {
 		}
 		if len(dbDNSRules) > 0 {
 			b.cfg.DNS.Rules = dbDNSRules
+		}
+
+		// Load persisted DNS enabled state from DB (overrides config file).
+		if dnsEnabled, ok := store.GetDNSEnabled(); ok {
+			b.cfg.DNS.Enabled = dnsEnabled
 		}
 	}
 
@@ -219,7 +241,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 	tcpProxy.SetupForwarder(netStack)
 
 	udpProxy := proxy.NewUDPProxy(router, dialers, b.tracker, b.logger)
-	if b.cfg.DNS.Enabled {
+	if b.cfg.DNS.Listen != "" {
 		udpProxy.SetDNSTarget(b.cfg.DNS.Listen)
 	}
 	udpProxy.SetupForwarder(netStack)
@@ -261,9 +283,12 @@ func (b *Bridge) Run(ctx context.Context) error {
 		return fmt.Errorf("bringing up wireguard: %w", err)
 	}
 
-	if b.cfg.DNS.Enabled {
+	if b.cfg.DNS.Listen != "" {
 		records := buildDNSRecords(b.cfg.DNS)
-		rules := buildDNSRules(b.cfg.DNS, b.logger)
+		var rules []dns.Rule
+		if b.cfg.DNS.Enabled {
+			rules = buildDNSRules(b.cfg.DNS, b.logger)
+		}
 		b.dnsSrv = dns.New(b.cfg.DNS.Listen, b.cfg.DNS.Upstream, records, rules, b.logger)
 		if err := b.dnsSrv.Start(ctx); err != nil {
 			return fmt.Errorf("starting dns server: %w", err)
@@ -349,6 +374,9 @@ func (b *Bridge) Reload() error {
 			b.logger.Error("failed to load dns rules from database", "err", err)
 		} else if len(dbDNSRules) > 0 {
 			newCfg.DNS.Rules = dbDNSRules
+		}
+		if dnsEnabled, ok := b.statsStore.GetDNSEnabled(); ok {
+			newCfg.DNS.Enabled = dnsEnabled
 		}
 	}
 
@@ -802,6 +830,60 @@ func (b *Bridge) DeletePeer(name string) error {
 	return nil
 }
 
+// SetPeerDisabled enables or disables a peer by name.
+func (b *Bridge) SetPeerDisabled(name string, disabled bool) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	peer, exists := b.cfg.Peers[name]
+	if !exists {
+		return fmt.Errorf("peer %q not found", name)
+	}
+
+	if peer.Disabled == disabled {
+		return nil
+	}
+
+	peer.Disabled = disabled
+	if err := b.statsStore.UpsertPeer(name, peer); err != nil {
+		return fmt.Errorf("saving peer: %w", err)
+	}
+
+	if b.wgDev != nil {
+		if disabled {
+			uapi, err := config.PeerUAPIRemove(peer.PublicKey)
+			if err != nil {
+				b.logger.Error("failed to generate remove UAPI", "name", name, "err", err)
+			} else if err := b.wgDev.IpcSet(uapi); err != nil {
+				b.logger.Error("failed to remove peer from wireguard", "name", name, "err", err)
+			}
+		} else {
+			uapi, err := config.PeerUAPIAdd(peer)
+			if err != nil {
+				b.logger.Error("failed to generate add UAPI", "name", name, "err", err)
+			} else if err := b.wgDev.IpcSet(uapi); err != nil {
+				b.logger.Error("failed to add peer to wireguard", "name", name, "err", err)
+			}
+		}
+	}
+
+	b.cfg.Peers[name] = peer
+	if b.peerMon != nil {
+		b.peerMon.updatePeers(b.cfg.Peers)
+	}
+
+	action := "enabled"
+	if disabled {
+		action = "disabled"
+	}
+	b.logger.Info("peer "+action, "name", name)
+	return nil
+}
+
 // AddSecret generates a new MTProxy secret, saves it to the database,
 // and live-reloads the MTProxy server to accept the new secret immediately.
 func (b *Bridge) AddSecret(secretType, comment string) (string, error) {
@@ -1041,7 +1123,91 @@ func (b *Bridge) DeleteUpstream(name string) error {
 	return nil
 }
 
-// AddDNSRule saves a new DNS rule to the database and hot-reloads the DNS server.
+// AddDNSRecord adds a new DNS record and hot-reloads the DNS server.
+func (b *Bridge) AddDNSRecord(name string, rec config.DNSRecordConfig) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	if _, exists := b.cfg.DNS.Records[name]; exists {
+		return fmt.Errorf("dns record %q already exists", name)
+	}
+
+	if err := b.statsStore.UpsertDNSRecord(name, rec); err != nil {
+		return fmt.Errorf("saving dns record: %w", err)
+	}
+
+	if b.cfg.DNS.Records == nil {
+		b.cfg.DNS.Records = make(map[string]config.DNSRecordConfig)
+	}
+	b.cfg.DNS.Records[name] = rec
+	b.reloadDNSRecords()
+
+	b.logger.Info("dns record added", "name", name)
+	return nil
+}
+
+// UpdateDNSRecord updates an existing DNS record and hot-reloads the DNS server.
+func (b *Bridge) UpdateDNSRecord(name string, rec config.DNSRecordConfig) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	if _, exists := b.cfg.DNS.Records[name]; !exists {
+		return fmt.Errorf("dns record %q not found", name)
+	}
+
+	if err := b.statsStore.UpsertDNSRecord(name, rec); err != nil {
+		return fmt.Errorf("saving dns record: %w", err)
+	}
+
+	b.cfg.DNS.Records[name] = rec
+	b.reloadDNSRecords()
+
+	b.logger.Info("dns record updated", "name", name)
+	return nil
+}
+
+// DeleteDNSRecord removes a DNS record and hot-reloads the DNS server.
+func (b *Bridge) DeleteDNSRecord(name string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	found, err := b.statsStore.DeleteDNSRecord(name)
+	if err != nil {
+		return fmt.Errorf("deleting dns record: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("dns record %q not found", name)
+	}
+
+	delete(b.cfg.DNS.Records, name)
+	b.reloadDNSRecords()
+
+	b.logger.Info("dns record deleted", "name", name)
+	return nil
+}
+
+// reloadDNSRecords rebuilds and hot-reloads DNS records on the DNS server.
+// Must be called with b.mu held.
+func (b *Bridge) reloadDNSRecords() {
+	if b.dnsSrv == nil {
+		return
+	}
+	records := buildDNSRecords(b.cfg.DNS)
+	b.dnsSrv.UpdateRecords(records)
+}
+
 func (b *Bridge) AddDNSRule(r config.DNSRuleConfig) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1097,14 +1263,103 @@ func (b *Bridge) DeleteDNSRule(name string) error {
 	return nil
 }
 
+// SetDNSEnabled toggles DNS resolution rules at runtime.
+// When disabled, the DNS server keeps running but only forwards to the default upstream.
+func (b *Bridge) SetDNSEnabled(enabled bool) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore != nil {
+		if err := b.statsStore.SetDNSEnabled(enabled); err != nil {
+			return fmt.Errorf("persisting dns enabled state: %w", err)
+		}
+	}
+
+	b.cfg.DNS.Enabled = enabled
+	b.reloadDNSRules()
+
+	b.logger.Info("dns resolution toggled", "enabled", enabled)
+	return nil
+}
+
 // reloadDNSRules rebuilds runtime DNS rules and hot-reloads the DNS server.
+// When DNS resolution is disabled, rules are cleared so the server acts as a
+// plain forwarder to the default upstream.
 // Must be called with b.mu held.
 func (b *Bridge) reloadDNSRules() {
 	if b.dnsSrv == nil {
 		return
 	}
-	rules := buildDNSRules(b.cfg.DNS, b.logger)
+	var rules []dns.Rule
+	if b.cfg.DNS.Enabled {
+		rules = buildDNSRules(b.cfg.DNS, b.logger)
+	}
 	b.dnsSrv.UpdateRules(b.ctx, rules)
+}
+
+// CreateGroup creates a named upstream group in the database.
+func (b *Bridge) CreateGroup(name string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	// Check if group already exists implicitly (from upstream assignments).
+	for _, u := range b.cfg.Upstreams {
+		for _, g := range u.Groups {
+			if g == name {
+				return fmt.Errorf("group %q already exists", name)
+			}
+		}
+	}
+
+	if err := b.statsStore.CreateGroup(name); err != nil {
+		return fmt.Errorf("creating group: %w", err)
+	}
+
+	b.logger.Info("group created", "name", name)
+	return nil
+}
+
+// DeleteGroup removes a named upstream group and cleans up upstream references.
+func (b *Bridge) DeleteGroup(name string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	// Remove the explicit group entry (may or may not exist).
+	b.statsStore.DeleteGroup(name)
+
+	// Remove group from all upstream configs in DB.
+	updated, err := b.statsStore.RemoveGroupFromUpstreams(name)
+	if err != nil {
+		return fmt.Errorf("removing group from upstreams: %w", err)
+	}
+
+	// Update in-memory config.
+	for i := range b.cfg.Upstreams {
+		var filtered []string
+		for _, g := range b.cfg.Upstreams[i].Groups {
+			if g != name {
+				filtered = append(filtered, g)
+			}
+		}
+		b.cfg.Upstreams[i].Groups = filtered
+	}
+
+	if updated > 0 {
+		if err := b.upstreams.Apply(b.cfg.ToUpstreamSpecs()); err != nil {
+			b.logger.Error("failed to apply upstream specs", "err", err)
+		}
+	}
+
+	b.logger.Info("group deleted", "name", name, "upstreams_updated", updated)
+	return nil
 }
 
 // getPeerStatuses reads peer status from the WireGuard device via IPC.
