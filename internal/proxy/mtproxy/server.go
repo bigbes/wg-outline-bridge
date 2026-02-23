@@ -31,6 +31,21 @@ type StreamDialer interface {
 	DialStream(ctx context.Context, addr string) (net.Conn, error)
 }
 
+// DialerResolver resolves a StreamDialer for each connection.
+// This allows per-secret upstream group routing.
+type DialerResolver interface {
+	ResolveDialer(secretIdx int) StreamDialer
+}
+
+// SingleDialerResolver always returns the same dialer.
+type SingleDialerResolver struct {
+	Dialer StreamDialer
+}
+
+func (s *SingleDialerResolver) ResolveDialer(secretIdx int) StreamDialer {
+	return s.Dialer
+}
+
 // ServerConfig holds MTProxy server configuration.
 type ServerConfig struct {
 	ListenAddrs []string
@@ -85,9 +100,9 @@ type Stats struct {
 
 // Server is the MTProxy server.
 type Server struct {
-	config    ServerConfig
-	dialer    StreamDialer
-	endpoints *telegram.EndpointManager
+	config         ServerConfig
+	dialerResolver DialerResolver
+	endpoints      *telegram.EndpointManager
 	logger    *slog.Logger
 	configMu  sync.RWMutex
 
@@ -111,11 +126,11 @@ type Server struct {
 }
 
 // NewServer creates a new MTProxy server.
-func NewServer(config ServerConfig, dialer StreamDialer, endpoints *telegram.EndpointManager, logger *slog.Logger) *Server {
+func NewServer(config ServerConfig, dialerResolver DialerResolver, endpoints *telegram.EndpointManager, logger *slog.Logger) *Server {
 	return &Server{
-		config:      config,
-		dialer:      dialer,
-		endpoints:   endpoints,
+		config:         config,
+		dialerResolver: dialerResolver,
+		endpoints:      endpoints,
 		logger:      logger.With("component", "mtproxy"),
 		secretStats: make(map[int]*secretCounters),
 		uniqueIPs:   make(map[string]struct{}),
@@ -129,6 +144,12 @@ func (s *Server) getSecrets() ([]mpcrypto.Secret, []string) {
 	return s.config.Secrets, s.config.SecretHexes
 }
 
+func (s *Server) getDialerResolver() DialerResolver {
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
+	return s.dialerResolver
+}
+
 // UpdateSecrets replaces the server's secrets at runtime without restart.
 func (s *Server) UpdateSecrets(secrets []mpcrypto.Secret, hexes []string) {
 	s.configMu.Lock()
@@ -136,6 +157,13 @@ func (s *Server) UpdateSecrets(secrets []mpcrypto.Secret, hexes []string) {
 	s.config.Secrets = secrets
 	s.config.SecretHexes = hexes
 	s.logger.Info("secrets updated", "count", len(secrets))
+}
+
+// SetDialerResolver replaces the dialer resolver at runtime (thread-safe).
+func (s *Server) SetDialerResolver(dr DialerResolver) {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	s.dialerResolver = dr
 }
 
 // Listen binds all configured addresses. Call Serve to start accepting connections.
@@ -368,8 +396,9 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 		"tls", isTLS,
 	)
 
-	// Dial backend via Outline
-	backendConn, err := s.dialer.DialStream(ctx, backendAddr)
+	// Dial backend via upstream (resolved per-secret)
+	dialer := s.getDialerResolver().ResolveDialer(secretIdx)
+	backendConn, err := dialer.DialStream(ctx, backendAddr)
 	if err != nil {
 		s.stats.BackendDialErrors.Add(1)
 		sc.backendDialErrors.Add(1)

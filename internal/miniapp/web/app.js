@@ -428,6 +428,7 @@ if (!tg || !tg.initData) {
                     " • " +
                     escapeHtml(p.listen) +
                     (p.has_auth ? " • 🔑" : "") +
+                    (p.upstream_group ? ' • ↗ ' + escapeHtml(p.upstream_group) : '') +
                     "</div></div>" +
                     '<div class="item-action">' +
                     (p.link
@@ -704,6 +705,7 @@ if (!tg || !tg.initData) {
                         "</div>" +
                         '<div class="item-subtitle">' +
                         typeBadge +
+                        (s.upstream_group ? ' • ↗ ' + escapeHtml(s.upstream_group) : '') +
                         "</div></div>" +
                         '<div class="item-action">' +
                         '<button class="action-icon-btn" onclick="openSecretEditModal(\'' +
@@ -1334,6 +1336,14 @@ if (!tg || !tg.initData) {
                   : "Default";
         document.getElementById("secret-edit-type").textContent = typeLabel;
 
+        // Populate upstream group dropdown
+        const sel = document.getElementById('inp-secret-edit-upstream-group');
+        const allGroups = [...new Set((statusData.upstreams || []).flatMap(u => u.groups || []))];
+        sel.innerHTML = '<option value="">Default</option>' +
+            allGroups.map(g => '<option value="' + escapeHtml(g) + '"' +
+                (s.upstream_group === g ? ' selected' : '') + '>' + escapeHtml(g) + '</option>'
+            ).join('');
+
         document.getElementById("secret-edit-stats").innerHTML =
             '<div class="peer-stat-card"><div class="peer-stat-value">' +
             s.active_connections +
@@ -1355,14 +1365,23 @@ if (!tg || !tg.initData) {
         const name = document
             .getElementById("inp-secret-edit-name")
             .value.trim();
-        api(
+        const upstreamGroup = document.getElementById('inp-secret-edit-upstream-group').value;
+
+        const namePromise = api(
             "PUT",
             "/api/secrets/" + encodeURIComponent(editingSecretHex) + "/name",
             { name },
-        ).then((d) => {
-            if (d.error) {
+        );
+        const groupPromise = api(
+            "PUT",
+            "/api/secrets/" + encodeURIComponent(editingSecretHex),
+            { upstream_group: upstreamGroup },
+        );
+
+        Promise.all([namePromise, groupPromise]).then(([nd, gd]) => {
+            if (nd.error || gd.error) {
                 haptic("notification", "error");
-                showToast(d.error);
+                showToast(nd.error || gd.error);
                 return;
             }
             haptic("notification", "success");

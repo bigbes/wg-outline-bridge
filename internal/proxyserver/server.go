@@ -48,6 +48,7 @@ type ServerConfig struct {
 type Server struct {
 	config   ServerConfig
 	dialer   StreamDialer
+	dialerMu sync.RWMutex
 	logger   *slog.Logger
 	listener net.Listener
 	wg       sync.WaitGroup
@@ -60,6 +61,19 @@ func NewServer(config ServerConfig, dialer StreamDialer, logger *slog.Logger) *S
 		dialer: dialer,
 		logger: logger.With("component", "proxyserver", "name", config.Name, "type", config.Type),
 	}
+}
+
+func (s *Server) streamDialer() StreamDialer {
+	s.dialerMu.RLock()
+	defer s.dialerMu.RUnlock()
+	return s.dialer
+}
+
+// SetDialer replaces the dialer used for outbound connections (thread-safe).
+func (s *Server) SetDialer(d StreamDialer) {
+	s.dialerMu.Lock()
+	defer s.dialerMu.Unlock()
+	s.dialer = d
 }
 
 // Listen binds the server to its configured address.
@@ -158,13 +172,13 @@ func (s *Server) serveSOCKS5(ctx context.Context) {
 
 func (s *Server) dialForSOCKS5(ctx context.Context, network, addr string) (net.Conn, error) {
 	s.logger.Debug("socks5: dialing", "addr", addr)
-	return s.dialer.DialStream(ctx, addr)
+	return s.streamDialer().DialStream(ctx, addr)
 }
 
 // --- HTTP/HTTPS forward proxy ---
 
 func (s *Server) serveHTTP(ctx context.Context) {
-	handler := httpproxy.NewHandler(s.dialer, s.config.Username, s.config.Password, s.logger)
+	handler := httpproxy.NewHandler(&dynamicDialer{server: s}, s.config.Username, s.config.Password, s.logger)
 
 	httpSrv := &http.Server{
 		Handler:           handler,
@@ -184,6 +198,16 @@ func (s *Server) serveHTTP(ctx context.Context) {
 	if err := httpSrv.Serve(s.listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		s.logger.Error("http proxy serve error", "err", err)
 	}
+}
+
+// dynamicDialer wraps Server to provide a StreamDialer that always resolves
+// the current dialer at call time (supports runtime dialer swapping).
+type dynamicDialer struct {
+	server *Server
+}
+
+func (d *dynamicDialer) DialStream(ctx context.Context, addr string) (net.Conn, error) {
+	return d.server.streamDialer().DialStream(ctx, addr)
 }
 
 // onboardDNSResolver resolves names via the built-in DNS proxy server.

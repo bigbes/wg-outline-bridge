@@ -45,7 +45,7 @@ func TestMTProxyIntegration_ReqPQ(t *testing.T) {
 	srv := NewServer(ServerConfig{
 		ListenAddrs: []string{"127.0.0.1:0"},
 		Secrets:     []mpcrypto.Secret{secret},
-	}, &directDialer{}, endpoints, logger)
+	}, &SingleDialerResolver{Dialer: &directDialer{}}, endpoints, logger)
 
 	// Bind to a random port
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -240,7 +240,7 @@ func TestMTProxyIntegration_Compact(t *testing.T) {
 	srv := NewServer(ServerConfig{
 		ListenAddrs: []string{"127.0.0.1:0"},
 		Secrets:     []mpcrypto.Secret{secret},
-	}, &directDialer{}, endpoints, slog.Default())
+	}, &SingleDialerResolver{Dialer: &directDialer{}}, endpoints, slog.Default())
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -344,7 +344,7 @@ func TestMTProxyIntegration_WrongSecret(t *testing.T) {
 	srv := NewServer(ServerConfig{
 		ListenAddrs: []string{"127.0.0.1:0"},
 		Secrets:     []mpcrypto.Secret{secret},
-	}, &directDialer{}, endpoints, slog.Default())
+	}, &SingleDialerResolver{Dialer: &directDialer{}}, endpoints, slog.Default())
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

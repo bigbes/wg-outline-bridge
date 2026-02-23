@@ -56,7 +56,7 @@ func (r *PeerUpstreamResolver) PopulateFromPeers(peers map[string]config.PeerCon
 		if peer.UpstreamGroup == "" || peer.Disabled {
 			continue
 		}
-		for _, prefix := range strings.Split(peer.AllowedIPs, ",") {
+		for prefix := range strings.SplitSeq(peer.AllowedIPs, ",") {
 			prefix = strings.TrimSpace(prefix)
 			if p, err := netip.ParsePrefix(prefix); err == nil {
 				r.groups[p.Addr()] = peer.UpstreamGroup

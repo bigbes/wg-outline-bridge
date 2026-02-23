@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,17 +40,18 @@ type Bridge struct {
 	logger     *slog.Logger
 	startTime  time.Time
 
-	mu         sync.Mutex
-	cfg        *config.Config
-	ctx        context.Context
-	wgDev      wg.Device
-	upstreams  *upstream.Manager
+	mu           sync.Mutex
+	cfg          *config.Config
+	ctx          context.Context
+	wgDev        wg.Device
+	upstreams    *upstream.Manager
 	tracker      *proxy.ConnTracker
 	peerResolver *proxy.PeerUpstreamResolver
 	peerMon      *peerMonitor
-	mtSrv      *mtproxy2.Server
-	dnsSrv     *dns.Server
-	statsStore *statsdb.Store
+	mtSrv        *mtproxy2.Server
+	dnsSrv       *dns.Server
+	statsStore   *statsdb.Store
+	proxySrvs    map[string]*proxyserver.Server
 }
 
 func New(configPath string, cfg *config.Config, logger *slog.Logger) *Bridge {
@@ -460,16 +462,7 @@ func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) err
 		secrets = append(secrets, secret)
 	}
 
-	group := b.cfg.MTProxy.UpstreamGroup
-	if group == "" {
-		group = "default"
-	}
-	var dialer mtproxy2.StreamDialer
-	if d := b.upstreams.StreamDialerForGroup(group); d != nil {
-		dialer = d
-	} else {
-		dialer = b.upstreams.DefaultStreamDialer()
-	}
+	resolver := b.buildMTProxyDialerResolver()
 
 	endpoints := telegram.NewEndpointManager(b.cfg.MTProxy.Endpoints)
 
@@ -486,7 +479,7 @@ func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) err
 		}
 	}
 
-	srv := mtproxy2.NewServer(serverCfg, dialer, endpoints, b.logger)
+	srv := mtproxy2.NewServer(serverCfg, resolver, endpoints, b.logger)
 	b.mtSrv = srv
 
 	if err := srv.Listen(); err != nil {
@@ -508,6 +501,7 @@ func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) err
 }
 
 func (b *Bridge) startProxyServers(ctx context.Context, dialers *proxy.DialerSet) error {
+	b.proxySrvs = make(map[string]*proxyserver.Server, len(b.cfg.Proxies))
 	for _, pcfg := range b.cfg.Proxies {
 		group := pcfg.UpstreamGroup
 		if group == "" {
@@ -542,6 +536,7 @@ func (b *Bridge) startProxyServers(ctx context.Context, dialers *proxy.DialerSet
 		}
 
 		srv := proxyserver.NewServer(srvCfg, dialer, b.logger)
+		b.proxySrvs[pcfg.Name] = srv
 
 		if err := srv.Listen(); err != nil {
 			return fmt.Errorf("proxy %q: %w", pcfg.Name, err)
@@ -1041,6 +1036,137 @@ func (b *Bridge) reloadMTProxySecrets() {
 		secrets = append(secrets, secret)
 	}
 	b.mtSrv.UpdateSecrets(secrets, hexes)
+	b.mtSrv.SetDialerResolver(b.buildMTProxyDialerResolver())
+}
+
+// mtproxyDialerResolver resolves a StreamDialer per-secret based on
+// upstream_group stored in the database.
+type mtproxyDialerResolver struct {
+	defaultDialer mtproxy2.StreamDialer
+	perSecret     map[int]mtproxy2.StreamDialer // secretIdx -> dialer
+}
+
+func (r *mtproxyDialerResolver) ResolveDialer(secretIdx int) mtproxy2.StreamDialer {
+	if d, ok := r.perSecret[secretIdx]; ok {
+		return d
+	}
+	return r.defaultDialer
+}
+
+// buildMTProxyDialerResolver constructs a DialerResolver that maps each
+// secret to its upstream group's dialer. Must be called with b.mu held.
+func (b *Bridge) buildMTProxyDialerResolver() mtproxy2.DialerResolver {
+	group := b.cfg.MTProxy.UpstreamGroup
+	if group == "" {
+		group = "default"
+	}
+	var defaultDialer mtproxy2.StreamDialer
+	if d := b.upstreams.StreamDialerForGroup(group); d != nil {
+		defaultDialer = d
+	} else {
+		defaultDialer = b.upstreams.DefaultStreamDialer()
+	}
+
+	var secretGroups map[string]string
+	if b.statsStore != nil {
+		secretGroups, _ = b.statsStore.ListSecretUpstreamGroups()
+	}
+
+	if len(secretGroups) == 0 {
+		return &mtproxy2.SingleDialerResolver{Dialer: defaultDialer}
+	}
+
+	perSecret := make(map[int]mtproxy2.StreamDialer)
+	for i, hex := range b.cfg.MTProxy.Secrets {
+		sg, ok := secretGroups[hex]
+		if !ok || sg == "" {
+			continue
+		}
+		if d := b.upstreams.StreamDialerForGroup(sg); d != nil {
+			perSecret[i] = d
+		}
+	}
+
+	if len(perSecret) == 0 {
+		return &mtproxy2.SingleDialerResolver{Dialer: defaultDialer}
+	}
+
+	return &mtproxyDialerResolver{
+		defaultDialer: defaultDialer,
+		perSecret:     perSecret,
+	}
+}
+
+// SetProxyUpstreamGroup changes the upstream group for a running proxy server.
+func (b *Bridge) SetProxyUpstreamGroup(name, group string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	idx := -1
+	for i, p := range b.cfg.Proxies {
+		if p.Name == name {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return fmt.Errorf("proxy %q not found", name)
+	}
+
+	if b.cfg.Proxies[idx].UpstreamGroup == group {
+		return nil
+	}
+
+	if err := b.statsStore.SetProxyUpstreamGroup(name, group); err != nil {
+		return fmt.Errorf("saving proxy upstream group: %w", err)
+	}
+
+	b.cfg.Proxies[idx].UpstreamGroup = group
+
+	if srv, ok := b.proxySrvs[name]; ok {
+		resolvedGroup := group
+		if resolvedGroup == "" {
+			resolvedGroup = "default"
+		}
+		var dialer proxyserver.StreamDialer
+		if d := b.upstreams.StreamDialerForGroup(resolvedGroup); d != nil {
+			dialer = d
+		} else {
+			dialer = b.upstreams.DefaultStreamDialer()
+		}
+		srv.SetDialer(dialer)
+	}
+
+	b.logger.Info("proxy upstream group changed", "name", name, "upstream_group", group)
+	return nil
+}
+
+// SetSecretUpstreamGroup changes the upstream group for an MTProxy secret.
+func (b *Bridge) SetSecretUpstreamGroup(secretHex, group string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	found := slices.Contains(b.cfg.MTProxy.Secrets, secretHex)
+	if !found {
+		return fmt.Errorf("secret %q not found", secretHex)
+	}
+
+	if err := b.statsStore.SetSecretUpstreamGroup(secretHex, group); err != nil {
+		return fmt.Errorf("saving secret upstream group: %w", err)
+	}
+
+	b.reloadMTProxySecrets()
+
+	b.logger.Info("secret upstream group changed", "secret", secretHex, "upstream_group", group)
+	return nil
 }
 
 // AddProxy saves a new proxy server config to the database.
@@ -1379,10 +1505,8 @@ func (b *Bridge) CreateGroup(name string) error {
 
 	// Check if group already exists implicitly (from upstream assignments).
 	for _, u := range b.cfg.Upstreams {
-		for _, g := range u.Groups {
-			if g == name {
-				return fmt.Errorf("group %q already exists", name)
-			}
+		if slices.Contains(u.Groups, name) {
+			return fmt.Errorf("group %q already exists", name)
 		}
 	}
 

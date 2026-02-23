@@ -86,6 +86,7 @@ type secretInfo struct {
 	ConnectionsTotal  int64  `json:"connections_total"`
 	BytesC2B          int64  `json:"bytes_c2b"`
 	BytesB2C          int64  `json:"bytes_b2c"`
+	UpstreamGroup     string `json:"upstream_group"`
 }
 
 type upstreamInfo struct {
@@ -208,6 +209,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		BytesB2CTotal:     mt.BytesB2CTotal,
 		Links:             s.proxyLinksFiltered(cfg, ownedSecrets),
 	}
+	var secretUpstreamGroups map[string]string
+	if s.store != nil {
+		secretUpstreamGroups, _ = s.store.ListSecretUpstreamGroups()
+	}
 	for _, c := range mt.Clients {
 		if !admin {
 			if _, ok := ownedSecrets[c.Secret]; !ok {
@@ -223,6 +228,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			ConnectionsTotal:  c.ConnectionsTotal,
 			BytesC2B:          c.BytesC2B,
 			BytesB2C:          c.BytesB2C,
+			UpstreamGroup:     secretUpstreamGroups[c.Secret],
 		})
 	}
 
@@ -595,6 +601,10 @@ func (s *Server) handleSecretsRoute(w http.ResponseWriter, r *http.Request) {
 		s.handleRenameSecret(w, r)
 		return
 	}
+	if r.Method == http.MethodPut {
+		s.handleUpdateSecret(w, r)
+		return
+	}
 	s.handleDeleteSecret(w, r)
 }
 
@@ -684,6 +694,77 @@ func (s *Server) handleRenameSecret(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.RenameSecret(secretHex, req.Name); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleUpdateSecret(w http.ResponseWriter, r *http.Request) {
+	secretHex := strings.TrimPrefix(r.URL.Path, "/api/secrets/")
+	if secretHex == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "secret hex is required"})
+		return
+	}
+
+	// Guests can only update their own secrets.
+	if !isAdminRequest(r) && s.store != nil {
+		owner, err := s.store.GetSecretOwner(secretHex)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if owner == nil || *owner != requestUserID(r) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "secret not found"})
+			return
+		}
+	}
+
+	var req struct {
+		UpstreamGroup *string `json:"upstream_group"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.UpstreamGroup != nil {
+		if err := s.manager.SetSecretUpstreamGroup(secretHex, *req.UpstreamGroup); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleProxiesRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPut {
+		s.handleUpdateProxy(w, r)
+		return
+	}
+	s.handleDeleteProxy(w, r)
+}
+
+func (s *Server) handleUpdateProxy(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/proxies/")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "proxy name is required"})
+		return
+	}
+
+	var req struct {
+		UpstreamGroup *string `json:"upstream_group"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.UpstreamGroup != nil {
+		if err := s.manager.SetProxyUpstreamGroup(name, *req.UpstreamGroup); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

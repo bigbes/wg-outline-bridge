@@ -184,6 +184,8 @@ func (s *Store) migrateSchema() error {
 		{"mtproxy_secrets", "owner_user_id", `ALTER TABLE mtproxy_secrets ADD COLUMN owner_user_id INTEGER`},
 		{"daemon", "dns_enabled", `ALTER TABLE daemon ADD COLUMN dns_enabled INTEGER`},
 		{"wg_peers", "upstream_group", `ALTER TABLE wg_peers ADD COLUMN upstream_group TEXT NOT NULL DEFAULT ''`},
+		{"proxy_servers", "upstream_group", `ALTER TABLE proxy_servers ADD COLUMN upstream_group TEXT NOT NULL DEFAULT ''`},
+		{"mtproxy_secrets", "upstream_group", `ALTER TABLE mtproxy_secrets ADD COLUMN upstream_group TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, m := range migrations {
 		var count int
@@ -785,6 +787,38 @@ func (s *Store) ImportSecrets(secrets []string) (int, error) {
 	return count, nil
 }
 
+// ListSecretUpstreamGroups returns a map of secret_hex -> upstream_group for all secrets.
+func (s *Store) ListSecretUpstreamGroups() (map[string]string, error) {
+	rows, err := s.db.Query(`SELECT secret_hex, upstream_group FROM mtproxy_secrets WHERE upstream_group != ''`)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list secret upstream groups: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]string)
+	for rows.Next() {
+		var hex, group string
+		if err := rows.Scan(&hex, &group); err != nil {
+			return nil, fmt.Errorf("statsdb: scan secret upstream group: %w", err)
+		}
+		out[hex] = group
+	}
+	return out, rows.Err()
+}
+
+// SetSecretUpstreamGroup updates the upstream_group for an MTProxy secret.
+func (s *Store) SetSecretUpstreamGroup(secretHex, group string) error {
+	res, err := s.db.Exec(`UPDATE mtproxy_secrets SET upstream_group = ? WHERE secret_hex = ?`, group, secretHex)
+	if err != nil {
+		return fmt.Errorf("statsdb: set secret upstream group %q: %w", secretHex, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("secret %q not found", secretHex)
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Proxy Server CRUD
 // ---------------------------------------------------------------------------
@@ -793,7 +827,7 @@ func (s *Store) ImportSecrets(secrets []string) (int, error) {
 func (s *Store) ListProxyServers() ([]config.ProxyServerConfig, error) {
 	rows, err := s.db.Query(
 		`SELECT name, type, listen, outline, username, password,
-		        tls_cert_file, tls_key_file, tls_domain, tls_acme_email
+		        tls_cert_file, tls_key_file, tls_domain, tls_acme_email, upstream_group
 		 FROM proxy_servers`)
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: list proxy servers: %w", err)
@@ -806,7 +840,7 @@ func (s *Store) ListProxyServers() ([]config.ProxyServerConfig, error) {
 		var deprecatedOutline string
 		if err := rows.Scan(&p.Name, &p.Type, &p.Listen, &deprecatedOutline,
 			&p.Username, &p.Password,
-			&p.TLS.CertFile, &p.TLS.KeyFile, &p.TLS.Domain, &p.TLS.ACMEEmail); err != nil {
+			&p.TLS.CertFile, &p.TLS.KeyFile, &p.TLS.Domain, &p.TLS.ACMEEmail, &p.UpstreamGroup); err != nil {
 			return nil, fmt.Errorf("statsdb: scan proxy server: %w", err)
 		}
 		out = append(out, p)
@@ -821,13 +855,26 @@ func (s *Store) ListProxyServers() ([]config.ProxyServerConfig, error) {
 func (s *Store) AddProxyServer(p config.ProxyServerConfig) error {
 	_, err := s.db.Exec(
 		`INSERT INTO proxy_servers (name, type, listen, outline, username, password,
-		                            tls_cert_file, tls_key_file, tls_domain, tls_acme_email)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                            tls_cert_file, tls_key_file, tls_domain, tls_acme_email, upstream_group)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.Name, p.Type, p.Listen, "", p.Username, p.Password,
-		p.TLS.CertFile, p.TLS.KeyFile, p.TLS.Domain, p.TLS.ACMEEmail,
+		p.TLS.CertFile, p.TLS.KeyFile, p.TLS.Domain, p.TLS.ACMEEmail, p.UpstreamGroup,
 	)
 	if err != nil {
 		return fmt.Errorf("statsdb: add proxy server %q: %w", p.Name, err)
+	}
+	return nil
+}
+
+// SetProxyUpstreamGroup updates the upstream_group for a proxy server.
+func (s *Store) SetProxyUpstreamGroup(name, group string) error {
+	res, err := s.db.Exec(`UPDATE proxy_servers SET upstream_group = ? WHERE name = ?`, group, name)
+	if err != nil {
+		return fmt.Errorf("statsdb: set proxy upstream group %q: %w", name, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("proxy server %q not found", name)
 	}
 	return nil
 }
@@ -852,8 +899,8 @@ func (s *Store) ImportProxyServers(proxies []config.ProxyServerConfig) (int, err
 
 	stmt, err := tx.Prepare(
 		`INSERT OR IGNORE INTO proxy_servers (name, type, listen, outline, username, password,
-		                                      tls_cert_file, tls_key_file, tls_domain, tls_acme_email)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		                                      tls_cert_file, tls_key_file, tls_domain, tls_acme_email, upstream_group)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return 0, fmt.Errorf("statsdb: prepare import proxy servers: %w", err)
 	}
@@ -862,7 +909,7 @@ func (s *Store) ImportProxyServers(proxies []config.ProxyServerConfig) (int, err
 	var count int
 	for _, p := range proxies {
 		res, err := stmt.Exec(p.Name, p.Type, p.Listen, "", p.Username, p.Password,
-			p.TLS.CertFile, p.TLS.KeyFile, p.TLS.Domain, p.TLS.ACMEEmail)
+			p.TLS.CertFile, p.TLS.KeyFile, p.TLS.Domain, p.TLS.ACMEEmail, p.UpstreamGroup)
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: import proxy server %q: %w", p.Name, err)
 		}

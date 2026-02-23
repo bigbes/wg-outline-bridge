@@ -104,7 +104,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/secrets", s.authMiddleware(s.handleAddSecret))
 	mux.HandleFunc("/api/secrets/", s.authMiddleware(s.handleSecretsRoute))
 	mux.HandleFunc("/api/proxies", s.authMiddleware(adminOnly(s.handleAddProxy)))
-	mux.HandleFunc("/api/proxies/", s.authMiddleware(adminOnly(s.handleDeleteProxy)))
+	mux.HandleFunc("/api/proxies/", s.authMiddleware(adminOnly(s.handleProxiesRoute)))
 	mux.HandleFunc("/api/upstreams", s.authMiddleware(adminOnly(s.handleAddUpstream)))
 	mux.HandleFunc("/api/upstreams/", s.authMiddleware(adminOnly(s.handleUpstreamsRoute)))
 	mux.HandleFunc("/api/groups", s.authMiddleware(adminOnly(s.handleGroupsRoute)))
