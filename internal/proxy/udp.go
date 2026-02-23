@@ -24,15 +24,16 @@ type PacketDialer interface {
 }
 
 type UDPProxy struct {
-	router    *routing.Router
-	dialers   *DialerSet
-	logger    *slog.Logger
-	tracker   *ConnTracker
-	dnsTarget string // if set, intercept port-53 and relay to this address
+	router       *routing.Router
+	dialers      *DialerSet
+	logger       *slog.Logger
+	tracker      *ConnTracker
+	dnsTarget    string // if set, intercept port-53 and relay to this address
+	peerResolver *PeerUpstreamResolver
 }
 
-func NewUDPProxy(router *routing.Router, dialers *DialerSet, tracker *ConnTracker, logger *slog.Logger) *UDPProxy {
-	return &UDPProxy{router: router, dialers: dialers, tracker: tracker, logger: logger}
+func NewUDPProxy(router *routing.Router, dialers *DialerSet, tracker *ConnTracker, peerResolver *PeerUpstreamResolver, logger *slog.Logger) *UDPProxy {
+	return &UDPProxy{router: router, dialers: dialers, tracker: tracker, peerResolver: peerResolver, logger: logger}
 }
 
 func (p *UDPProxy) SetDNSTarget(addr string) {
@@ -87,6 +88,18 @@ func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest str
 
 	req := routing.Request{DestIP: destIP, DestPort: destPort}
 	dec, matched := p.router.RouteIP(req)
+
+	if !matched && p.peerResolver != nil {
+		if group := p.peerResolver.GroupFor(srcAddr); group != "" {
+			dec = routing.Decision{
+				Action:        routing.ActionUpstream,
+				UpstreamGroup: group,
+				RuleName:      "peer-default",
+			}
+			matched = true
+		}
+	}
+
 	dialer := p.dialers.PacketDialerFor(dec)
 	routeDesc := "default"
 	if matched {

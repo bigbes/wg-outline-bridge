@@ -44,8 +44,9 @@ type Bridge struct {
 	ctx        context.Context
 	wgDev      wg.Device
 	upstreams  *upstream.Manager
-	tracker    *proxy.ConnTracker
-	peerMon    *peerMonitor
+	tracker      *proxy.ConnTracker
+	peerResolver *proxy.PeerUpstreamResolver
+	peerMon      *peerMonitor
 	mtSrv      *mtproxy2.Server
 	dnsSrv     *dns.Server
 	statsStore *statsdb.Store
@@ -92,8 +93,10 @@ func (b *Bridge) Run(ctx context.Context) error {
 	defer tunCloser()
 
 	b.tracker = proxy.NewConnTracker()
+	b.peerResolver = proxy.NewPeerUpstreamResolver()
 
 	if b.cfg.Database.Path != "" {
+		// Note: peerResolver will be populated after peers are loaded from DB below.
 		store, err := statsdb.Open(b.cfg.Database.Path, b.logger)
 		if err != nil {
 			return fmt.Errorf("opening stats db: %w", err)
@@ -216,6 +219,8 @@ func (b *Bridge) Run(ctx context.Context) error {
 		}
 	}
 
+	b.peerResolver.PopulateFromPeers(b.cfg.Peers)
+
 	var geoMgr *geoip.Manager
 	if len(b.cfg.GeoIP) > 0 {
 		entries := make([]geoip.GeoIPEntry, len(b.cfg.GeoIP))
@@ -237,10 +242,10 @@ func (b *Bridge) Run(ctx context.Context) error {
 	downloader := routing.NewDownloader(b.upstreams.DefaultStreamDialer(), router, b.cfg.Routing, b.logger)
 	downloader.Start(ctx)
 
-	tcpProxy := proxy.NewTCPProxy(router, dialers, b.tracker, b.logger)
+	tcpProxy := proxy.NewTCPProxy(router, dialers, b.tracker, b.peerResolver, b.logger)
 	tcpProxy.SetupForwarder(netStack)
 
-	udpProxy := proxy.NewUDPProxy(router, dialers, b.tracker, b.logger)
+	udpProxy := proxy.NewUDPProxy(router, dialers, b.tracker, b.peerResolver, b.logger)
 	if b.cfg.DNS.Listen != "" {
 		udpProxy.SetDNSTarget(b.cfg.DNS.Listen)
 	}
@@ -807,6 +812,11 @@ func (b *Bridge) DeletePeer(name string) error {
 	}
 
 	delete(b.cfg.Peers, name)
+	if b.peerResolver != nil {
+		for _, addr := range peerIPs {
+			b.peerResolver.Delete(addr)
+		}
+	}
 	if b.peerMon != nil {
 		b.peerMon.updatePeers(b.cfg.Peers)
 	}
@@ -857,6 +867,15 @@ func (b *Bridge) SetPeerDisabled(name string, disabled bool) error {
 	}
 
 	b.cfg.Peers[name] = peer
+	if b.peerResolver != nil {
+		for _, addr := range peerAllowedIPs(peer) {
+			if disabled {
+				b.peerResolver.Delete(addr)
+			} else if peer.UpstreamGroup != "" {
+				b.peerResolver.Set(addr, peer.UpstreamGroup)
+			}
+		}
+	}
 	if b.peerMon != nil {
 		b.peerMon.updatePeers(b.cfg.Peers)
 	}
@@ -866,6 +885,41 @@ func (b *Bridge) SetPeerDisabled(name string, disabled bool) error {
 		action = "disabled"
 	}
 	b.logger.Info("peer "+action, "name", name)
+	return nil
+}
+
+// SetPeerUpstreamGroup changes the upstream group for a peer at runtime.
+func (b *Bridge) SetPeerUpstreamGroup(name, group string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	peer, exists := b.cfg.Peers[name]
+	if !exists {
+		return fmt.Errorf("peer %q not found", name)
+	}
+
+	if peer.UpstreamGroup == group {
+		return nil
+	}
+
+	if err := b.statsStore.SetPeerUpstreamGroup(name, group); err != nil {
+		return fmt.Errorf("saving peer upstream group: %w", err)
+	}
+
+	peer.UpstreamGroup = group
+	b.cfg.Peers[name] = peer
+
+	if b.peerResolver != nil {
+		for _, addr := range peerAllowedIPs(peer) {
+			b.peerResolver.Set(addr, group)
+		}
+	}
+
+	b.logger.Info("peer upstream group changed", "name", name, "upstream_group", group)
 	return nil
 }
 

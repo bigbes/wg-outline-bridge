@@ -61,6 +61,7 @@ type peerInfo struct {
 	ActiveConnections int    `json:"active_connections"`
 	ConnectionsTotal  int64  `json:"connections_total"`
 	Disabled          bool   `json:"disabled"`
+	UpstreamGroup     string `json:"upstream_group"`
 }
 
 type mtproxyInfo struct {
@@ -174,6 +175,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		if pc, ok := allPeers[p.Name]; ok {
 			pi.AllowedIPs = pc.AllowedIPs
 			pi.Disabled = pc.Disabled
+			pi.UpstreamGroup = pc.UpstreamGroup
 		}
 		resp.Peers = append(resp.Peers, pi)
 	}
@@ -368,8 +370,9 @@ func (s *Server) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name     *string `json:"name"`
-		Disabled *bool   `json:"disabled"`
+		Name          *string `json:"name"`
+		Disabled      *bool   `json:"disabled"`
+		UpstreamGroup *string `json:"upstream_group"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -378,6 +381,13 @@ func (s *Server) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 
 	if req.Disabled != nil {
 		if err := s.manager.SetPeerDisabled(name, *req.Disabled); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	if req.UpstreamGroup != nil {
+		if err := s.manager.SetPeerUpstreamGroup(name, *req.UpstreamGroup); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}

@@ -781,6 +781,15 @@ if (!tg || !tg.initData) {
             '<div class="peer-stat-card"><div class="peer-stat-value">' +
             timeAgo(peer.last_handshake_unix) +
             '</div><div class="peer-stat-label">Handshake</div></div>';
+
+        // Populate upstream group dropdown
+        const sel = document.getElementById("inp-peer-edit-upstream-group");
+        const allGroups = [...new Set((statusData.upstreams || []).flatMap(u => u.groups || []))];
+        sel.innerHTML = '<option value="">Default</option>' +
+            allGroups.map(g => '<option value="' + escapeHtml(g) + '"' +
+                (peer.upstream_group === g ? ' selected' : '') + '>' + escapeHtml(g) + '</option>'
+            ).join('');
+
         updatePeerEditToggle();
         openModal("peer-edit-modal");
     };
@@ -818,6 +827,8 @@ if (!tg || !tg.initData) {
         if (newName !== editingPeerName) {
             body.name = newName;
         }
+        const upstreamGroup = document.getElementById("inp-peer-edit-upstream-group").value;
+        body.upstream_group = upstreamGroup;
         api(
             "PUT",
             "/api/peers/" + encodeURIComponent(editingPeerName),

@@ -27,14 +27,15 @@ type StreamDialer interface {
 }
 
 type TCPProxy struct {
-	router  *routing.Router
-	dialers *DialerSet
-	logger  *slog.Logger
-	tracker *ConnTracker
+	router       *routing.Router
+	dialers      *DialerSet
+	logger       *slog.Logger
+	tracker      *ConnTracker
+	peerResolver *PeerUpstreamResolver
 }
 
-func NewTCPProxy(router *routing.Router, dialers *DialerSet, tracker *ConnTracker, logger *slog.Logger) *TCPProxy {
-	return &TCPProxy{router: router, dialers: dialers, tracker: tracker, logger: logger}
+func NewTCPProxy(router *routing.Router, dialers *DialerSet, tracker *ConnTracker, peerResolver *PeerUpstreamResolver, logger *slog.Logger) *TCPProxy {
+	return &TCPProxy{router: router, dialers: dialers, tracker: tracker, peerResolver: peerResolver, logger: logger}
 }
 
 func (p *TCPProxy) SetupForwarder(s *stack.Stack) {
@@ -97,6 +98,17 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 			}
 		}
 		clientReader = br
+	}
+
+	if !matched && p.peerResolver != nil {
+		if group := p.peerResolver.GroupFor(srcAddr); group != "" {
+			dec = routing.Decision{
+				Action:        routing.ActionUpstream,
+				UpstreamGroup: group,
+				RuleName:      "peer-default",
+			}
+			matched = true
+		}
 	}
 
 	dialer := p.dialers.StreamDialerFor(dec)

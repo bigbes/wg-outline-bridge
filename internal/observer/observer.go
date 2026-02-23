@@ -116,6 +116,7 @@ type Manager interface {
 	UpdateUpstream(u config.UpstreamConfig) error
 	DeleteUpstream(name string) error
 	SetPeerDisabled(name string, disabled bool) error
+	SetPeerUpstreamGroup(name, group string) error
 	RenamePeer(oldName, newName string) error
 	AddDNSRecord(name string, rec config.DNSRecordConfig) error
 	UpdateDNSRecord(name string, rec config.DNSRecordConfig) error

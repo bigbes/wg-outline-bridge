@@ -105,11 +105,12 @@ type DNSListConfig struct {
 }
 
 type PeerConfig struct {
-	PrivateKey   string `yaml:"private_key"`
-	PublicKey    string `yaml:"public_key"`
-	AllowedIPs   string `yaml:"allowed_ips"`
-	PresharedKey string `yaml:"preshared_key"`
-	Disabled     bool   `yaml:"disabled"`
+	PrivateKey    string `yaml:"private_key"`
+	PublicKey     string `yaml:"public_key"`
+	AllowedIPs    string `yaml:"allowed_ips"`
+	PresharedKey  string `yaml:"preshared_key"`
+	Disabled      bool   `yaml:"disabled"`
+	UpstreamGroup string `yaml:"-"`
 }
 
 type RoutingConfig struct {

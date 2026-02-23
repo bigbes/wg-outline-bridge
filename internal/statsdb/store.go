@@ -183,6 +183,7 @@ func (s *Store) migrateSchema() error {
 		{"wg_peers", "owner_user_id", `ALTER TABLE wg_peers ADD COLUMN owner_user_id INTEGER`},
 		{"mtproxy_secrets", "owner_user_id", `ALTER TABLE mtproxy_secrets ADD COLUMN owner_user_id INTEGER`},
 		{"daemon", "dns_enabled", `ALTER TABLE daemon ADD COLUMN dns_enabled INTEGER`},
+		{"wg_peers", "upstream_group", `ALTER TABLE wg_peers ADD COLUMN upstream_group TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, m := range migrations {
 		var count int
@@ -503,7 +504,7 @@ func (s *Store) GetMTSecretStats() (map[string]MTSecretRecord, error) {
 // ListPeers returns all peers from the database keyed by name.
 func (s *Store) ListPeers() (map[string]config.PeerConfig, error) {
 	rows, err := s.db.Query(
-		`SELECT name, private_key, public_key, preshared_key, allowed_ips, disabled
+		`SELECT name, private_key, public_key, preshared_key, allowed_ips, disabled, upstream_group
 		 FROM wg_peers`)
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: list peers: %w", err)
@@ -515,7 +516,7 @@ func (s *Store) ListPeers() (map[string]config.PeerConfig, error) {
 		var name string
 		var p config.PeerConfig
 		var disabled int
-		if err := rows.Scan(&name, &p.PrivateKey, &p.PublicKey, &p.PresharedKey, &p.AllowedIPs, &disabled); err != nil {
+		if err := rows.Scan(&name, &p.PrivateKey, &p.PublicKey, &p.PresharedKey, &p.AllowedIPs, &disabled, &p.UpstreamGroup); err != nil {
 			return nil, fmt.Errorf("statsdb: scan peer: %w", err)
 		}
 		p.Disabled = disabled != 0
@@ -552,16 +553,17 @@ func (s *Store) UpsertPeer(name string, peer config.PeerConfig) error {
 		disabled = 1
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO wg_peers (name, private_key, public_key, preshared_key, allowed_ips, disabled)
-		 VALUES (?, ?, ?, ?, ?, ?)
+		`INSERT INTO wg_peers (name, private_key, public_key, preshared_key, allowed_ips, disabled, upstream_group)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(name) DO UPDATE SET
 		   private_key = excluded.private_key,
 		   public_key = excluded.public_key,
 		   preshared_key = excluded.preshared_key,
 		   allowed_ips = excluded.allowed_ips,
 		   disabled = excluded.disabled,
+		   upstream_group = excluded.upstream_group,
 		   updated_unix = unixepoch()`,
-		name, peer.PrivateKey, peer.PublicKey, peer.PresharedKey, peer.AllowedIPs, disabled,
+		name, peer.PrivateKey, peer.PublicKey, peer.PresharedKey, peer.AllowedIPs, disabled, peer.UpstreamGroup,
 	)
 	if err != nil {
 		return fmt.Errorf("statsdb: upsert peer %q: %w", name, err)
@@ -621,8 +623,8 @@ func (s *Store) ImportPeers(peers map[string]config.PeerConfig) (int, error) {
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare(
-		`INSERT OR IGNORE INTO wg_peers (name, private_key, public_key, preshared_key, allowed_ips, disabled)
-		 VALUES (?, ?, ?, ?, ?, ?)`)
+		`INSERT OR IGNORE INTO wg_peers (name, private_key, public_key, preshared_key, allowed_ips, disabled, upstream_group)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return 0, fmt.Errorf("statsdb: prepare import peers: %w", err)
 	}
@@ -634,7 +636,7 @@ func (s *Store) ImportPeers(peers map[string]config.PeerConfig) (int, error) {
 		if p.Disabled {
 			disabled = 1
 		}
-		res, err := stmt.Exec(name, p.PrivateKey, p.PublicKey, p.PresharedKey, p.AllowedIPs, disabled)
+		res, err := stmt.Exec(name, p.PrivateKey, p.PublicKey, p.PresharedKey, p.AllowedIPs, disabled, p.UpstreamGroup)
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: import peer %q: %w", name, err)
 		}
@@ -646,6 +648,19 @@ func (s *Store) ImportPeers(peers map[string]config.PeerConfig) (int, error) {
 		return 0, fmt.Errorf("statsdb: commit import peers: %w", err)
 	}
 	return count, nil
+}
+
+// SetPeerUpstreamGroup updates the upstream_group for a peer.
+func (s *Store) SetPeerUpstreamGroup(name, group string) error {
+	res, err := s.db.Exec(`UPDATE wg_peers SET upstream_group = ?, updated_unix = unixepoch() WHERE name = ?`, group, name)
+	if err != nil {
+		return fmt.Errorf("statsdb: set peer upstream group %q: %w", name, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("peer %q not found", name)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
