@@ -754,6 +754,8 @@ func (s *Server) handleUpdateProxy(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		UpstreamGroup *string `json:"upstream_group"`
+		Username      *string `json:"username"`
+		Password      *string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -762,6 +764,20 @@ func (s *Server) handleUpdateProxy(w http.ResponseWriter, r *http.Request) {
 
 	if req.UpstreamGroup != nil {
 		if err := s.manager.SetProxyUpstreamGroup(name, *req.UpstreamGroup); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	if req.Username != nil || req.Password != nil {
+		u, p := "", ""
+		if req.Username != nil {
+			u = *req.Username
+		}
+		if req.Password != nil {
+			p = *req.Password
+		}
+		if err := s.manager.SetProxyAuth(name, u, p); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}

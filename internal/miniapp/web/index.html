@@ -914,9 +914,31 @@
                         placeholder="0.0.0.0:1080"
                     />
                 </div>
+                <div class="input-group">
+                    <label class="input-label">Username (optional)</label
+                    ><input
+                        type="text"
+                        class="tg-input"
+                        id="inp-proxy-username"
+                        placeholder="user"
+                        autocomplete="off"
+                    />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Password (optional)</label>
+                    <div class="input-with-btn">
+                        <input
+                            type="text"
+                            class="tg-input"
+                            id="inp-proxy-password"
+                            placeholder="password"
+                            autocomplete="off"
+                        />
+                        <div class="input-inline-btn" onclick="generateProxyPassword()">⟳</div>
+                    </div>
+                </div>
             </div>
         </div>
-
         <!-- DNS Rule Modal -->
         <div
             class="modal-backdrop"

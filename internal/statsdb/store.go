@@ -879,6 +879,19 @@ func (s *Store) SetProxyUpstreamGroup(name, group string) error {
 	return nil
 }
 
+// SetProxyAuth updates the username and password for a proxy server.
+func (s *Store) SetProxyAuth(name, username, password string) error {
+	res, err := s.db.Exec(`UPDATE proxy_servers SET username = ?, password = ? WHERE name = ?`, username, password, name)
+	if err != nil {
+		return fmt.Errorf("statsdb: set proxy auth %q: %w", name, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("proxy server %q not found", name)
+	}
+	return nil
+}
+
 // DeleteProxyServer deletes a proxy server by name.
 func (s *Store) DeleteProxyServer(name string) (bool, error) {
 	res, err := s.db.Exec(`DELETE FROM proxy_servers WHERE name = ?`, name)

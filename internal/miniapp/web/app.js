@@ -1040,6 +1040,16 @@ if (!tg || !tg.initData) {
         openModal("proxy-modal");
         document.getElementById("inp-proxy-name").value = "";
         document.getElementById("inp-proxy-listen").value = "";
+        document.getElementById("inp-proxy-username").value = "";
+        document.getElementById("inp-proxy-password").value = "";
+    };
+    window.generateProxyPassword = function () {
+        const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        const arr = new Uint32Array(16);
+        crypto.getRandomValues(arr);
+        let pwd = "";
+        for (let i = 0; i < 16; i++) pwd += chars[arr[i] % chars.length];
+        document.getElementById("inp-proxy-password").value = pwd;
     };
     window.closeProxyModal = function () {
         closeModal("proxy-modal");
@@ -1048,11 +1058,13 @@ if (!tg || !tg.initData) {
         const type = document.getElementById("inp-proxy-type").value;
         const listen = document.getElementById("inp-proxy-listen").value.trim();
         const name = document.getElementById("inp-proxy-name").value.trim();
+        const username = document.getElementById("inp-proxy-username").value.trim();
+        const password = document.getElementById("inp-proxy-password").value;
         if (!listen) {
             haptic("notification", "error");
             return;
         }
-        api("POST", "/api/proxies", { name, type, listen }).then((d) => {
+        api("POST", "/api/proxies", { name, type, listen, username, password }).then((d) => {
             if (d.error) {
                 haptic("notification", "error");
                 showToast(d.error);

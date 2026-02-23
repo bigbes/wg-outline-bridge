@@ -40,10 +40,9 @@ type HealthCheckConfig struct {
 }
 
 // EffectiveGroups returns all groups an upstream belongs to,
-// including the implicit "upstream:<name>" group and "default" if it's the default.
+// including "default" if it's the default upstream.
 func (s *Spec) EffectiveGroups() []string {
-	groups := make([]string, 0, len(s.Groups)+2)
-	groups = append(groups, "upstream:"+s.Name)
+	groups := make([]string, 0, len(s.Groups)+1)
 	if s.Default {
 		groups = append(groups, "default")
 	}

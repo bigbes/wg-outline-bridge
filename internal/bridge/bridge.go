@@ -1145,6 +1145,38 @@ func (b *Bridge) SetProxyUpstreamGroup(name, group string) error {
 	return nil
 }
 
+// SetProxyAuth updates the username and password for a proxy server.
+// The bridge needs a restart for auth changes to take effect on running proxies.
+func (b *Bridge) SetProxyAuth(name, username, password string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	idx := -1
+	for i, p := range b.cfg.Proxies {
+		if p.Name == name {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return fmt.Errorf("proxy %q not found", name)
+	}
+
+	if err := b.statsStore.SetProxyAuth(name, username, password); err != nil {
+		return fmt.Errorf("saving proxy auth: %w", err)
+	}
+
+	b.cfg.Proxies[idx].Username = username
+	b.cfg.Proxies[idx].Password = password
+
+	b.logger.Info("proxy auth changed", "name", name)
+	return nil
+}
+
 // SetSecretUpstreamGroup changes the upstream group for an MTProxy secret.
 func (b *Bridge) SetSecretUpstreamGroup(secretHex, group string) error {
 	b.mu.Lock()

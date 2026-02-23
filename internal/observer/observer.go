@@ -118,6 +118,7 @@ type Manager interface {
 	SetPeerDisabled(name string, disabled bool) error
 	SetPeerUpstreamGroup(name, group string) error
 	SetProxyUpstreamGroup(name, group string) error
+	SetProxyAuth(name, username, password string) error
 	SetSecretUpstreamGroup(secretHex, group string) error
 	RenamePeer(oldName, newName string) error
 	AddDNSRecord(name string, rec config.DNSRecordConfig) error
@@ -788,7 +789,7 @@ func (o *Observer) handleAddProxy(args string) string {
 	}
 
 	if len(parts) >= 4 {
-		p.UpstreamGroup = "upstream:" + parts[3]
+		p.UpstreamGroup = parts[3]
 	}
 
 	if len(parts) >= 5 {

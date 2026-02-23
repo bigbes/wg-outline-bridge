@@ -1,5 +1,6 @@
 output.log
-main
-bridge
+/main
+/bridge
+/sockstest
 pprof
 .env
