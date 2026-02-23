@@ -50,6 +50,7 @@ type FakeTLSConfig struct {
 type secretCounters struct {
 	lastConnUnix      atomic.Int64
 	connections       atomic.Int64
+	activeConnections atomic.Int64
 	bytesC2B          atomic.Int64
 	bytesB2C          atomic.Int64
 	backendDialErrors atomic.Int64
@@ -63,6 +64,7 @@ type SecretSnapshot struct {
 	SecretHex          string
 	LastConnectionUnix int64
 	Connections        int64
+	ActiveConnections  int64
 	UniqueUsers        int64
 	BytesC2B           int64
 	BytesB2C           int64
@@ -230,6 +232,7 @@ func (s *Server) SecretStatsSnapshot() []SecretSnapshot {
 			SecretHex:          hex,
 			LastConnectionUnix: sc.lastConnUnix.Load(),
 			Connections:        sc.connections.Load(),
+			ActiveConnections:  sc.activeConnections.Load(),
 			UniqueUsers:        uniqueUsers,
 			BytesC2B:           sc.bytesC2B.Load(),
 			BytesB2C:           sc.bytesB2C.Load(),
@@ -328,6 +331,8 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 
 	sc := s.getSecretCounters(secretIdx)
 	sc.connections.Add(1)
+	sc.activeConnections.Add(1)
+	defer sc.activeConnections.Add(-1)
 	sc.lastConnUnix.Store(time.Now().Unix())
 
 	// Track unique IPs (per-secret and global).

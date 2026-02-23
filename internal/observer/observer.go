@@ -58,12 +58,13 @@ type MTProxyStatus struct {
 
 // MTProxyClient holds per-secret MTProxy stats.
 type MTProxyClient struct {
-	Secret         string // hex secret string
-	LastConnection time.Time
-	Connections    int64
-	UniqueUsers    int64
-	BytesC2B       int64
-	BytesB2C       int64
+	Secret            string // hex secret string
+	LastConnection    time.Time
+	Connections       int64
+	ActiveConnections int64
+	UniqueUsers       int64
+	BytesC2B          int64
+	BytesB2C          int64
 
 	// Cumulative from SQLite.
 	ConnectionsTotal int64
@@ -474,7 +475,7 @@ func formatStatus(peers []PeerStatus, daemon DaemonStatus, mt MTProxyStatus, ups
 
 	if mt.Enabled {
 		b.WriteString("📡 MTProxy\n")
-		fmt.Fprintf(&b, "  Connections: %d active, %d session", mt.ActiveConnections, mt.Connections)
+		fmt.Fprintf(&b, "  Connections: %d active", mt.ActiveConnections)
 		if mt.ConnectionsTotal > 0 {
 			fmt.Fprintf(&b, ", %d total", mt.ConnectionsTotal)
 		}
@@ -511,7 +512,7 @@ func formatStatus(peers []PeerStatus, daemon DaemonStatus, mt MTProxyStatus, ups
 				} else {
 					fmt.Fprintf(&b, "    ")
 				}
-				fmt.Fprintf(&b, "Conns: %d session", c.Connections)
+				fmt.Fprintf(&b, "Conns: %d active", c.ActiveConnections)
 				if c.ConnectionsTotal > 0 {
 					fmt.Fprintf(&b, ", %d total", c.ConnectionsTotal)
 				}

@@ -25,6 +25,7 @@ if (!tg || !tg.initData) {
     let deleteCallback = null;
     let editingPeerName = null;
     let peerEditDisabled = false;
+    let editingSecretHex = null;
 
     // Modal toggle state
     let upstreamDefaultOn = false;
@@ -227,10 +228,6 @@ if (!tg || !tg.initData) {
                     (p.disabled
                         ? ' <span class="status-badge inactive">disabled</span>'
                         : "") +
-                    " ↓" +
-                    formatBytes(p.rx_bytes) +
-                    " ↑" +
-                    formatBytes(p.tx_bytes) +
                     (p.last_handshake_unix > 0
                         ? " • " + timeAgo(p.last_handshake_unix)
                         : "") +
@@ -707,14 +704,11 @@ if (!tg || !tg.initData) {
                         "</div>" +
                         '<div class="item-subtitle">' +
                         typeBadge +
-                        " • Conns: " +
-                        s.connections_total +
-                        " • ↓" +
-                        formatBytes(s.bytes_b2c) +
-                        " ↑" +
-                        formatBytes(s.bytes_c2b) +
                         "</div></div>" +
                         '<div class="item-action">' +
+                        '<button class="action-icon-btn" onclick="openSecretEditModal(\'' +
+                        escapedSecret +
+                        '\')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
                         connectBtn +
                         copyBtn +
                         '<button class="delete-btn" onclick="promptDelete(\'' +
@@ -777,6 +771,16 @@ if (!tg || !tg.initData) {
             peer.public_key;
         document.getElementById("peer-edit-allowed-ips").textContent =
             peer.allowed_ips || "—";
+        document.getElementById("peer-edit-stats").innerHTML =
+            '<div class="peer-stat-card"><div class="peer-stat-value">↓ ' +
+            formatBytes(peer.rx_bytes) +
+            '</div><div class="peer-stat-label">Download</div></div>' +
+            '<div class="peer-stat-card"><div class="peer-stat-value">↑ ' +
+            formatBytes(peer.tx_bytes) +
+            '</div><div class="peer-stat-label">Upload</div></div>' +
+            '<div class="peer-stat-card"><div class="peer-stat-value">' +
+            timeAgo(peer.last_handshake_unix) +
+            '</div><div class="peer-stat-label">Handshake</div></div>';
         updatePeerEditToggle();
         openModal("peer-edit-modal");
     };
@@ -1291,6 +1295,68 @@ if (!tg || !tg.initData) {
             haptic("notification", "success");
             showToast("Secret created");
             closeSecretModal();
+            refresh();
+        });
+    };
+
+    // --- Secret Edit ---
+    window.openSecretEditModal = function (secretHex) {
+        if (!statusData || !statusData.mtproxy) return;
+        const mt = statusData.mtproxy;
+        const s = (mt.secrets || []).find((x) => x.secret === secretHex);
+        if (!s) return;
+        editingSecretHex = secretHex;
+
+        const links = mt.links || [];
+        const link = links.find((l) => l.secret === secretHex);
+        const displayName = link ? link.name || "" : "";
+
+        document.getElementById("inp-secret-edit-name").value = displayName;
+        document.getElementById("secret-edit-hex").textContent = secretHex;
+
+        const sType = secretType(secretHex);
+        const typeLabel =
+            sType === "ee"
+                ? "FakeTLS (ee)"
+                : sType === "dd"
+                  ? "Padded (dd)"
+                  : "Default";
+        document.getElementById("secret-edit-type").textContent = typeLabel;
+
+        document.getElementById("secret-edit-stats").innerHTML =
+            '<div class="peer-stat-card"><div class="peer-stat-value">' +
+            s.active_connections +
+            '</div><div class="peer-stat-label">Active</div></div>' +
+            '<div class="peer-stat-card"><div class="peer-stat-value">↓ ' +
+            formatBytes(s.bytes_b2c) +
+            '</div><div class="peer-stat-label">Download</div></div>' +
+            '<div class="peer-stat-card"><div class="peer-stat-value">↑ ' +
+            formatBytes(s.bytes_c2b) +
+            '</div><div class="peer-stat-label">Upload</div></div>';
+        openModal("secret-edit-modal");
+    };
+    window.closeSecretEditModal = function () {
+        closeModal("secret-edit-modal");
+        editingSecretHex = null;
+    };
+    window.saveSecretEdit = function () {
+        if (!editingSecretHex) return;
+        const name = document
+            .getElementById("inp-secret-edit-name")
+            .value.trim();
+        api(
+            "PUT",
+            "/api/secrets/" + encodeURIComponent(editingSecretHex) + "/name",
+            { name },
+        ).then((d) => {
+            if (d.error) {
+                haptic("notification", "error");
+                showToast(d.error);
+                return;
+            }
+            haptic("notification", "success");
+            showToast("Secret updated");
+            closeSecretEditModal();
             refresh();
         });
     };

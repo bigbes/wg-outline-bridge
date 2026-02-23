@@ -77,13 +77,14 @@ type mtproxyInfo struct {
 }
 
 type secretInfo struct {
-	Secret           string `json:"secret"`
-	LastConnection   int64  `json:"last_connection_unix"`
-	Connections      int64  `json:"connections"`
-	UniqueUsers      int64  `json:"unique_users"`
-	ConnectionsTotal int64  `json:"connections_total"`
-	BytesC2B         int64  `json:"bytes_c2b"`
-	BytesB2C         int64  `json:"bytes_b2c"`
+	Secret            string `json:"secret"`
+	LastConnection    int64  `json:"last_connection_unix"`
+	Connections       int64  `json:"connections"`
+	ActiveConnections int64  `json:"active_connections"`
+	UniqueUsers       int64  `json:"unique_users"`
+	ConnectionsTotal  int64  `json:"connections_total"`
+	BytesC2B          int64  `json:"bytes_c2b"`
+	BytesB2C          int64  `json:"bytes_b2c"`
 }
 
 type upstreamInfo struct {
@@ -212,13 +213,14 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		resp.MTProxy.Secrets = append(resp.MTProxy.Secrets, secretInfo{
-			Secret:           c.Secret,
-			LastConnection:   c.LastConnection.Unix(),
-			Connections:      c.Connections,
-			UniqueUsers:      c.UniqueUsers,
-			ConnectionsTotal: c.ConnectionsTotal,
-			BytesC2B:         c.BytesC2B,
-			BytesB2C:         c.BytesB2C,
+			Secret:            c.Secret,
+			LastConnection:    c.LastConnection.Unix(),
+			Connections:       c.Connections,
+			ActiveConnections: c.ActiveConnections,
+			UniqueUsers:       c.UniqueUsers,
+			ConnectionsTotal:  c.ConnectionsTotal,
+			BytesC2B:          c.BytesC2B,
+			BytesB2C:          c.BytesB2C,
 		})
 	}
 

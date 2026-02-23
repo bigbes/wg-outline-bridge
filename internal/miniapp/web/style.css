@@ -629,6 +629,38 @@ select.tg-input {
     user-select: all;
     -webkit-user-select: all;
 }
+.info-value.truncate {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    word-break: normal;
+}
+
+/* --- Peer Stats (small cards in edit modal) --- */
+.peer-stats-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    margin-top: 4px;
+}
+.peer-stat-card {
+    background: var(--card-bg);
+    border-radius: 10px;
+    padding: 10px 8px;
+    text-align: center;
+}
+.peer-stat-value {
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1;
+    margin-bottom: 4px;
+}
+.peer-stat-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
 
 /* --- Alert --- */
 .alert-overlay {

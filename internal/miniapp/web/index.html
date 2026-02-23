@@ -754,11 +754,15 @@
                 </div>
                 <div class="input-group">
                     <label class="input-label">Public Key</label>
-                    <div class="info-value" id="peer-edit-pubkey"></div>
+                    <div class="info-value truncate" id="peer-edit-pubkey"></div>
                 </div>
                 <div class="input-group">
                     <label class="input-label">Allowed IPs</label>
                     <div class="info-value" id="peer-edit-allowed-ips"></div>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Stats</label>
+                    <div class="peer-stats-row" id="peer-edit-stats"></div>
                 </div>
             </div>
         </div>
@@ -1083,6 +1087,47 @@
                         <option value="guest">Guest</option>
                         <option value="admin">Admin</option>
                     </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Secret Edit Modal -->
+        <div
+            class="modal-backdrop"
+            id="secret-edit-modal-backdrop"
+            onclick="closeSecretEditModal()"
+        ></div>
+        <div class="modal-sheet" id="secret-edit-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closeSecretEditModal()">
+                    Cancel
+                </button>
+                <span class="modal-title">Edit Secret</span>
+                <button class="modal-btn done mtproxy" onclick="saveSecretEdit()">
+                    Save
+                </button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">Name</label>
+                    <input
+                        type="text"
+                        class="tg-input"
+                        id="inp-secret-edit-name"
+                        placeholder="My Proxy"
+                    />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Secret</label>
+                    <div class="info-value truncate" id="secret-edit-hex"></div>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Type</label>
+                    <div class="info-value" id="secret-edit-type"></div>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Stats</label>
+                    <div class="peer-stats-row" id="secret-edit-stats"></div>
                 </div>
             </div>
         </div>

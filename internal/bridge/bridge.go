@@ -644,6 +644,7 @@ func (b *Bridge) MTProxyStatus() observer.MTProxyStatus {
 				c.LastConnection = time.Unix(ss.LastConnectionUnix, 0)
 			}
 			c.Connections = ss.Connections
+			c.ActiveConnections = ss.ActiveConnections
 			c.UniqueUsers = ss.UniqueUsers
 			c.BytesC2B = ss.BytesC2B
 			c.BytesB2C = ss.BytesB2C
