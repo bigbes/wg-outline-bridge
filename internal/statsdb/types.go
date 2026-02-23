@@ -45,11 +45,23 @@ const (
 
 // AllowedUser represents an authorized Telegram user stored in the database.
 type AllowedUser struct {
-	UserID    int64
-	Username  string
-	FirstName string
-	LastName  string
-	PhotoURL  string
-	Role      string // "admin" or "guest"
+	UserID     int64
+	Username   string
+	FirstName  string
+	LastName   string
+	PhotoURL   string
+	CustomName string
+	Disabled   bool
+	Role       string // "admin" or "guest"
+	MaxPeers   *int   // nil = use default
+	MaxSecrets *int   // nil = use default
+	CreatedAt  int64
+}
+
+// InviteLink represents a one-time invite link stored in the database.
+type InviteLink struct {
+	Token     string
+	Role      string
+	CreatedBy int64
 	CreatedAt int64
 }

@@ -553,6 +553,20 @@
                         />
                     </svg>
                 </div>
+                <div class="action-btn admin-only" onclick="openInviteModal()">
+                    <div class="action-icon-circle users">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                        </svg>
+                    </div>
+                    <div class="action-text users">Create Invite Link</div>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path d="M1 1L7 7L1 13" stroke="currentColor" stroke-width="2" fill="none" />
+                    </svg>
+                </div>
+                <h2 class="section-title">Invite Links</h2>
+                <div class="list-group" id="invite-list"></div>
                 <h2 class="section-title">All Users</h2>
                 <div class="list-group" id="user-list"></div>
             </div>
@@ -661,7 +675,7 @@
                     <span>MTProxy</span>
                 </div>
                 <div
-                    class="tab-item"
+                    class="tab-item admin-only"
                     data-page="upstreams"
                     onclick="switchTab('upstreams')"
                 >
@@ -701,7 +715,7 @@
                     <span>Proxies</span>
                 </div>
                 <div
-                    class="tab-item dns"
+                    class="tab-item dns admin-only"
                     data-page="dns"
                     onclick="switchTab('dns')"
                 >
@@ -718,7 +732,7 @@
                     <span>DNS</span>
                 </div>
                 <div
-                    class="tab-item routing"
+                    class="tab-item routing admin-only"
                     data-page="routing"
                     onclick="switchTab('routing')"
                 >
@@ -733,7 +747,7 @@
                     <span>Routing</span>
                 </div>
                 <div
-                    class="tab-item users"
+                    class="tab-item users admin-only"
                     data-page="users"
                     onclick="switchTab('users')"
                 >
@@ -1309,6 +1323,76 @@
                 <div class="input-group">
                     <label class="input-label">Role</label
                     ><select class="tg-input" id="inp-user-role">
+                        <option value="guest">Guest</option>
+                        <option value="admin">Admin</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Custom Name (optional)</label>
+                    <input type="text" class="tg-input" id="inp-user-custom-name" placeholder="Display name" />
+                </div>
+            </div>
+        </div>
+
+        <!-- User Edit Modal -->
+        <div class="modal-backdrop" id="user-edit-modal-backdrop" onclick="closeUserEditModal()"></div>
+        <div class="modal-sheet" id="user-edit-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closeUserEditModal()">Cancel</button>
+                <span class="modal-title">Edit User</span>
+                <button class="modal-btn done users" onclick="saveUserEdit()">Save</button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">User</label>
+                    <div class="info-value" id="user-edit-info"></div>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Custom Name</label>
+                    <input type="text" class="tg-input" id="inp-user-edit-custom-name" placeholder="Display name" />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Role</label>
+                    <select class="tg-input" id="inp-user-edit-role">
+                        <option value="guest">Guest</option>
+                        <option value="admin">Admin</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Status</label>
+                    <div class="toggle-row" onclick="toggleUserEditDisabled()">
+                        <span class="toggle-label" id="user-edit-status-label">Enabled</span>
+                        <div class="toggle-switch active" id="user-edit-enabled-toggle"><div class="toggle-knob"></div></div>
+                    </div>
+                </div>
+                <div class="input-group" id="user-edit-limits-group">
+                    <label class="input-label">Limits</label>
+                    <div style="display:flex;gap:8px">
+                        <div style="flex:1">
+                            <label class="input-label" style="font-size:12px;margin-bottom:2px">Max Peers</label>
+                            <input type="number" class="tg-input" id="inp-user-edit-max-peers" placeholder="default (5)" min="0" />
+                        </div>
+                        <div style="flex:1">
+                            <label class="input-label" style="font-size:12px;margin-bottom:2px">Max Secrets</label>
+                            <input type="number" class="tg-input" id="inp-user-edit-max-secrets" placeholder="default (5)" min="0" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Invite Modal -->
+        <div class="modal-backdrop" id="invite-modal-backdrop" onclick="closeInviteModal()"></div>
+        <div class="modal-sheet" id="invite-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closeInviteModal()">Cancel</button>
+                <span class="modal-title">Create Invite Link</span>
+                <button class="modal-btn done users" onclick="saveInvite()">Create</button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">Role</label>
+                    <select class="tg-input" id="inp-invite-role">
                         <option value="guest">Guest</option>
                         <option value="admin">Admin</option>
                     </select>

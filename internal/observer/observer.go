@@ -104,6 +104,11 @@ type RoleChecker interface {
 	GetUserRole(userID int64) (string, error)
 }
 
+// InviteRedeemer handles invite token redemption.
+type InviteRedeemer interface {
+	RedeemInvite(token string, userID int64, username, firstName, lastName string) (role string, err error)
+}
+
 // Manager provides runtime peer and secret management operations.
 type Manager interface {
 	AddPeer(name string) (config.PeerConfig, error)
@@ -144,29 +149,31 @@ type Manager interface {
 
 // Observer sends periodic status updates and handles bot commands via Telegram.
 type Observer struct {
-	bot         *telegram.Bot
-	provider    StatusProvider
-	cfgProv     ConfigProvider
-	manager     Manager
-	roleChecker RoleChecker
-	interval    time.Duration
-	chatID      int64
-	logger      *slog.Logger
+	bot            *telegram.Bot
+	provider       StatusProvider
+	cfgProv        ConfigProvider
+	manager        Manager
+	roleChecker    RoleChecker
+	inviteRedeemer InviteRedeemer
+	interval       time.Duration
+	chatID         int64
+	logger         *slog.Logger
 }
 
 // New creates a new Observer. If chatID is 0, periodic push notifications
 // are disabled but the bot still responds to incoming commands.
-// roleChecker may be nil when no database is configured.
-func New(bot *telegram.Bot, provider StatusProvider, cfgProv ConfigProvider, manager Manager, roleChecker RoleChecker, interval time.Duration, chatID int64, logger *slog.Logger) *Observer {
+// roleChecker and inviteRedeemer may be nil when no database is configured.
+func New(bot *telegram.Bot, provider StatusProvider, cfgProv ConfigProvider, manager Manager, roleChecker RoleChecker, inviteRedeemer InviteRedeemer, interval time.Duration, chatID int64, logger *slog.Logger) *Observer {
 	return &Observer{
-		bot:         bot,
-		provider:    provider,
-		cfgProv:     cfgProv,
-		manager:     manager,
-		roleChecker: roleChecker,
-		interval:    interval,
-		chatID:      chatID,
-		logger:      logger,
+		bot:            bot,
+		provider:       provider,
+		cfgProv:        cfgProv,
+		manager:        manager,
+		roleChecker:    roleChecker,
+		inviteRedeemer: inviteRedeemer,
+		interval:       interval,
+		chatID:         chatID,
+		logger:         logger,
 	}
 }
 
@@ -291,18 +298,24 @@ func (o *Observer) isAdmin(userID int64) bool {
 }
 
 func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
-	if !o.isAllowed(msg) {
-		o.logger.Debug("observer: ignoring message from unauthorized user",
-			"user_id", msg.From.ID, "chat_id", msg.Chat.ID)
-		return
-	}
-
 	text := strings.TrimSpace(msg.Text)
 	cmd, args, _ := strings.Cut(text, " ")
 	args = strings.TrimSpace(args)
 	// Strip @botname suffix from commands (e.g., /status@mybot)
 	if at := strings.Index(cmd, "@"); at > 0 {
 		cmd = cmd[:at]
+	}
+
+	// Handle invite redemption before auth check (user is not yet authorized).
+	if cmd == "/start" && strings.HasPrefix(args, "inv_") {
+		o.handleInviteRedemption(ctx, msg, strings.TrimPrefix(args, "inv_"))
+		return
+	}
+
+	if !o.isAllowed(msg) {
+		o.logger.Debug("observer: ignoring message from unauthorized user",
+			"user_id", msg.From.ID, "chat_id", msg.Chat.ID)
+		return
 	}
 
 	var reply string
@@ -504,6 +517,44 @@ func (o *Observer) send(ctx context.Context, text string) {
 	if err := o.bot.SendMessage(ctx, text); err != nil {
 		o.logger.Error("observer: failed to send telegram message", "err", err)
 	}
+}
+
+func (o *Observer) handleInviteRedemption(ctx context.Context, msg *telegram.Message, token string) {
+	if o.inviteRedeemer == nil {
+		o.bot.SendMessageTo(ctx, msg.Chat.ID, "⚠️ Invite system not available")
+		return
+	}
+	if msg.From == nil {
+		return
+	}
+
+	role, err := o.inviteRedeemer.RedeemInvite(token, msg.From.ID, msg.From.Username, msg.From.FirstName, msg.From.LastName)
+	if err != nil {
+		o.logger.Error("observer: invite redemption failed", "user_id", msg.From.ID, "err", err)
+		o.bot.SendMessageTo(ctx, msg.Chat.ID, fmt.Sprintf("❌ %s", err))
+		return
+	}
+
+	o.logger.Info("observer: invite redeemed", "user_id", msg.From.ID, "role", role)
+
+	text := fmt.Sprintf("✅ Welcome! You've been granted <b>%s</b> access.", role)
+	cfg := o.cfgProv.CurrentConfig()
+	if cfg.MiniApp.Enabled && cfg.MiniApp.Domain != "" {
+		miniAppURL := miniAppURL(cfg)
+		if err := o.bot.SendMessageWithWebApp(ctx, msg.Chat.ID, text, "HTML", "Open Panel", miniAppURL); err != nil {
+			o.logger.Error("observer: failed to send welcome message", "err", err)
+		}
+	} else {
+		o.bot.SendMessageHTML(ctx, msg.Chat.ID, text)
+	}
+}
+
+func miniAppURL(cfg *config.Config) string {
+	_, port, _ := strings.Cut(cfg.MiniApp.Listen, ":")
+	if port == "" || port == "443" {
+		return fmt.Sprintf("https://%s/", cfg.MiniApp.Domain)
+	}
+	return fmt.Sprintf("https://%s:%s/", cfg.MiniApp.Domain, port)
 }
 
 func formatStatus(peers []PeerStatus, daemon DaemonStatus, mt MTProxyStatus, upstreams []UpstreamStatus) string {

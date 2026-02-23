@@ -37,6 +37,10 @@ if (!tg || !tg.initData) {
     let upstreamEditHealthOn = false;
     let editingGroupName = null;
     let groupEditOriginalMembers = {};
+    let editingUserID = null;
+    let userEditDisabled = false;
+    let invitesData = null;
+    let invitesLoaded = false;
 
     // Modal toggle state
     let upstreamDefaultOn = false;
@@ -207,6 +211,13 @@ if (!tg || !tg.initData) {
             usersLoaded = true;
             renderUsers();
         });
+        if (isAdmin()) {
+            api("GET", "/api/invites").then((d) => {
+                invitesData = d;
+                invitesLoaded = true;
+                renderInvites();
+            });
+        }
     }
 
     // --- Render: Peers ---
@@ -250,6 +261,7 @@ if (!tg || !tg.initData) {
                     (p.last_handshake_unix > 0
                         ? " • " + timeAgo(p.last_handshake_unix)
                         : "") +
+                    (p.owner_name ? " • 👤 " + escapeHtml(p.owner_name) : "") +
                     "</div></div>" +
                     '<div class="item-action">' +
                     '<div class="toggle-switch ' +
@@ -810,77 +822,46 @@ if (!tg || !tg.initData) {
         if (!usersData) return;
         const el = document.getElementById("user-list");
 
-        document.getElementById("user-stat-total").textContent =
-            usersData.length;
-        document.getElementById("user-stat-admin").textContent =
-            usersData.filter((u) => u.is_admin).length;
+        document.getElementById("user-stat-total").textContent = usersData.length;
+        document.getElementById("user-stat-admin").textContent = usersData.filter(u => u.is_admin).length;
 
         if (usersData.length === 0) {
             el.innerHTML = '<div class="empty-state">No users</div>';
             return;
         }
 
-        el.innerHTML = usersData
-            .map((u) => {
-                const displayName =
-                    (u.first_name || "") +
-                        (u.last_name ? " " + u.last_name : "") ||
-                    u.username ||
-                    "User " + u.user_id;
-                const iconClass = u.is_admin
-                    ? "item-icon user"
-                    : "item-icon user-guest";
-                const roleBadge = u.is_admin
-                    ? '<span class="status-badge admin">Admin</span>'
-                    : '<span class="status-badge guest">Guest</span>';
-                const initial = displayName.charAt(0).toUpperCase();
-                const avatarContent = u.photo_url
-                    ? '<img src="' +
-                      escapeHtml(u.photo_url) +
-                      '" alt="' +
-                      initial +
-                      '">'
-                    : initial;
-                const canDelete = !u.is_config_admin && isAdmin();
-                const canToggleRole = !u.is_config_admin && isAdmin();
-                return (
-                    '<div class="list-item">' +
-                    '<div class="' +
-                    iconClass +
-                    '"><div class="user-avatar">' +
-                    avatarContent +
-                    "</div></div>" +
-                    '<div class="item-content">' +
-                    '<div class="item-title">' +
-                    escapeHtml(displayName) +
-                    "</div>" +
-                    '<div class="item-subtitle">' +
-                    (u.username ? "@" + escapeHtml(u.username) + " • " : "") +
-                    "ID: " +
-                    u.user_id +
-                    " • " +
-                    roleBadge +
-                    (u.is_config_admin
-                        ? ' <span class="status-badge inactive">config</span>'
-                        : "") +
-                    "</div></div>" +
-                    '<div class="item-action">' +
-                    (canToggleRole
-                        ? '<button class="action-icon-btn" onclick="toggleUserRole(' +
-                          u.user_id +
-                          ",'" +
-                          (u.is_admin ? "guest" : "admin") +
-                          '\')" title="Toggle role"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>'
-                        : "") +
-                    (canDelete
-                        ? '<button class="delete-btn" onclick="promptDelete(' +
-                          u.user_id +
-                          ',\'user\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>'
-                        : "") +
-                    "</div></div>"
-                );
-            })
-            .join("");
+        el.innerHTML = usersData.map(u => {
+            const displayName = u.custom_name || (u.first_name || '') + (u.last_name ? ' ' + u.last_name : '') || u.username || 'User ' + u.user_id;
+            const iconClass = u.is_admin ? 'item-icon user' : 'item-icon user-guest';
+            const roleBadge = u.is_admin
+                ? '<span class="status-badge admin">Admin</span>'
+                : '<span class="status-badge guest">Guest</span>';
+            const initial = displayName.charAt(0).toUpperCase();
+            const avatarContent = u.photo_url
+                ? '<img src="' + escapeHtml(u.photo_url) + '" alt="' + initial + '">'
+                : initial;
+            const canEdit = !u.is_config_admin && isAdmin();
+            const canDelete = !u.is_config_admin && isAdmin();
+            const disabledClass = u.disabled ? ' disabled' : '';
+            return '<div class="list-item' + disabledClass + '">' +
+                '<div class="' + iconClass + '"><div class="user-avatar">' + avatarContent + '</div></div>' +
+                '<div class="item-content">' +
+                '<div class="item-title">' + escapeHtml(displayName) + '</div>' +
+                '<div class="item-subtitle">' +
+                (u.username ? '@' + escapeHtml(u.username) + ' • ' : '') +
+                'ID: ' + u.user_id + ' • ' + roleBadge +
+                (u.is_config_admin ? ' <span class="status-badge inactive">config</span>' : '') +
+                (u.disabled ? ' <span class="status-badge inactive">disabled</span>' : '') +
+                '</div></div>' +
+                '<div class="item-action">' +
+                (canEdit
+                    ? '<button class="action-icon-btn" onclick="openUserEditModal(' + u.user_id + ')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>'
+                    : '') +
+                (canDelete
+                    ? '<button class="delete-btn" onclick="promptDelete(' + u.user_id + ',\'user\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>'
+                    : '') +
+                '</div></div>';
+        }).join('');
     }
 
     // --- Render: MTProxy ---
@@ -949,6 +930,7 @@ if (!tg || !tg.initData) {
                         '<div class="item-subtitle">' +
                         typeBadge +
                         (s.upstream_group ? ' • ↗ ' + escapeHtml(s.upstream_group) : '') +
+                        (s.owner_name ? ' • 👤 ' + escapeHtml(s.owner_name) : '') +
                         "</div></div>" +
                         '<div class="item-action">' +
                         '<button class="action-icon-btn" onclick="openSecretEditModal(\'' +
@@ -1762,6 +1744,7 @@ if (!tg || !tg.initData) {
         openModal("user-modal");
         document.getElementById("inp-user-input").value = "";
         document.getElementById("inp-user-role").value = "guest";
+        document.getElementById("inp-user-custom-name").value = "";
     };
     window.closeUserModal = function () {
         closeModal("user-modal");
@@ -1769,11 +1752,12 @@ if (!tg || !tg.initData) {
     window.saveUser = function () {
         const user = document.getElementById("inp-user-input").value.trim();
         const role = document.getElementById("inp-user-role").value;
+        const custom_name = document.getElementById("inp-user-custom-name").value.trim();
         if (!user) {
             haptic("notification", "error");
             return;
         }
-        api("POST", "/api/users", { user, role }).then((d) => {
+        api("POST", "/api/users", { user, role, custom_name }).then((d) => {
             if (d.error) {
                 haptic("notification", "error");
                 showToast(d.error, true);
@@ -1786,14 +1770,115 @@ if (!tg || !tg.initData) {
         });
     };
 
-    window.toggleUserRole = function (userId, newRole) {
+    window.openUserEditModal = function (userId) {
+        if (!usersData) return;
+        const u = usersData.find(x => x.user_id === userId);
+        if (!u) return;
+        editingUserID = userId;
+        userEditDisabled = u.disabled || false;
+
+        const displayName = (u.first_name || '') + (u.last_name ? ' ' + u.last_name : '') || u.username || 'User ' + u.user_id;
+        document.getElementById("user-edit-info").textContent = (u.username ? '@' + u.username + ' • ' : '') + 'ID: ' + u.user_id;
+        document.getElementById("inp-user-edit-custom-name").value = u.custom_name || '';
+        document.getElementById("inp-user-edit-role").value = u.is_admin ? 'admin' : 'guest';
+        document.getElementById("inp-user-edit-max-peers").value = u.max_peers != null ? u.max_peers : '';
+        document.getElementById("inp-user-edit-max-secrets").value = u.max_secrets != null ? u.max_secrets : '';
+
+        updateUserEditToggle();
+        openModal("user-edit-modal");
+    };
+    window.closeUserEditModal = function () {
+        closeModal("user-edit-modal");
+        editingUserID = null;
+    };
+    window.toggleUserEditDisabled = function () {
+        userEditDisabled = !userEditDisabled;
+        updateUserEditToggle();
         haptic("selection");
-        api("PUT", "/api/users/" + userId, { role: newRole }).then((d) => {
+    };
+    function updateUserEditToggle() {
+        const el = document.getElementById("user-edit-enabled-toggle");
+        const label = document.getElementById("user-edit-status-label");
+        if (userEditDisabled) {
+            el.classList.remove("active");
+            label.textContent = "Disabled";
+        } else {
+            el.classList.add("active");
+            label.textContent = "Enabled";
+        }
+    }
+    window.saveUserEdit = function () {
+        if (!editingUserID) return;
+        const custom_name = document.getElementById("inp-user-edit-custom-name").value.trim();
+        const role = document.getElementById("inp-user-edit-role").value;
+        const maxPeersVal = document.getElementById("inp-user-edit-max-peers").value;
+        const maxSecretsVal = document.getElementById("inp-user-edit-max-secrets").value;
+        const body = { custom_name, role, disabled: userEditDisabled };
+        if (maxPeersVal !== '') body.max_peers = parseInt(maxPeersVal, 10);
+        if (maxSecretsVal !== '') body.max_secrets = parseInt(maxSecretsVal, 10);
+        api("PUT", "/api/users/" + editingUserID, body).then(d => {
             if (d.error) {
+                haptic("notification", "error");
                 showToast(d.error, true);
                 return;
             }
-            showToast("Role updated");
+            haptic("notification", "success");
+            showToast("User updated");
+            closeUserEditModal();
+            refreshUsers();
+        });
+    };
+
+    function renderInvites() {
+        const el = document.getElementById("invite-list");
+        if (!el) return;
+        if (!invitesData || invitesData.length === 0) {
+            el.innerHTML = '<div class="empty-state">No pending invites</div>';
+            return;
+        }
+        el.innerHTML = invitesData.map(inv => {
+            const roleBadge = inv.role === 'admin'
+                ? '<span class="status-badge admin">Admin</span>'
+                : '<span class="status-badge guest">Guest</span>';
+            const inviteUrl = inv.link || (location.origin + '/?invite=' + inv.token);
+            const escapedToken = inv.token.replace(/'/g, "\\'");
+            const escapedUrl = inviteUrl.replace(/'/g, "\\'");
+            return '<div class="list-item">' +
+                '<div class="item-icon users"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></div>' +
+                '<div class="item-content">' +
+                '<div class="item-title">' + inv.token.slice(0, 12) + '…</div>' +
+                '<div class="item-subtitle">' + roleBadge + ' • ' + timeAgo(inv.created_at) + '</div>' +
+                '</div>' +
+                '<div class="item-action">' +
+                '<button class="action-icon-btn" onclick="copyText(\'' + escapedUrl + '\',event)" title="Copy link"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>' +
+                '<button class="delete-btn" onclick="promptDelete(\'' + escapedToken + '\',\'invite\')" title="Delete"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>' +
+                '</div></div>';
+        }).join('');
+    }
+
+    window.openInviteModal = function () {
+        openModal("invite-modal");
+        document.getElementById("inp-invite-role").value = "guest";
+    };
+    window.closeInviteModal = function () {
+        closeModal("invite-modal");
+    };
+    window.saveInvite = function () {
+        const role = document.getElementById("inp-invite-role").value;
+        api("POST", "/api/invites", { role }).then(d => {
+            if (d.error) {
+                haptic("notification", "error");
+                showToast(d.error, true);
+                return;
+            }
+            haptic("notification", "success");
+            const inviteUrl = d.link || (location.origin + '/?invite=' + d.token);
+            navigator.clipboard.writeText(inviteUrl).then(() => {
+                showToast("Invite created & copied!");
+            }).catch(() => {
+                showToast("Invite created");
+            });
+            closeInviteModal();
             refreshUsers();
         });
     };
@@ -1938,6 +2023,7 @@ if (!tg || !tg.initData) {
             "sni-rule": "Are you sure you want to remove this SNI rule?",
             user: "Are you sure you want to remove this user?",
             secret: "Are you sure you want to remove this secret?",
+            invite: "Are you sure you want to delete this invite link?",
         };
         document.getElementById("alert-message").textContent =
             (messages[type] || "Are you sure?") +
@@ -1983,6 +2069,7 @@ if (!tg || !tg.initData) {
                     path: "/api/routing/sni-rules/" + encodeURIComponent(id),
                 },
                 user: { method: "DELETE", path: "/api/users/" + id },
+                invite: { method: "DELETE", path: "/api/invites/" + encodeURIComponent(id) },
                 secret: {
                     method: "DELETE",
                     path: "/api/secrets/" + encodeURIComponent(id),
@@ -2009,6 +2096,7 @@ if (!tg || !tg.initData) {
                 if (type === "dns-record" || type === "dns-rule") refreshDNS();
                 if (type === "routing-cidr" || type === "ip-rule" || type === "sni-rule") refreshRouting();
                 if (type === "user") refreshUsers();
+                if (type === "invite") refreshUsers();
                 if ((type === "upstream" || type === "group") && groupsLoaded)
                     refreshGroups();
             });
@@ -2319,6 +2407,32 @@ if (!tg || !tg.initData) {
     setInterval(ping, 10000);
 
     // --- Init ---
+    // Check for invite token in URL or Telegram start_param
+    function getInviteToken() {
+        try {
+            // Check tgWebAppStartParam (deep linking via startattach)
+            var params = new URLSearchParams(location.search);
+            var startParam = params.get('tgWebAppStartParam');
+            if (startParam && startParam.indexOf('inv_') === 0) {
+                return startParam.slice(4);
+            }
+            // Check Telegram WebApp start_param
+            if (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) {
+                var sp = tg.initDataUnsafe.start_param;
+                if (sp.indexOf('inv_') === 0) return sp.slice(4);
+            }
+            // Fallback: check ?invite= query param
+            if (params.get('invite')) return params.get('invite');
+            var hash = location.hash;
+            if (hash && hash.indexOf('invite=') !== -1) {
+                return hash.split('invite=')[1];
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    var pendingInviteToken = getInviteToken();
+
     api("GET", "/api/me")
         .then((d) => {
             meData = d;
@@ -2328,14 +2442,30 @@ if (!tg || !tg.initData) {
             refresh();
         })
         .catch((err) => {
+            // If forbidden and we have an invite token, try to redeem it
+            if (err.message === "forbidden" && pendingInviteToken) {
+                api("POST", "/api/invite", { token: pendingInviteToken }).then(d => {
+                    if (d.error) {
+                        showToast(d.error, true);
+                        return;
+                    }
+                    // Clean URL and reload
+                    history.replaceState(null, '', location.pathname);
+                    location.reload();
+                }).catch(() => {});
+                return;
+            }
             document.getElementById("loading").textContent =
                 "Failed to load: " + err.message;
         });
 
-    // Restore tab
+    // Restore tab (only if the tab is visible)
     try {
         const savedTab = sessionStorage.getItem("activeTab");
-        if (savedTab) switchTab(savedTab);
+        if (savedTab) {
+            const tabEl = document.querySelector('.tab-item[data-page="' + savedTab + '"]');
+            if (tabEl && tabEl.offsetParent !== null) switchTab(savedTab);
+        }
     } catch (e) {}
 
     // Auto-refresh

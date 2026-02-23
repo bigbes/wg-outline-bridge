@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/acme/autocert"
@@ -27,18 +28,20 @@ const (
 
 // Server serves the Telegram Mini App web interface and JSON API.
 type Server struct {
-	provider     observer.StatusProvider
-	cfgProv      observer.ConfigProvider
-	manager      observer.Manager
-	bot          *tgbot.Bot
-	store        *statsdb.Store
-	botToken     string
-	allowedUsers []int64
-	listen       string
-	domain       string
-	acmeEmail    string
-	acmeDir      string
-	logger       *slog.Logger
+	provider        observer.StatusProvider
+	cfgProv         observer.ConfigProvider
+	manager         observer.Manager
+	bot             *tgbot.Bot
+	store           *statsdb.Store
+	botToken        string
+	allowedUsers    []int64
+	listen          string
+	domain          string
+	acmeEmail       string
+	acmeDir         string
+	logger          *slog.Logger
+	botUsername     string
+	botUsernameOnce sync.Once
 }
 
 // New creates a new Mini App server.
@@ -79,6 +82,30 @@ func (s *Server) URL() string {
 		return fmt.Sprintf("https://%s/", s.domain)
 	}
 	return fmt.Sprintf("https://%s:%s/", s.domain, port)
+}
+
+// getBotUsername returns the cached bot username, fetching it lazily on first call.
+func (s *Server) getBotUsername() string {
+	s.botUsernameOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		info, err := s.bot.GetMe(ctx)
+		if err != nil {
+			s.logger.Error("miniapp: failed to get bot username", "err", err)
+			return
+		}
+		s.botUsername = info.Username
+	})
+	return s.botUsername
+}
+
+// inviteDeepLink returns a Telegram deep link for the given invite token.
+func (s *Server) inviteDeepLink(token string) string {
+	username := s.getBotUsername()
+	if username == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://t.me/%s?start=inv_%s", username, token)
 }
 
 // Run starts the HTTPS server with Let's Encrypt and blocks until ctx is cancelled.
@@ -124,6 +151,11 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/routing/ip-rules/order", s.authMiddleware(adminOnly(s.handleReorderIPRules)))
 	mux.HandleFunc("/api/users", s.authMiddleware(adminOnly(s.handleUsers)))
 	mux.HandleFunc("/api/users/", s.authMiddleware(adminOnly(s.handleUserRoute)))
+	mux.HandleFunc("/api/invites", s.authMiddleware(adminOnly(s.handleInvites)))
+	mux.HandleFunc("/api/invites/", s.authMiddleware(adminOnly(s.handleInviteItem)))
+
+	// Invite redemption (validates Telegram init data but doesn't require authorization).
+	mux.HandleFunc("/api/invite", s.handleRedeemInvite)
 
 	// Health check (unauthenticated).
 	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) {

@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -308,6 +309,11 @@ func Load(path string) (*Config, error) {
 		if len(cfg.MTProxy.Listen) == 0 {
 			return nil, fmt.Errorf("mtproxy: at least one listen address is required")
 		}
+		for _, addr := range cfg.MTProxy.Listen {
+			if err := validateListenPort(addr); err != nil {
+				return nil, fmt.Errorf("mtproxy: %w", err)
+			}
+		}
 		if cfg.MTProxy.FakeTLS.MaxClockSkewSeconds == 0 {
 			cfg.MTProxy.FakeTLS.MaxClockSkewSeconds = 600
 		}
@@ -332,6 +338,9 @@ func Load(path string) (*Config, error) {
 		if p.Listen == "" {
 			return nil, fmt.Errorf("proxy %q: listen address is required", p.Name)
 		}
+		if err := validateListenPort(p.Listen); err != nil {
+			return nil, fmt.Errorf("proxy %q: %w", p.Name, err)
+		}
 		if p.Type == "https" {
 			if p.TLS.Domain == "" && (p.TLS.CertFile == "" || p.TLS.KeyFile == "") {
 				return nil, fmt.Errorf("proxy %q: https requires tls.domain or tls.cert_file+tls.key_file", p.Name)
@@ -351,6 +360,9 @@ func Load(path string) (*Config, error) {
 	if cfg.MiniApp.Enabled {
 		if cfg.MiniApp.Listen == "" {
 			cfg.MiniApp.Listen = ":443"
+		}
+		if err := validateListenPort(cfg.MiniApp.Listen); err != nil {
+			return nil, fmt.Errorf("miniapp: %w", err)
 		}
 		if cfg.MiniApp.Domain == "" {
 			return nil, fmt.Errorf("miniapp: domain is required when enabled")
@@ -559,6 +571,21 @@ func (c *Config) ParseLogLevel() slog.Level {
 	default:
 		return slog.LevelInfo
 	}
+}
+
+func validateListenPort(addr string) error {
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("invalid listen address %q: %w", addr, err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return fmt.Errorf("invalid port in %q: %w", addr, err)
+	}
+	if port < 1000 {
+		return fmt.Errorf("listen port %d is below 1000, use port >= 1000", port)
+	}
+	return nil
 }
 
 func (c *WireGuardConfig) IsAmneziaWG() bool {

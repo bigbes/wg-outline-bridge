@@ -341,9 +341,15 @@ If `allowed_users` is set, the bot ignores private messages from users not in th
 | `/addproxy <type> <listen> [name] [outline] [user:pass]` | Add a proxy server (requires database) |
 | `/delproxy <name>` | Delete a proxy server (requires database) |
 | `/listproxy` | List proxy servers with connection links |
+| `/addupstream <name> <transport> [groups] [default]` | Add an upstream endpoint (requires database) |
+| `/delupstream <name>` | Delete an upstream endpoint (requires database) |
+| `/listupstream` | List upstream endpoints and their status |
+| `/addgroup <name>` | Create an upstream group (requires database) |
+| `/delgroup <name>` | Delete an upstream group (requires database) |
+| `/listgroup` | List upstream groups and their members |
 | `/help` | List available commands |
 
-The management commands (`/addpeer`, `/delpeer`, `/addsecret`, `/delsecret`, `/addproxy`, `/delproxy`) require `database.path` to be configured. Peer changes are applied immediately to the running WireGuard device. MTProxy secret and proxy server changes require a restart to take effect.
+The management commands (`/addpeer`, `/delpeer`, `/addsecret`, `/delsecret`, `/addproxy`, `/delproxy`, `/addupstream`, `/delupstream`, `/addgroup`, `/delgroup`) require `database.path` to be configured. Peer changes are applied immediately to the running WireGuard device. Upstream changes are applied immediately. MTProxy secret and proxy server changes require a restart to take effect.
 
 ### Status Output
 

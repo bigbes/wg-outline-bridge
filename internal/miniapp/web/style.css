@@ -1041,6 +1041,12 @@ body.is-admin .admin-only {
 body.is-admin .action-btn.admin-only {
     display: flex;
 }
+.tab-item.admin-only {
+    display: none;
+}
+body.is-admin .tab-item.admin-only {
+    display: flex;
+}
 
 /* --- Scrollbar --- */
 ::-webkit-scrollbar {

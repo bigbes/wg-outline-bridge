@@ -26,7 +26,10 @@ type Message struct {
 
 // User represents a Telegram user.
 type User struct {
-	ID int64 `json:"id"`
+	ID        int64  `json:"id"`
+	Username  string `json:"username"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
 }
 
 // Chat represents a Telegram chat.
@@ -314,6 +317,107 @@ func (b *Bot) GetChat(ctx context.Context, chatID string) (*ChatInfo, error) {
 	}
 
 	return &result.Result, nil
+}
+
+// BotInfo holds basic information about the bot.
+type BotInfo struct {
+	ID       int64  `json:"id"`
+	Username string `json:"username"`
+}
+
+// GetMe returns basic information about the bot.
+func (b *Bot) GetMe(ctx context.Context) (*BotInfo, error) {
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/getMe", b.token)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("getting bot info: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("telegram API error: status %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		OK     bool    `json:"ok"`
+		Result BotInfo `json:"result"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("parsing response: %w", err)
+	}
+
+	return &result.Result, nil
+}
+
+// InlineKeyboardMarkup represents an inline keyboard attached to a message.
+type InlineKeyboardMarkup struct {
+	InlineKeyboard [][]InlineKeyboardButton `json:"inline_keyboard"`
+}
+
+// InlineKeyboardButton represents a button in an inline keyboard.
+type InlineKeyboardButton struct {
+	Text   string      `json:"text"`
+	URL    string      `json:"url,omitempty"`
+	WebApp *WebAppInfo `json:"web_app,omitempty"`
+}
+
+// WebAppInfo contains information about a Web App.
+type WebAppInfo struct {
+	URL string `json:"url"`
+}
+
+// SendMessageWithWebApp sends a message with an inline keyboard button that opens a Web App.
+func (b *Bot) SendMessageWithWebApp(ctx context.Context, chatID int64, text, parseMode, btnText, webAppURL string) error {
+	payload := struct {
+		ChatID      int64                `json:"chat_id"`
+		Text        string               `json:"text"`
+		ParseMode   string               `json:"parse_mode,omitempty"`
+		ReplyMarkup InlineKeyboardMarkup `json:"reply_markup"`
+	}{
+		ChatID:    chatID,
+		Text:      text,
+		ParseMode: parseMode,
+		ReplyMarkup: InlineKeyboardMarkup{
+			InlineKeyboard: [][]InlineKeyboardButton{
+				{{Text: btnText, WebApp: &WebAppInfo{URL: webAppURL}}},
+			},
+		},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshaling request: %w", err)
+	}
+
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", b.token)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("sending message: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("telegram API error: status %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
 }
 
 // GetFileURL returns the download URL for a file_id.

@@ -363,7 +363,11 @@ func (b *Bridge) Run(ctx context.Context) error {
 		if b.statsStore != nil {
 			roleChecker = b.statsStore
 		}
-		obs := observer.New(bot, b, b, b, roleChecker, time.Duration(b.cfg.Telegram.Interval)*time.Second, b.cfg.Telegram.ChatID, b.logger)
+		var inviteRedeemer observer.InviteRedeemer
+		if b.statsStore != nil {
+			inviteRedeemer = b.statsStore
+		}
+		obs := observer.New(bot, b, b, b, roleChecker, inviteRedeemer, time.Duration(b.cfg.Telegram.Interval)*time.Second, b.cfg.Telegram.ChatID, b.logger)
 		go obs.Run(ctx)
 		b.logger.Info("telegram observer started", "interval", b.cfg.Telegram.Interval)
 
@@ -670,8 +674,11 @@ func (b *Bridge) MTProxyStatus() observer.MTProxyStatus {
 		dbStats, _ = b.statsStore.GetMTSecretStats()
 	}
 
-	// Build per-secret client entries from both session and DB.
+	// Build per-secret client entries from config, session and DB.
 	secretKeys := make(map[string]struct{})
+	for _, hex := range b.cfg.MTProxy.Secrets {
+		secretKeys[hex] = struct{}{}
+	}
 	for _, ss := range secretSnap {
 		secretKeys[ss.SecretHex] = struct{}{}
 	}

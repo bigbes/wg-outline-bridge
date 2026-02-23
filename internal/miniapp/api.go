@@ -1,9 +1,12 @@
 package miniapp
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"sort"
 	"strconv"
@@ -15,8 +18,8 @@ import (
 	"github.com/bigbes/wireguard-outline-bridge/internal/statsdb"
 )
 
-const guestMaxPeers = 5
-const guestMaxSecrets = 5
+const defaultGuestMaxPeers = 5
+const defaultGuestMaxSecrets = 5
 
 // sortByCreationOrder reorders items so that names appearing in order come
 // first (in the given order) and unknown names are appended at the end.
@@ -64,6 +67,7 @@ type peerInfo struct {
 	ConnectionsTotal  int64  `json:"connections_total"`
 	Disabled          bool   `json:"disabled"`
 	UpstreamGroup     string `json:"upstream_group"`
+	OwnerName         string `json:"owner_name,omitempty"`
 }
 
 type mtproxyInfo struct {
@@ -89,6 +93,7 @@ type secretInfo struct {
 	BytesC2B          int64  `json:"bytes_c2b"`
 	BytesB2C          int64  `json:"bytes_b2c"`
 	UpstreamGroup     string `json:"upstream_group"`
+	OwnerName         string `json:"owner_name,omitempty"`
 }
 
 type upstreamInfo struct {
@@ -272,6 +277,37 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Resolve owner display names for peers and secrets.
+	if admin && s.store != nil {
+		ownerIDs := make(map[int64]struct{})
+		peerOwners, _ := s.store.ListPeerOwners()
+		secretOwners, _ := s.store.ListSecretOwners()
+		for _, id := range peerOwners {
+			ownerIDs[id] = struct{}{}
+		}
+		for _, id := range secretOwners {
+			ownerIDs[id] = struct{}{}
+		}
+		if len(ownerIDs) > 0 {
+			ids := make([]int64, 0, len(ownerIDs))
+			for id := range ownerIDs {
+				ids = append(ids, id)
+			}
+			if names, err := s.store.GetUserDisplayNames(ids); err == nil {
+				for i := range resp.Peers {
+					if ownerID, ok := peerOwners[resp.Peers[i].Name]; ok {
+						resp.Peers[i].OwnerName = names[ownerID]
+					}
+				}
+				for i := range resp.MTProxy.Secrets {
+					if ownerID, ok := secretOwners[resp.MTProxy.Secrets[i].Secret]; ok {
+						resp.MTProxy.Secrets[i].OwnerName = names[ownerID]
+					}
+				}
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -298,13 +334,17 @@ func (s *Server) handleAddPeer(w http.ResponseWriter, r *http.Request) {
 
 	// Enforce guest limit.
 	if guest && s.store != nil {
+		maxPeers := defaultGuestMaxPeers
+		if mp, _, err := s.store.GetUserLimits(uid); err == nil && mp != nil {
+			maxPeers = *mp
+		}
 		count, err := s.store.CountPeersByOwner(uid)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		if count >= guestMaxPeers {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": fmt.Sprintf("peer limit reached (max %d)", guestMaxPeers)})
+		if count >= maxPeers {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": fmt.Sprintf("peer limit reached (max %d)", maxPeers)})
 			return
 		}
 	}
@@ -571,13 +611,17 @@ func (s *Server) handleAddSecret(w http.ResponseWriter, r *http.Request) {
 
 	// Enforce guest limit.
 	if guest && s.store != nil {
+		maxSecrets := defaultGuestMaxSecrets
+		if _, ms, err := s.store.GetUserLimits(uid); err == nil && ms != nil {
+			maxSecrets = *ms
+		}
 		count, err := s.store.CountSecretsByOwner(uid)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		if count >= guestMaxSecrets {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": fmt.Sprintf("secret limit reached (max %d)", guestMaxSecrets)})
+		if count >= maxSecrets {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": fmt.Sprintf("secret limit reached (max %d)", maxSecrets)})
 			return
 		}
 	}
@@ -1201,10 +1245,14 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		FirstName     string `json:"first_name"`
 		LastName      string `json:"last_name"`
 		PhotoURL      string `json:"photo_url"`
+		CustomName    string `json:"custom_name"`
 		CreatedAt     int64  `json:"created_at"`
 		Role          string `json:"role"`
 		IsAdmin       bool   `json:"is_admin"`
 		IsConfigAdmin bool   `json:"is_config_admin"`
+		Disabled      bool   `json:"disabled"`
+		MaxPeers      *int   `json:"max_peers"`
+		MaxSecrets    *int   `json:"max_secrets"`
 	}
 
 	var out []userResp
@@ -1237,6 +1285,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 						out[i].FirstName = u.FirstName
 						out[i].LastName = u.LastName
 						out[i].PhotoURL = u.PhotoURL
+						out[i].CustomName = u.CustomName
 						out[i].CreatedAt = u.CreatedAt
 						break
 					}
@@ -1244,14 +1293,18 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			out = append(out, userResp{
-				UserID:    u.UserID,
-				Username:  u.Username,
-				FirstName: u.FirstName,
-				LastName:  u.LastName,
-				PhotoURL:  u.PhotoURL,
-				CreatedAt: u.CreatedAt,
-				Role:      u.Role,
-				IsAdmin:   u.Role == statsdb.RoleAdmin,
+				UserID:     u.UserID,
+				Username:   u.Username,
+				FirstName:  u.FirstName,
+				LastName:   u.LastName,
+				PhotoURL:   u.PhotoURL,
+				CustomName: u.CustomName,
+				CreatedAt:  u.CreatedAt,
+				Role:       u.Role,
+				IsAdmin:    u.Role == statsdb.RoleAdmin,
+				Disabled:   u.Disabled,
+				MaxPeers:   u.MaxPeers,
+				MaxSecrets: u.MaxSecrets,
 			})
 		}
 	}
@@ -1269,8 +1322,9 @@ func (s *Server) handleAddUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		User string `json:"user"`
-		Role string `json:"role"` // "admin" or "guest" (default: "guest")
+		User       string `json:"user"`
+		Role       string `json:"role"`        // "admin" or "guest" (default: "guest")
+		CustomName string `json:"custom_name"` // optional display name
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -1309,7 +1363,7 @@ func (s *Server) handleAddUser(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		u = statsdb.AllowedUser{UserID: numericID, Role: req.Role}
+		u = statsdb.AllowedUser{UserID: numericID, Role: req.Role, CustomName: req.CustomName}
 	} else {
 		var photoURL string
 		if info.Photo != nil && info.Photo.SmallFileID != "" {
@@ -1318,12 +1372,13 @@ func (s *Server) handleAddUser(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		u = statsdb.AllowedUser{
-			UserID:    info.ID,
-			Username:  info.Username,
-			FirstName: info.FirstName,
-			LastName:  info.LastName,
-			PhotoURL:  photoURL,
-			Role:      req.Role,
+			UserID:     info.ID,
+			Username:   info.Username,
+			FirstName:  info.FirstName,
+			LastName:   info.LastName,
+			PhotoURL:   photoURL,
+			CustomName: req.CustomName,
+			Role:       req.Role,
 		}
 	}
 
@@ -1333,19 +1388,20 @@ func (s *Server) handleAddUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user_id":    u.UserID,
-		"username":   u.Username,
-		"first_name": u.FirstName,
-		"last_name":  u.LastName,
-		"photo_url":  u.PhotoURL,
-		"role":       u.Role,
+		"user_id":     u.UserID,
+		"username":    u.Username,
+		"first_name":  u.FirstName,
+		"last_name":   u.LastName,
+		"photo_url":   u.PhotoURL,
+		"custom_name": u.CustomName,
+		"role":        u.Role,
 	})
 }
 
 func (s *Server) handleUserRoute(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPut:
-		s.handleUpdateUserRole(w, r)
+		s.handleUpdateUser(w, r)
 	case http.MethodDelete:
 		s.handleDeleteUser(w, r)
 	default:
@@ -1353,7 +1409,7 @@ func (s *Server) handleUserRoute(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/users/")
 	if idStr == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "user ID is required"})
@@ -1367,18 +1423,22 @@ func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.isConfigAdmin(userID) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cannot change role of main admin user"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "cannot modify main admin user"})
 		return
 	}
 
 	var req struct {
-		Role string `json:"role"`
+		Role       *string `json:"role"`
+		CustomName *string `json:"custom_name"`
+		Disabled   *bool   `json:"disabled"`
+		MaxPeers   *int    `json:"max_peers"`
+		MaxSecrets *int    `json:"max_secrets"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	if req.Role != statsdb.RoleAdmin && req.Role != statsdb.RoleGuest {
+	if req.Role != nil && *req.Role != statsdb.RoleAdmin && *req.Role != statsdb.RoleGuest {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "role must be 'admin' or 'guest'"})
 		return
 	}
@@ -1388,7 +1448,7 @@ func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := s.store.SetUserRole(userID, req.Role)
+	updated, err := s.store.UpdateAllowedUser(userID, req.CustomName, req.Role, req.Disabled, req.MaxPeers, req.MaxSecrets)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -1424,6 +1484,18 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Collect owned peers and secrets before deleting the user.
+	ownedPeers, err := s.store.ListPeerNamesByOwner(userID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	ownedSecrets, err := s.store.ListSecretHexByOwner(userID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
 	deleted, err := s.store.DeleteAllowedUser(userID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -1434,7 +1506,253 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Cascade-delete owned peers.
+	for name := range ownedPeers {
+		_ = s.manager.DeletePeer(name)
+	}
+	// Cascade-delete owned MTProxy secrets.
+	for hex := range ownedSecrets {
+		_ = s.manager.DeleteSecret(hex)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ---------------------------------------------------------------------------
+// Invite Links
+// ---------------------------------------------------------------------------
+
+func (s *Server) handleInvites(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleListInvites(w, r)
+	case http.MethodPost:
+		s.handleCreateInvite(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleInviteItem(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	token := strings.TrimPrefix(r.URL.Path, "/api/invites/")
+	if token == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token is required"})
+		return
+	}
+
+	if s.store == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "not configured"})
+		return
+	}
+
+	deleted, err := s.store.DeleteInviteLink(token)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !deleted {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "invite not found"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleListInvites(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+
+	invites, err := s.store.ListInviteLinks()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	type inviteResp struct {
+		Token     string `json:"token"`
+		Role      string `json:"role"`
+		Link      string `json:"link,omitempty"`
+		CreatedBy int64  `json:"created_by"`
+		CreatedAt int64  `json:"created_at"`
+	}
+
+	out := make([]inviteResp, 0, len(invites))
+	for _, inv := range invites {
+		out = append(out, inviteResp{
+			Token:     inv.Token,
+			Role:      inv.Role,
+			Link:      s.inviteDeepLink(inv.Token),
+			CreatedBy: inv.CreatedBy,
+			CreatedAt: inv.CreatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "not configured"})
+		return
+	}
+
+	var req struct {
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.Role == "" {
+		req.Role = statsdb.RoleGuest
+	}
+	if req.Role != statsdb.RoleAdmin && req.Role != statsdb.RoleGuest {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "role must be 'admin' or 'guest'"})
+		return
+	}
+
+	tokenBytes := make([]byte, 16)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate token"})
+		return
+	}
+	token := hex.EncodeToString(tokenBytes)
+
+	if err := s.store.CreateInviteLink(token, req.Role, requestUserID(r)); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	resp := map[string]string{"token": token, "role": req.Role}
+	if link := s.inviteDeepLink(token); link != "" {
+		resp["link"] = link
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleRedeemInvite handles POST /api/invite — validates Telegram init data
+// without requiring the user to be in allowed_users, then redeems a one-time invite token.
+func (s *Server) handleRedeemInvite(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.store == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "not configured"})
+		return
+	}
+
+	// Validate Telegram init data (but don't check role).
+	initData := r.Header.Get("X-Telegram-Init-Data")
+	if initData == "" {
+		auth := r.Header.Get("Authorization")
+		if after, ok := strings.CutPrefix(auth, "tma "); ok {
+			initData = after
+		}
+	}
+	if initData == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing init data"})
+		return
+	}
+
+	userID, err := ValidateInitData(initData, s.botToken)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid init data"})
+		return
+	}
+
+	// Check if user is already authorized.
+	if existingRole, _ := s.store.GetUserRole(userID); existingRole != "" {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "already_authorized"})
+		return
+	}
+	// Also check config admins.
+	if s.isConfigAdmin(userID) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "already_authorized"})
+		return
+	}
+
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.Token == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token is required"})
+		return
+	}
+
+	invite, found, err := s.store.UseInviteLink(req.Token)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "invite link not found or already used"})
+		return
+	}
+
+	// Try to resolve profile info from Telegram init data.
+	u := statsdb.AllowedUser{UserID: userID, Role: invite.Role}
+	params, _ := parseInitDataUser(initData)
+	if params != nil {
+		u.Username = params.Username
+		u.FirstName = params.FirstName
+		u.LastName = params.LastName
+	}
+
+	if err := s.store.AddAllowedUser(u); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "role": invite.Role})
+}
+
+// parseInitDataUser extracts user profile from Telegram init data user JSON.
+func parseInitDataUser(initData string) (*struct {
+	Username  string
+	FirstName string
+	LastName  string
+}, error) {
+	params, err := parseInitDataParams(initData)
+	if err != nil {
+		return nil, err
+	}
+	userJSON := params.Get("user")
+	if userJSON == "" {
+		return nil, fmt.Errorf("no user field")
+	}
+	var u struct {
+		Username  string `json:"username"`
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+	}
+	if err := json.NewDecoder(strings.NewReader(userJSON)).Decode(&u); err != nil {
+		return nil, err
+	}
+	return &struct {
+		Username  string
+		FirstName string
+		LastName  string
+	}{u.Username, u.FirstName, u.LastName}, nil
+}
+
+func parseInitDataParams(initData string) (interface{ Get(string) string }, error) {
+	params, err := url.ParseQuery(initData)
+	if err != nil {
+		return nil, err
+	}
+	return params, nil
 }
 
 // DNS response types.
@@ -2238,7 +2556,7 @@ func buildProxyLink(p config.ProxyServerConfig, serverIP string) string {
 		scheme = "socks5"
 	}
 	if p.Username != "" {
-		return fmt.Sprintf("%s://%s:***@%s:%s", scheme, p.Username, host, port)
+		return fmt.Sprintf("%s://%s:%s@%s:%s", scheme, p.Username, p.Password, host, port)
 	}
 	return fmt.Sprintf("%s://%s:%s", scheme, host, port)
 }

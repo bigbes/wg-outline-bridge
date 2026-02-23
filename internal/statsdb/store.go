@@ -188,6 +188,13 @@ CREATE TABLE IF NOT EXISTS routing_sni_rules (
   priority INTEGER NOT NULL DEFAULT 0,
   created_unix INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_unix INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE TABLE IF NOT EXISTS invite_links (
+  token TEXT PRIMARY KEY,
+  role TEXT NOT NULL DEFAULT 'guest',
+  created_by INTEGER NOT NULL,
+  created_unix INTEGER NOT NULL DEFAULT (unixepoch())
 );`
 	if _, err := s.db.Exec(ddl); err != nil {
 		return fmt.Errorf("statsdb: init schema: %w", err)
@@ -214,6 +221,10 @@ func (s *Store) migrateSchema() error {
 		{"wg_peers", "upstream_group", `ALTER TABLE wg_peers ADD COLUMN upstream_group TEXT NOT NULL DEFAULT ''`},
 		{"proxy_servers", "upstream_group", `ALTER TABLE proxy_servers ADD COLUMN upstream_group TEXT NOT NULL DEFAULT ''`},
 		{"mtproxy_secrets", "upstream_group", `ALTER TABLE mtproxy_secrets ADD COLUMN upstream_group TEXT NOT NULL DEFAULT ''`},
+		{"allowed_users", "custom_name", `ALTER TABLE allowed_users ADD COLUMN custom_name TEXT NOT NULL DEFAULT ''`},
+		{"allowed_users", "disabled", `ALTER TABLE allowed_users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0`},
+		{"allowed_users", "max_peers", `ALTER TABLE allowed_users ADD COLUMN max_peers INTEGER`},
+		{"allowed_users", "max_secrets", `ALTER TABLE allowed_users ADD COLUMN max_secrets INTEGER`},
 	}
 	for _, m := range migrations {
 		var count int
@@ -1215,7 +1226,7 @@ func (s *Store) RemoveGroupFromUpstreams(group string) (int, error) {
 // ListAllowedUsers returns all authorized Telegram users.
 func (s *Store) ListAllowedUsers() ([]AllowedUser, error) {
 	rows, err := s.db.Query(
-		`SELECT user_id, username, first_name, last_name, photo_url, role, created_unix
+		`SELECT user_id, username, first_name, last_name, photo_url, custom_name, disabled, role, created_unix, max_peers, max_secrets
 		 FROM allowed_users ORDER BY created_unix DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: list allowed users: %w", err)
@@ -1225,8 +1236,19 @@ func (s *Store) ListAllowedUsers() ([]AllowedUser, error) {
 	var out []AllowedUser
 	for rows.Next() {
 		var u AllowedUser
-		if err := rows.Scan(&u.UserID, &u.Username, &u.FirstName, &u.LastName, &u.PhotoURL, &u.Role, &u.CreatedAt); err != nil {
+		var disabled int
+		var maxPeers, maxSecrets sql.NullInt64
+		if err := rows.Scan(&u.UserID, &u.Username, &u.FirstName, &u.LastName, &u.PhotoURL, &u.CustomName, &disabled, &u.Role, &u.CreatedAt, &maxPeers, &maxSecrets); err != nil {
 			return nil, fmt.Errorf("statsdb: scan allowed user: %w", err)
+		}
+		u.Disabled = disabled != 0
+		if maxPeers.Valid {
+			v := int(maxPeers.Int64)
+			u.MaxPeers = &v
+		}
+		if maxSecrets.Valid {
+			v := int(maxSecrets.Int64)
+			u.MaxSecrets = &v
 		}
 		out = append(out, u)
 	}
@@ -1243,15 +1265,16 @@ func (s *Store) AddAllowedUser(u AllowedUser) error {
 		role = RoleGuest
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO allowed_users (user_id, username, first_name, last_name, photo_url, role)
-		 VALUES (?, ?, ?, ?, ?, ?)
+		`INSERT INTO allowed_users (user_id, username, first_name, last_name, photo_url, custom_name, role)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(user_id) DO UPDATE SET
 		   username = excluded.username,
 		   first_name = excluded.first_name,
 		   last_name = excluded.last_name,
 		   photo_url = excluded.photo_url,
+		   custom_name = CASE WHEN excluded.custom_name != '' THEN excluded.custom_name ELSE allowed_users.custom_name END,
 		   role = excluded.role`,
-		u.UserID, u.Username, u.FirstName, u.LastName, u.PhotoURL, role,
+		u.UserID, u.Username, u.FirstName, u.LastName, u.PhotoURL, u.CustomName, role,
 	)
 	if err != nil {
 		return fmt.Errorf("statsdb: add allowed user %d: %w", u.UserID, err)
@@ -1262,12 +1285,16 @@ func (s *Store) AddAllowedUser(u AllowedUser) error {
 // GetUserRole returns the role of a user, or empty string if not found.
 func (s *Store) GetUserRole(userID int64) (string, error) {
 	var role string
-	err := s.db.QueryRow(`SELECT role FROM allowed_users WHERE user_id = ?`, userID).Scan(&role)
+	var disabled int
+	err := s.db.QueryRow(`SELECT role, disabled FROM allowed_users WHERE user_id = ?`, userID).Scan(&role, &disabled)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("statsdb: get user role %d: %w", userID, err)
+	}
+	if disabled != 0 {
+		return "", nil
 	}
 	return role, nil
 }
@@ -1290,6 +1317,150 @@ func (s *Store) DeleteAllowedUser(userID int64) (bool, error) {
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// UpdateAllowedUser updates fields of an existing user. Only non-nil fields are updated.
+func (s *Store) UpdateAllowedUser(userID int64, customName *string, role *string, disabled *bool, maxPeers *int, maxSecrets *int) (bool, error) {
+	var sets []string
+	var args []any
+	if customName != nil {
+		sets = append(sets, "custom_name = ?")
+		args = append(args, *customName)
+	}
+	if role != nil {
+		sets = append(sets, "role = ?")
+		args = append(args, *role)
+	}
+	if disabled != nil {
+		d := 0
+		if *disabled {
+			d = 1
+		}
+		sets = append(sets, "disabled = ?")
+		args = append(args, d)
+	}
+	if maxPeers != nil {
+		sets = append(sets, "max_peers = ?")
+		args = append(args, *maxPeers)
+	}
+	if maxSecrets != nil {
+		sets = append(sets, "max_secrets = ?")
+		args = append(args, *maxSecrets)
+	}
+	if len(sets) == 0 {
+		return false, nil
+	}
+	args = append(args, userID)
+	query := "UPDATE allowed_users SET " + strings.Join(sets, ", ") + " WHERE user_id = ?"
+	res, err := s.db.Exec(query, args...)
+	if err != nil {
+		return false, fmt.Errorf("statsdb: update allowed user %d: %w", userID, err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// GetUserLimits returns the per-user limits for peers and secrets.
+// Returns nil values when no custom limit is set.
+func (s *Store) GetUserLimits(userID int64) (maxPeers *int, maxSecrets *int, err error) {
+	var mp, ms sql.NullInt64
+	err = s.db.QueryRow(`SELECT max_peers, max_secrets FROM allowed_users WHERE user_id = ?`, userID).Scan(&mp, &ms)
+	if err == sql.ErrNoRows {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("statsdb: get user limits %d: %w", userID, err)
+	}
+	if mp.Valid {
+		v := int(mp.Int64)
+		maxPeers = &v
+	}
+	if ms.Valid {
+		v := int(ms.Int64)
+		maxSecrets = &v
+	}
+	return maxPeers, maxSecrets, nil
+}
+
+// GetUserDisplayNames returns a map of user_id → display name for the given IDs.
+// Display name priority: custom_name > first_name last_name > username > "User {id}".
+func (s *Store) GetUserDisplayNames(userIDs []int64) (map[int64]string, error) {
+	if len(userIDs) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(userIDs))
+	args := make([]any, len(userIDs))
+	for i, id := range userIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := "SELECT user_id, username, first_name, last_name, custom_name FROM allowed_users WHERE user_id IN (" + strings.Join(placeholders, ",") + ")"
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: get user display names: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[int64]string)
+	for rows.Next() {
+		var id int64
+		var username, firstName, lastName, customName string
+		if err := rows.Scan(&id, &username, &firstName, &lastName, &customName); err != nil {
+			return nil, fmt.Errorf("statsdb: scan user display name: %w", err)
+		}
+		name := customName
+		if name == "" {
+			name = strings.TrimSpace(firstName + " " + lastName)
+		}
+		if name == "" {
+			name = username
+		}
+		if name == "" {
+			name = fmt.Sprintf("User %d", id)
+		}
+		out[id] = name
+	}
+	return out, rows.Err()
+}
+
+// ListPeerOwners returns a map of peer_name → owner_user_id for all owned peers.
+func (s *Store) ListPeerOwners() (map[string]int64, error) {
+	rows, err := s.db.Query(`SELECT name, owner_user_id FROM wg_peers WHERE owner_user_id IS NOT NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list peer owners: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]int64)
+	for rows.Next() {
+		var name string
+		var ownerID int64
+		if err := rows.Scan(&name, &ownerID); err != nil {
+			return nil, fmt.Errorf("statsdb: scan peer owner: %w", err)
+		}
+		out[name] = ownerID
+	}
+	return out, rows.Err()
+}
+
+// ListSecretOwners returns a map of secret_hex → owner_user_id for all owned secrets.
+func (s *Store) ListSecretOwners() (map[string]int64, error) {
+	rows, err := s.db.Query(`SELECT secret_hex, owner_user_id FROM mtproxy_secrets WHERE owner_user_id IS NOT NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list secret owners: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]int64)
+	for rows.Next() {
+		var hex string
+		var ownerID int64
+		if err := rows.Scan(&hex, &ownerID); err != nil {
+			return nil, fmt.Errorf("statsdb: scan secret owner: %w", err)
+		}
+		out[hex] = ownerID
+	}
+	return out, rows.Err()
 }
 
 // IsAllowedUser checks if a user ID exists in the allowed_users table.
@@ -2067,6 +2238,109 @@ func (s *Store) ListSecretHexByOwner(ownerID int64) (map[string]struct{}, error)
 		out[hex] = struct{}{}
 	}
 	return out, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
+// Invite Links
+// ---------------------------------------------------------------------------
+
+// CreateInviteLink creates a new one-time invite link.
+func (s *Store) CreateInviteLink(token, role string, createdBy int64) error {
+	_, err := s.db.Exec(
+		`INSERT INTO invite_links (token, role, created_by) VALUES (?, ?, ?)`,
+		token, role, createdBy,
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: create invite link: %w", err)
+	}
+	return nil
+}
+
+// ListInviteLinks returns all invite links ordered by creation time.
+func (s *Store) ListInviteLinks() ([]InviteLink, error) {
+	rows, err := s.db.Query(
+		`SELECT token, role, created_by, created_unix FROM invite_links ORDER BY created_unix DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list invite links: %w", err)
+	}
+	defer rows.Close()
+
+	var out []InviteLink
+	for rows.Next() {
+		var l InviteLink
+		if err := rows.Scan(&l.Token, &l.Role, &l.CreatedBy, &l.CreatedAt); err != nil {
+			return nil, fmt.Errorf("statsdb: scan invite link: %w", err)
+		}
+		out = append(out, l)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("statsdb: iterate invite links: %w", err)
+	}
+	return out, nil
+}
+
+// UseInviteLink atomically retrieves and deletes an invite link. Returns the link and true if found.
+func (s *Store) UseInviteLink(token string) (*InviteLink, bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, false, fmt.Errorf("statsdb: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var l InviteLink
+	err = tx.QueryRow(
+		`SELECT token, role, created_by, created_unix FROM invite_links WHERE token = ?`, token,
+	).Scan(&l.Token, &l.Role, &l.CreatedBy, &l.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("statsdb: get invite link: %w", err)
+	}
+
+	if _, err := tx.Exec(`DELETE FROM invite_links WHERE token = ?`, token); err != nil {
+		return nil, false, fmt.Errorf("statsdb: delete invite link: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, false, fmt.Errorf("statsdb: commit: %w", err)
+	}
+	return &l, true, nil
+}
+
+// RedeemInvite atomically uses an invite token and adds the user as allowed.
+// Returns the granted role.
+func (s *Store) RedeemInvite(token string, userID int64, username, firstName, lastName string) (string, error) {
+	invite, found, err := s.UseInviteLink(token)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("invite not found or already used")
+	}
+
+	u := AllowedUser{
+		UserID:    userID,
+		Role:      invite.Role,
+		Username:  username,
+		FirstName: firstName,
+		LastName:  lastName,
+	}
+	if err := s.AddAllowedUser(u); err != nil {
+		return "", err
+	}
+
+	return invite.Role, nil
+}
+
+// DeleteInviteLink deletes an invite link by token.
+func (s *Store) DeleteInviteLink(token string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM invite_links WHERE token = ?`, token)
+	if err != nil {
+		return false, fmt.Errorf("statsdb: delete invite link: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // ---------------------------------------------------------------------------
