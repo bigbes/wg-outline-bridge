@@ -13,6 +13,7 @@
     --amnezia-purple: #9b59b6;
     --dns-cyan: #00bcd4;
     --mtproxy-blue: #0088cc;
+    --routing-teal: #009688;
     --admin-gold: #ffd700;
     --guest-gray: #8e8e93;
 }
@@ -122,6 +123,9 @@ body {
 .tab-item.mtproxy.active {
     color: var(--mtproxy-blue);
 }
+.tab-item.routing.active {
+    color: var(--routing-teal);
+}
 .tab-item svg {
     width: 24px;
     height: 24px;
@@ -174,6 +178,9 @@ body {
 }
 .bot-icon.mtproxy {
     background: linear-gradient(135deg, #0088cc, #00a8e8);
+}
+.bot-icon.routing {
+    background: linear-gradient(135deg, #009688, #26a69a);
 }
 .bot-title {
     font-size: 20px;
@@ -240,6 +247,9 @@ body {
 .list-item:active {
     background-color: var(--separator);
 }
+.list-item.disabled {
+    opacity: 0.45;
+}
 .list-item:not(:last-child)::after {
     content: "";
     position: absolute;
@@ -293,6 +303,18 @@ body {
 .item-icon.dns-rule {
     background-color: rgba(0, 188, 212, 0.15);
     color: var(--dns-cyan);
+}
+.item-icon.routing-cidr {
+    background-color: rgba(0, 150, 136, 0.15);
+    color: var(--routing-teal);
+}
+.item-icon.routing-ip-rule {
+    background-color: rgba(0, 150, 136, 0.15);
+    color: var(--routing-teal);
+}
+.item-icon.routing-sni-rule {
+    background-color: rgba(0, 150, 136, 0.15);
+    color: var(--routing-teal);
 }
 .item-icon.user {
     background-color: rgba(255, 215, 0, 0.15);
@@ -375,13 +397,13 @@ body {
     border: none;
     padding: 8px;
     cursor: pointer;
-    color: var(--text-secondary);
+    color: var(--destructive-red);
     display: flex;
     align-items: center;
     justify-content: center;
 }
 .delete-btn:active {
-    color: var(--destructive-red);
+    opacity: 0.6;
 }
 
 /* --- Action Button --- */
@@ -424,6 +446,9 @@ body {
 .action-icon-circle.mtproxy {
     background-color: var(--mtproxy-blue);
 }
+.action-icon-circle.routing {
+    background-color: var(--routing-teal);
+}
 .action-text {
     flex: 1;
     font-size: 17px;
@@ -443,6 +468,9 @@ body {
 }
 .action-text.mtproxy {
     color: var(--mtproxy-blue);
+}
+.action-text.routing {
+    color: var(--routing-teal);
 }
 
 /* --- Toggle Switch --- */
@@ -553,6 +581,9 @@ body {
 .modal-btn.done.mtproxy {
     color: var(--mtproxy-blue);
 }
+.modal-btn.done.routing {
+    color: var(--routing-teal);
+}
 .modal-title {
     font-size: 17px;
     font-weight: 600;
@@ -592,6 +623,13 @@ body {
 textarea.tg-input {
     min-height: 120px;
     resize: vertical;
+}
+textarea.tg-input.tg-textarea {
+    min-height: 60px;
+}
+.tg-input:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 select.tg-input {
     appearance: none;
@@ -956,6 +994,30 @@ select.tg-input {
 .qr-container img {
     border-radius: 12px;
     margin-bottom: 16px;
+}
+
+/* --- Drag Handle --- */
+.drag-handle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 32px;
+    cursor: grab;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+    margin-right: 4px;
+    touch-action: none;
+}
+.drag-handle:active {
+    cursor: grabbing;
+}
+.list-item.dragging {
+    opacity: 0.5;
+    background-color: var(--separator);
+}
+.list-item.drag-over {
+    border-top: 2px solid var(--routing-teal);
 }
 
 /* --- Empty State --- */

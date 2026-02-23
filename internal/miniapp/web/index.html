@@ -383,30 +383,6 @@
                         </div>
                     </div>
                 </div>
-                <div class="action-btn admin-only" onclick="openDNSRuleModal()">
-                    <div class="action-icon-circle dns">
-                        <svg
-                            width="20"
-                            height="20"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="3"
-                        >
-                            <line x1="12" y1="5" x2="12" y2="19" />
-                            <line x1="5" y1="12" x2="19" y2="12" />
-                        </svg>
-                    </div>
-                    <div class="action-text dns">Add DNS Rule</div>
-                    <svg class="chevron" viewBox="0 0 8 14">
-                        <path
-                            d="M1 1L7 7L1 13"
-                            stroke="currentColor"
-                            stroke-width="2"
-                            fill="none"
-                        />
-                    </svg>
-                </div>
                 <div
                     class="action-btn admin-only"
                     onclick="openDNSRecordModal()"
@@ -434,10 +410,80 @@
                         />
                     </svg>
                 </div>
+                <div class="action-btn admin-only" onclick="openDNSRuleModal()">
+                    <div class="action-icon-circle dns">
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                        >
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                    </div>
+                    <div class="action-text dns">Add DNS Rule</div>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
+                    </svg>
+                </div>
                 <h2 class="section-title">DNS Records</h2>
                 <div class="list-group" id="dns-record-list"></div>
                 <h2 class="section-title">DNS Rules</h2>
                 <div class="list-group" id="dns-rule-list"></div>
+            </div>
+
+            <!-- Page: Routing -->
+            <div class="page" id="page-routing">
+                <header class="header">
+                    <div class="bot-icon routing">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
+                            <path d="M22 12h-4l-3 9L9 3l-3 9H2" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <h1 class="bot-title">Routing</h1>
+                    <p class="bot-subtitle">IP & SNI routing rules</p>
+                </header>
+                <div class="action-btn admin-only" onclick="openRoutingCIDRModal()">
+                    <div class="action-icon-circle routing">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                            <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                    </div>
+                    <div class="action-text routing">Add CIDR</div>
+                    <svg class="chevron" viewBox="0 0 8 14"><path d="M1 1L7 7L1 13" stroke="currentColor" stroke-width="2" fill="none" /></svg>
+                </div>
+                <div class="action-btn admin-only" onclick="openIPRuleModal()">
+                    <div class="action-icon-circle routing">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                            <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                    </div>
+                    <div class="action-text routing">Add IP Rule</div>
+                    <svg class="chevron" viewBox="0 0 8 14"><path d="M1 1L7 7L1 13" stroke="currentColor" stroke-width="2" fill="none" /></svg>
+                </div>
+                <div class="action-btn admin-only" onclick="openSNIRuleModal()">
+                    <div class="action-icon-circle routing">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                            <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                    </div>
+                    <div class="action-text routing">Add SNI Rule</div>
+                    <svg class="chevron" viewBox="0 0 8 14"><path d="M1 1L7 7L1 13" stroke="currentColor" stroke-width="2" fill="none" /></svg>
+                </div>
+                <h2 class="section-title">CIDRs</h2>
+                <div class="list-group" id="routing-cidr-list"></div>
+                <h2 class="section-title">IP Rules</h2>
+                <div class="list-group" id="routing-ip-rule-list"></div>
+                <h2 class="section-title">SNI Rules</h2>
+                <div class="list-group" id="routing-sni-rule-list"></div>
             </div>
 
             <!-- Page: Users -->
@@ -672,6 +718,21 @@
                     <span>DNS</span>
                 </div>
                 <div
+                    class="tab-item routing"
+                    data-page="routing"
+                    onclick="switchTab('routing')"
+                >
+                    <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                    >
+                        <path d="M22 12h-4l-3 9L9 3l-3 9H2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <span>Routing</span>
+                </div>
+                <div
                     class="tab-item users"
                     data-page="users"
                     onclick="switchTab('users')"
@@ -811,6 +872,10 @@
                         placeholder="ss://..."
                     />
                 </div>
+                <div class="input-group">
+                    <label class="input-label">Groups (comma-separated)</label>
+                    <input type="text" class="tg-input" id="inp-upstream-groups" placeholder="group1, group2" />
+                </div>
                 <div class="toggle-row">
                     <div>
                         <div class="toggle-label">Default</div>
@@ -842,6 +907,56 @@
             </div>
         </div>
 
+        <!-- Upstream Edit Modal -->
+        <div class="modal-backdrop" id="upstream-edit-modal-backdrop" onclick="closeUpstreamEditModal()"></div>
+        <div class="modal-sheet" id="upstream-edit-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closeUpstreamEditModal()">Cancel</button>
+                <span class="modal-title">Edit Upstream</span>
+                <button class="modal-btn done upstream" onclick="saveUpstreamEdit()">Save</button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">Name</label>
+                    <div class="info-value" id="upstream-edit-name"></div>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Type</label>
+                    <div class="info-value" id="upstream-edit-type"></div>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Transport URI (leave empty to keep current)</label>
+                    <input type="text" class="tg-input" id="inp-upstream-edit-transport" placeholder="ss://... (leave empty to keep)" />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Groups (comma-separated)</label>
+                    <input type="text" class="tg-input" id="inp-upstream-edit-groups" placeholder="group1, group2" />
+                </div>
+                <div class="toggle-row">
+                    <div>
+                        <div class="toggle-label">Default</div>
+                        <div class="toggle-sublabel">Use as default upstream</div>
+                    </div>
+                    <div class="toggle-switch" id="inp-upstream-edit-default" onclick="toggleUpstreamEditDefault()">
+                        <div class="toggle-knob"></div>
+                    </div>
+                </div>
+                <div class="toggle-row">
+                    <div>
+                        <div class="toggle-label">Health Check</div>
+                        <div class="toggle-sublabel">Monitor availability</div>
+                    </div>
+                    <div class="toggle-switch" id="inp-upstream-edit-health" onclick="toggleUpstreamEditHealth()">
+                        <div class="toggle-knob"></div>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Status</label>
+                    <div class="peer-stats-row" id="upstream-edit-stats"></div>
+                </div>
+            </div>
+        </div>
+
         <!-- Group Modal -->
         <div
             class="modal-backdrop"
@@ -867,6 +982,26 @@
                         id="inp-group-name"
                         placeholder="my-group"
                     />
+                </div>
+            </div>
+        </div>
+
+        <!-- Group Edit Modal -->
+        <div class="modal-backdrop" id="group-edit-modal-backdrop" onclick="closeGroupEditModal()"></div>
+        <div class="modal-sheet" id="group-edit-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closeGroupEditModal()">Cancel</button>
+                <span class="modal-title" id="group-edit-modal-title">Edit Group</span>
+                <button class="modal-btn done upstream" onclick="saveGroupEdit()">Save</button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">Upstream Members</label>
+                    <div id="group-edit-members"></div>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Consumers</label>
+                    <div id="group-edit-consumers" class="info-value"></div>
                 </div>
             </div>
         </div>
@@ -1073,6 +1208,7 @@
                 <div class="input-group">
                     <label class="input-label">List Format</label
                     ><select class="tg-input" id="inp-dns-rule-list-format">
+                        <option value="auto">Auto</option>
                         <option value="domains">Domains</option>
                         <option value="hosts">Hosts file</option>
                     </select>
@@ -1262,6 +1398,99 @@
             </div>
         </div>
 
+        <!-- CIDR Edit Modal -->
+        <div class="modal-backdrop" id="cidr-edit-modal-backdrop" onclick="closeCIDREditModal()"></div>
+        <div class="modal-sheet" id="cidr-edit-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closeCIDREditModal()">Cancel</button>
+                <span class="modal-title" id="cidr-edit-modal-title">Edit CIDR</span>
+                <button class="modal-btn done routing" onclick="saveCIDREdit()">Done</button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">Mode</label>
+                    <select class="tg-input" id="inp-cidr-edit-mode">
+                        <option value="allow">Allow (include)</option>
+                        <option value="disallow">Exclude (bypass)</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">IP Range (CIDR)</label>
+                    <input type="text" class="tg-input" id="inp-cidr-edit-range" placeholder="10.0.0.0/8" />
+                </div>
+            </div>
+        </div>
+
+        <!-- IP Rule Modal -->
+        <div class="modal-backdrop" id="ip-rule-modal-backdrop" onclick="closeIPRuleModal()"></div>
+        <div class="modal-sheet" id="ip-rule-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closeIPRuleModal()">Cancel</button>
+                <span class="modal-title" id="ip-rule-modal-title">Add IP Rule</span>
+                <button class="modal-btn done routing" onclick="saveIPRule()">Done</button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">Rule Name</label>
+                    <input type="text" class="tg-input" id="inp-ip-rule-name" placeholder="ru-direct" />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Action</label>
+                    <select class="tg-input" id="inp-ip-rule-action" onchange="toggleIPRuleAction()">
+                        <option value="direct">Direct (bypass proxy)</option>
+                        <option value="upstream">Use Upstream Group</option>
+                    </select>
+                </div>
+                <div class="input-group" id="ip-rule-upstream-group" style="display:none">
+                    <label class="input-label">Upstream Group</label>
+                    <input type="text" class="tg-input" id="inp-ip-rule-upstream-group" placeholder="group-name" />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">CIDRs (comma-separated)</label>
+                    <textarea class="tg-input tg-textarea" id="inp-ip-rule-cidrs" placeholder="10.0.0.0/8, 192.168.0.0/16" rows="3"></textarea>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">ASNs (comma-separated, optional)</label>
+                    <input type="text" class="tg-input" id="inp-ip-rule-asns" placeholder="13335, 32934" />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">IP List URL (optional)</label>
+                    <input type="text" class="tg-input" id="inp-ip-rule-list-url" placeholder="https://example.com/iplist.txt" />
+                </div>
+            </div>
+        </div>
+
+        <!-- SNI Rule Modal -->
+        <div class="modal-backdrop" id="sni-rule-modal-backdrop" onclick="closeSNIRuleModal()"></div>
+        <div class="modal-sheet" id="sni-rule-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closeSNIRuleModal()">Cancel</button>
+                <span class="modal-title" id="sni-rule-modal-title">Add SNI Rule</span>
+                <button class="modal-btn done routing" onclick="saveSNIRule()">Done</button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">Rule Name</label>
+                    <input type="text" class="tg-input" id="inp-sni-rule-name" placeholder="ru-domains" />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Action</label>
+                    <select class="tg-input" id="inp-sni-rule-action" onchange="toggleSNIRuleAction()">
+                        <option value="direct">Direct (bypass proxy)</option>
+                        <option value="upstream">Use Upstream Group</option>
+                    </select>
+                </div>
+                <div class="input-group" id="sni-rule-upstream-group" style="display:none">
+                    <label class="input-label">Upstream Group</label>
+                    <select class="tg-input" id="inp-sni-rule-upstream-group"></select>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Domains (comma-separated)</label>
+                    <input type="text" class="tg-input" id="inp-sni-rule-domains" placeholder="*.example.com, site.org" />
+                </div>
+            </div>
+        </div>
+
         <!-- Config/QR Modal -->
         <div
             class="modal-backdrop"
@@ -1303,12 +1532,24 @@
         <!-- Toast -->
         <div class="toast" id="toast">
             <svg
+                id="toast-icon-success"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
                 stroke-width="2"
             >
                 <polyline points="20 6 9 17 4 12" />
+            </svg>
+            <svg
+                id="toast-icon-error"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                style="display:none"
+            >
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
             <span id="toast-message">Done</span>
         </div>

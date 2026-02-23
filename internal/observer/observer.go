@@ -127,6 +127,17 @@ type Manager interface {
 	SetDNSEnabled(enabled bool) error
 	AddDNSRule(r config.DNSRuleConfig) error
 	DeleteDNSRule(name string) error
+	AddRoutingCIDR(cidr string) error
+	DeleteRoutingCIDR(cidr string) error
+	AddIPRule(r config.IPRuleConfig) error
+	DeleteIPRule(name string) error
+	AddSNIRule(r config.SNIRuleConfig) error
+	DeleteSNIRule(name string) error
+	UpdateSNIRule(r config.SNIRuleConfig) error
+	ReorderRoutingCIDRs(cidrs []string) error
+	ReorderIPRules(names []string) error
+	UpdateRoutingCIDR(oldCIDR, newCIDR string) error
+	UpdateIPRule(r config.IPRuleConfig) error
 	CreateGroup(name string) error
 	DeleteGroup(name string) error
 }
@@ -182,6 +193,12 @@ func (o *Observer) registerCommands(ctx context.Context) {
 		{Command: "addproxy", Description: "Add a proxy server (socks5/http/https)"},
 		{Command: "delproxy", Description: "Delete a proxy server"},
 		{Command: "listproxy", Description: "List proxy servers and connection links"},
+		{Command: "addupstream", Description: "Add an upstream endpoint"},
+		{Command: "delupstream", Description: "Delete an upstream endpoint"},
+		{Command: "listupstream", Description: "List upstream endpoints and status"},
+		{Command: "addgroup", Description: "Create an upstream group"},
+		{Command: "delgroup", Description: "Delete an upstream group"},
+		{Command: "listgroup", Description: "List upstream groups"},
 		{Command: "help", Description: "Show available commands"},
 	}
 	if err := o.bot.SetMyCommands(ctx, commands); err != nil {
@@ -388,6 +405,57 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 	case "/listproxy":
 		reply = o.handleListProxy()
 		html = true
+	case "/addupstream":
+		if !o.isAdmin(msg.From.ID) {
+			reply = "⛔ Admin access required"
+		} else if o.manager == nil {
+			reply = "⚠️ Management not available (database not configured)"
+		} else if args == "" {
+			reply = "Usage: /addupstream &lt;name&gt; &lt;transport&gt; [group1,group2,...] [default]\n\nExamples:\n/addupstream my-server ss://...\n/addupstream my-server ss://... eu,fast\n/addupstream my-server ss://... eu default"
+			html = true
+		} else {
+			reply = o.handleAddUpstream(args)
+			html = true
+		}
+	case "/delupstream":
+		if !o.isAdmin(msg.From.ID) {
+			reply = "⛔ Admin access required"
+		} else if o.manager == nil {
+			reply = "⚠️ Management not available (database not configured)"
+		} else if args == "" {
+			reply = "Usage: /delupstream &lt;name&gt;"
+			html = true
+		} else {
+			reply = o.handleDelUpstream(args)
+		}
+	case "/listupstream":
+		reply = o.handleListUpstream()
+		html = true
+	case "/addgroup":
+		if !o.isAdmin(msg.From.ID) {
+			reply = "⛔ Admin access required"
+		} else if o.manager == nil {
+			reply = "⚠️ Management not available (database not configured)"
+		} else if args == "" {
+			reply = "Usage: /addgroup &lt;name&gt;"
+			html = true
+		} else {
+			reply = o.handleAddGroup(args)
+		}
+	case "/delgroup":
+		if !o.isAdmin(msg.From.ID) {
+			reply = "⛔ Admin access required"
+		} else if o.manager == nil {
+			reply = "⚠️ Management not available (database not configured)"
+		} else if args == "" {
+			reply = "Usage: /delgroup &lt;name&gt;"
+			html = true
+		} else {
+			reply = o.handleDelGroup(args)
+		}
+	case "/listgroup":
+		reply = o.handleListGroup()
+		html = true
 	case "/help", "/start":
 		reply = "Available commands:\n" +
 			"/status — show peer status, traffic, and connections\n" +
@@ -401,6 +469,12 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 			"/addproxy <type> <listen> [name] [outline] [user:pass] — add a proxy server\n" +
 			"/delproxy <name> — delete a proxy server\n" +
 			"/listproxy — list proxy servers and connection links\n" +
+			"/addupstream <name> <transport> [groups] [default] — add an upstream\n" +
+			"/delupstream <name> — delete an upstream\n" +
+			"/listupstream — list upstreams and their status\n" +
+			"/addgroup <name> — create an upstream group\n" +
+			"/delgroup <name> — delete an upstream group\n" +
+			"/listgroup — list upstream groups\n" +
 			"/help — show this message"
 	default:
 		return
@@ -873,6 +947,141 @@ func (o *Observer) handleListProxy() string {
 
 		if p.UpstreamGroup != "" && p.UpstreamGroup != "default" {
 			fmt.Fprintf(&b, "  Upstream: %s\n", p.UpstreamGroup)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (o *Observer) handleAddUpstream(args string) string {
+	parts := strings.Fields(args)
+	if len(parts) < 2 {
+		return "Usage: /addupstream &lt;name&gt; &lt;transport&gt; [group1,group2,...] [default]"
+	}
+
+	u := config.UpstreamConfig{
+		Name:      parts[0],
+		Type:      "outline",
+		Transport: parts[1],
+	}
+
+	if len(parts) >= 3 && parts[2] != "default" {
+		u.Groups = strings.Split(parts[2], ",")
+	}
+
+	for _, p := range parts[2:] {
+		if p == "default" {
+			u.Default = true
+			break
+		}
+	}
+
+	if err := o.manager.AddUpstream(u); err != nil {
+		return fmt.Sprintf("❌ Failed to add upstream: %s", err)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "✅ Upstream <code>%s</code> added\n\n", u.Name)
+	fmt.Fprintf(&b, "Type: %s\n", u.Type)
+	fmt.Fprintf(&b, "Transport: <code>%s</code>\n", config.RedactTransport(u.Transport))
+	if len(u.Groups) > 0 {
+		fmt.Fprintf(&b, "Groups: %s\n", strings.Join(u.Groups, ", "))
+	}
+	if u.Default {
+		b.WriteString("Default: yes\n")
+	}
+	return b.String()
+}
+
+func (o *Observer) handleDelUpstream(name string) string {
+	if err := o.manager.DeleteUpstream(name); err != nil {
+		return fmt.Sprintf("❌ Failed to delete upstream: %s", err)
+	}
+	return fmt.Sprintf("✅ Upstream %q deleted", name)
+}
+
+func (o *Observer) handleListUpstream() string {
+	upstreams := o.provider.UpstreamStatuses()
+	if len(upstreams) == 0 {
+		return "No upstreams configured"
+	}
+
+	var b strings.Builder
+	b.WriteString("🔗 Upstreams:\n\n")
+	for _, u := range upstreams {
+		state := "🟢"
+		switch u.State {
+		case "degraded":
+			state = "🟡"
+		case "disabled":
+			state = "🔴"
+		}
+
+		fmt.Fprintf(&b, "%s <b>%s</b> (%s)\n", state, u.Name, u.Type)
+		if !u.Enabled {
+			b.WriteString("  Enabled: no\n")
+		}
+		if u.Default {
+			b.WriteString("  Default: yes\n")
+		}
+		if len(u.Groups) > 0 {
+			fmt.Fprintf(&b, "  Groups: %s\n", strings.Join(u.Groups, ", "))
+		}
+		if u.ActiveConnections > 0 {
+			fmt.Fprintf(&b, "  Active: %d\n", u.ActiveConnections)
+		}
+		if u.RxBytes > 0 || u.TxBytes > 0 {
+			fmt.Fprintf(&b, "  Traffic: ↓%s ↑%s\n", formatBytes(u.RxBytes), formatBytes(u.TxBytes))
+		}
+		if u.LastError != "" {
+			fmt.Fprintf(&b, "  Error: %s\n", u.LastError)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (o *Observer) handleAddGroup(name string) string {
+	if err := o.manager.CreateGroup(name); err != nil {
+		return fmt.Sprintf("❌ Failed to create group: %s", err)
+	}
+	return fmt.Sprintf("✅ Group %q created", name)
+}
+
+func (o *Observer) handleDelGroup(name string) string {
+	if err := o.manager.DeleteGroup(name); err != nil {
+		return fmt.Sprintf("❌ Failed to delete group: %s", err)
+	}
+	return fmt.Sprintf("✅ Group %q deleted", name)
+}
+
+func (o *Observer) handleListGroup() string {
+	upstreams := o.provider.UpstreamStatuses()
+
+	groups := make(map[string][]string)
+	for _, u := range upstreams {
+		for _, g := range u.Groups {
+			groups[g] = append(groups[g], u.Name)
+		}
+	}
+
+	if len(groups) == 0 {
+		return "No upstream groups configured"
+	}
+
+	names := make([]string, 0, len(groups))
+	for name := range groups {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var b strings.Builder
+	b.WriteString("📦 Upstream Groups:\n\n")
+	for _, name := range names {
+		members := groups[name]
+		fmt.Fprintf(&b, "• <b>%s</b> (%d members)\n", name, len(members))
+		for _, m := range members {
+			fmt.Fprintf(&b, "  - %s\n", m)
 		}
 		b.WriteString("\n")
 	}

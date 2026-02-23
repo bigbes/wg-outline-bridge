@@ -215,6 +215,57 @@ func (b *Bridge) Run(ctx context.Context) error {
 			b.cfg.DNS.Rules = dbDNSRules
 		}
 
+		// Seed config-file routing CIDRs into DB, then use DB as source of truth.
+		if len(b.cfg.Routing.CIDRs) > 0 {
+			imported, err := store.ImportRoutingCIDRs(b.cfg.Routing.CIDRs)
+			if err != nil {
+				b.logger.Error("failed to import routing cidrs to database", "err", err)
+			} else if imported > 0 {
+				b.logger.Info("imported file routing cidrs to database", "count", imported)
+			}
+		}
+		dbCIDRs, err := store.ListRoutingCIDRs()
+		if err != nil {
+			b.logger.Error("failed to list db routing cidrs", "err", err)
+		}
+		if len(dbCIDRs) > 0 {
+			b.cfg.Routing.CIDRs = dbCIDRs
+		}
+
+		// Seed config-file IP rules into DB, then use DB as source of truth.
+		if len(b.cfg.Routing.IPRules) > 0 {
+			imported, err := store.ImportIPRules(b.cfg.Routing.IPRules)
+			if err != nil {
+				b.logger.Error("failed to import ip rules to database", "err", err)
+			} else if imported > 0 {
+				b.logger.Info("imported file ip rules to database", "count", imported)
+			}
+		}
+		dbIPRules, err := store.ListIPRules()
+		if err != nil {
+			b.logger.Error("failed to list db ip rules", "err", err)
+		}
+		if len(dbIPRules) > 0 {
+			b.cfg.Routing.IPRules = dbIPRules
+		}
+
+		// Seed config-file SNI rules into DB, then use DB as source of truth.
+		if len(b.cfg.Routing.SNIRules) > 0 {
+			imported, err := store.ImportSNIRules(b.cfg.Routing.SNIRules)
+			if err != nil {
+				b.logger.Error("failed to import sni rules to database", "err", err)
+			} else if imported > 0 {
+				b.logger.Info("imported file sni rules to database", "count", imported)
+			}
+		}
+		dbSNIRules, err := store.ListSNIRules()
+		if err != nil {
+			b.logger.Error("failed to list db sni rules", "err", err)
+		}
+		if len(dbSNIRules) > 0 {
+			b.cfg.Routing.SNIRules = dbSNIRules
+		}
+
 		// Load persisted DNS enabled state from DB (overrides config file).
 		if dnsEnabled, ok := store.GetDNSEnabled(); ok {
 			b.cfg.DNS.Enabled = dnsEnabled
@@ -1797,7 +1848,7 @@ func buildDNSRules(cfg config.DNSConfig, logger *slog.Logger) []dns.Rule {
 				}
 				format := l.Format
 				if format == "" {
-					format = "domains"
+					format = "auto"
 				}
 				lists = append(lists, dns.ListEntry{
 					URL:     l.URL,
@@ -1810,6 +1861,274 @@ func buildDNSRules(cfg config.DNSConfig, logger *slog.Logger) []dns.Rule {
 		rules = append(rules, rule)
 	}
 	return rules
+}
+
+func (b *Bridge) AddRoutingCIDR(cidr string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	for _, existing := range b.cfg.Routing.CIDRs {
+		if existing == cidr {
+			return fmt.Errorf("routing cidr %q already exists", cidr)
+		}
+	}
+
+	if err := b.statsStore.AddRoutingCIDR(cidr); err != nil {
+		return fmt.Errorf("saving routing cidr: %w", err)
+	}
+
+	b.cfg.Routing.CIDRs = append(b.cfg.Routing.CIDRs, cidr)
+	b.logger.Info("routing cidr added", "cidr", cidr)
+	return nil
+}
+
+func (b *Bridge) DeleteRoutingCIDR(cidr string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	found, err := b.statsStore.DeleteRoutingCIDR(cidr)
+	if err != nil {
+		return fmt.Errorf("deleting routing cidr: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("routing cidr %q not found", cidr)
+	}
+
+	cidrs := make([]string, 0, len(b.cfg.Routing.CIDRs))
+	for _, c := range b.cfg.Routing.CIDRs {
+		if c != cidr {
+			cidrs = append(cidrs, c)
+		}
+	}
+	b.cfg.Routing.CIDRs = cidrs
+
+	b.logger.Info("routing cidr deleted", "cidr", cidr)
+	return nil
+}
+
+func (b *Bridge) AddIPRule(r config.IPRuleConfig) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	for _, existing := range b.cfg.Routing.IPRules {
+		if existing.Name == r.Name {
+			return fmt.Errorf("ip rule %q already exists", r.Name)
+		}
+	}
+
+	if err := b.statsStore.AddIPRule(r); err != nil {
+		return fmt.Errorf("saving ip rule: %w", err)
+	}
+
+	b.cfg.Routing.IPRules = append(b.cfg.Routing.IPRules, r)
+	b.logger.Info("ip rule added", "name", r.Name, "action", r.Action)
+	return nil
+}
+
+func (b *Bridge) DeleteIPRule(name string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	found, err := b.statsStore.DeleteIPRule(name)
+	if err != nil {
+		return fmt.Errorf("deleting ip rule: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("ip rule %q not found", name)
+	}
+
+	rules := make([]config.IPRuleConfig, 0, len(b.cfg.Routing.IPRules))
+	for _, r := range b.cfg.Routing.IPRules {
+		if r.Name != name {
+			rules = append(rules, r)
+		}
+	}
+	b.cfg.Routing.IPRules = rules
+
+	b.logger.Info("ip rule deleted", "name", name)
+	return nil
+}
+
+func (b *Bridge) AddSNIRule(r config.SNIRuleConfig) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	for _, existing := range b.cfg.Routing.SNIRules {
+		if existing.Name == r.Name {
+			return fmt.Errorf("sni rule %q already exists", r.Name)
+		}
+	}
+
+	if err := b.statsStore.AddSNIRule(r); err != nil {
+		return fmt.Errorf("saving sni rule: %w", err)
+	}
+
+	b.cfg.Routing.SNIRules = append(b.cfg.Routing.SNIRules, r)
+	b.logger.Info("sni rule added", "name", r.Name, "action", r.Action)
+	return nil
+}
+
+func (b *Bridge) DeleteSNIRule(name string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	found, err := b.statsStore.DeleteSNIRule(name)
+	if err != nil {
+		return fmt.Errorf("deleting sni rule: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("sni rule %q not found", name)
+	}
+
+	rules := make([]config.SNIRuleConfig, 0, len(b.cfg.Routing.SNIRules))
+	for _, r := range b.cfg.Routing.SNIRules {
+		if r.Name != name {
+			rules = append(rules, r)
+		}
+	}
+	b.cfg.Routing.SNIRules = rules
+
+	b.logger.Info("sni rule deleted", "name", name)
+	return nil
+}
+
+func (b *Bridge) UpdateSNIRule(r config.SNIRuleConfig) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	if err := b.statsStore.UpdateSNIRule(r); err != nil {
+		return fmt.Errorf("updating sni rule: %w", err)
+	}
+
+	for i, existing := range b.cfg.Routing.SNIRules {
+		if existing.Name == r.Name {
+			b.cfg.Routing.SNIRules[i] = r
+			break
+		}
+	}
+
+	b.logger.Info("sni rule updated", "name", r.Name)
+	return nil
+}
+
+func (b *Bridge) ReorderRoutingCIDRs(cidrs []string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	if err := b.statsStore.ReorderRoutingCIDRs(cidrs); err != nil {
+		return fmt.Errorf("reordering routing cidrs: %w", err)
+	}
+
+	b.cfg.Routing.CIDRs = cidrs
+	b.logger.Info("routing cidrs reordered")
+	return nil
+}
+
+func (b *Bridge) ReorderIPRules(names []string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	if err := b.statsStore.ReorderIPRules(names); err != nil {
+		return fmt.Errorf("reordering ip rules: %w", err)
+	}
+
+	// Rebuild the in-memory slice in the new order.
+	ruleMap := make(map[string]config.IPRuleConfig, len(b.cfg.Routing.IPRules))
+	for _, r := range b.cfg.Routing.IPRules {
+		ruleMap[r.Name] = r
+	}
+	reordered := make([]config.IPRuleConfig, 0, len(names))
+	for _, name := range names {
+		if r, ok := ruleMap[name]; ok {
+			reordered = append(reordered, r)
+		}
+	}
+	b.cfg.Routing.IPRules = reordered
+
+	b.logger.Info("ip rules reordered")
+	return nil
+}
+
+func (b *Bridge) UpdateRoutingCIDR(oldCIDR, newCIDR string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	if err := b.statsStore.UpdateRoutingCIDR(oldCIDR, newCIDR); err != nil {
+		return fmt.Errorf("updating routing cidr: %w", err)
+	}
+
+	for i, c := range b.cfg.Routing.CIDRs {
+		if c == oldCIDR {
+			b.cfg.Routing.CIDRs[i] = newCIDR
+			break
+		}
+	}
+
+	b.logger.Info("routing cidr updated", "old", oldCIDR, "new", newCIDR)
+	return nil
+}
+
+func (b *Bridge) UpdateIPRule(r config.IPRuleConfig) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	if err := b.statsStore.UpdateIPRule(r); err != nil {
+		return fmt.Errorf("updating ip rule: %w", err)
+	}
+
+	for i, existing := range b.cfg.Routing.IPRules {
+		if existing.Name == r.Name {
+			b.cfg.Routing.IPRules[i] = r
+			break
+		}
+	}
+
+	b.logger.Info("ip rule updated", "name", r.Name)
+	return nil
 }
 
 func buildDNSRecords(cfg config.DNSConfig) map[string]dns.Record {

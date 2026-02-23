@@ -179,10 +179,8 @@ func (m *Manager) setEntryState(e *entry, newState State, errMsg string) {
 
 func (m *Manager) rebuildGroups() {
 	newGroups := make(map[string]*GroupSelector)
-	allGroup := &GroupSelector{}
 
 	for _, e := range m.entries {
-		allGroup.members = append(allGroup.members, e)
 		for _, group := range e.spec.EffectiveGroups() {
 			gs, ok := newGroups[group]
 			if !ok {
@@ -193,7 +191,6 @@ func (m *Manager) rebuildGroups() {
 		}
 	}
 
-	newGroups["all"] = allGroup
 	m.groups = newGroups
 }
 

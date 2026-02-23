@@ -1146,7 +1146,7 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.manager.CreateGroup(req.Name); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -1694,7 +1694,7 @@ func (s *Server) handleAddDNSRule(w http.ResponseWriter, r *http.Request) {
 	for _, l := range req.Lists {
 		format := l.Format
 		if format == "" {
-			format = "domains"
+			format = "auto"
 		}
 		rule.Lists = append(rule.Lists, config.DNSListConfig{
 			URL:     l.URL,
@@ -1724,6 +1724,499 @@ func (s *Server) handleDeleteDNSRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.manager.DeleteDNSRule(name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// --- Routing API ---
+
+type routingResponse struct {
+	CIDRs    []string        `json:"cidrs"`
+	IPRules  []ipRuleInfo    `json:"ip_rules"`
+	SNIRules []sniRuleInfo   `json:"sni_rules"`
+}
+
+type ipRuleInfo struct {
+	Name          string           `json:"name"`
+	Action        string           `json:"action"`
+	UpstreamGroup string           `json:"upstream_group,omitempty"`
+	CIDRs         []string         `json:"cidrs"`
+	ASNs          []int            `json:"asns"`
+	Lists         []ipListInfo     `json:"lists"`
+}
+
+type ipListInfo struct {
+	URL     string `json:"url"`
+	Refresh int    `json:"refresh"`
+}
+
+type sniRuleInfo struct {
+	Name          string   `json:"name"`
+	Action        string   `json:"action"`
+	UpstreamGroup string   `json:"upstream_group,omitempty"`
+	Domains       []string `json:"domains"`
+}
+
+func (s *Server) handleRoutingRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.handleRouting(w, r)
+}
+
+func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
+	cfg := s.cfgProv.CurrentConfig()
+	routing := cfg.Routing
+
+	resp := routingResponse{
+		CIDRs: routing.CIDRs,
+	}
+	if resp.CIDRs == nil {
+		resp.CIDRs = []string{}
+	}
+
+	for _, rule := range routing.IPRules {
+		ri := ipRuleInfo{
+			Name:          rule.Name,
+			Action:        rule.Action,
+			UpstreamGroup: rule.UpstreamGroup,
+			CIDRs:         rule.CIDRs,
+			ASNs:          rule.ASNs,
+		}
+		if ri.CIDRs == nil {
+			ri.CIDRs = []string{}
+		}
+		if ri.ASNs == nil {
+			ri.ASNs = []int{}
+		}
+		for _, l := range rule.Lists {
+			ri.Lists = append(ri.Lists, ipListInfo{
+				URL:     l.URL,
+				Refresh: l.Refresh,
+			})
+		}
+		if ri.Lists == nil {
+			ri.Lists = []ipListInfo{}
+		}
+		resp.IPRules = append(resp.IPRules, ri)
+	}
+	if resp.IPRules == nil {
+		resp.IPRules = []ipRuleInfo{}
+	}
+
+	for _, rule := range routing.SNIRules {
+		ri := sniRuleInfo{
+			Name:          rule.Name,
+			Action:        rule.Action,
+			UpstreamGroup: rule.UpstreamGroup,
+			Domains:       rule.Domains,
+		}
+		if ri.Domains == nil {
+			ri.Domains = []string{}
+		}
+		resp.SNIRules = append(resp.SNIRules, ri)
+	}
+	if resp.SNIRules == nil {
+		resp.SNIRules = []sniRuleInfo{}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleRoutingCIDRsItem(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodDelete:
+		s.handleDeleteRoutingCIDR(w, r)
+	case http.MethodPut:
+		s.handleUpdateRoutingCIDR(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleIPRulesItem(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodDelete:
+		s.handleDeleteIPRule(w, r)
+	case http.MethodPut:
+		s.handleUpdateIPRule(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleUpdateRoutingCIDR(w http.ResponseWriter, r *http.Request) {
+	oldCIDR := strings.TrimPrefix(r.URL.Path, "/api/routing/cidrs/")
+	if oldCIDR == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cidr is required"})
+		return
+	}
+
+	var req struct {
+		CIDR string `json:"cidr"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.CIDR == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "new cidr is required"})
+		return
+	}
+
+	if err := s.manager.UpdateRoutingCIDR(oldCIDR, req.CIDR); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleUpdateIPRule(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/routing/ip-rules/")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule name is required"})
+		return
+	}
+
+	var req struct {
+		Action        string `json:"action"`
+		UpstreamGroup string `json:"upstream_group"`
+		CIDRs         []string `json:"cidrs"`
+		ASNs          []int    `json:"asns"`
+		Lists         []struct {
+			URL     string `json:"url"`
+			Refresh int    `json:"refresh"`
+		} `json:"lists"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.Action != "direct" && req.Action != "upstream" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action must be 'direct' or 'upstream'"})
+		return
+	}
+	if req.Action == "upstream" && req.UpstreamGroup == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "upstream_group is required for upstream action"})
+		return
+	}
+
+	rule := config.IPRuleConfig{
+		Name:          name,
+		Action:        req.Action,
+		UpstreamGroup: req.UpstreamGroup,
+		CIDRs:         req.CIDRs,
+		ASNs:          req.ASNs,
+	}
+	for _, l := range req.Lists {
+		rule.Lists = append(rule.Lists, config.IPListConfig{
+			URL:     l.URL,
+			Refresh: l.Refresh,
+		})
+	}
+
+	if err := s.manager.UpdateIPRule(rule); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleAddRoutingCIDR(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		CIDR string `json:"cidr"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.CIDR == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cidr is required"})
+		return
+	}
+
+	if err := s.manager.AddRoutingCIDR(req.CIDR); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"cidr": req.CIDR, "status": "ok"})
+}
+
+func (s *Server) handleDeleteRoutingCIDR(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cidr := strings.TrimPrefix(r.URL.Path, "/api/routing/cidrs/")
+	if cidr == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cidr is required"})
+		return
+	}
+
+	if err := s.manager.DeleteRoutingCIDR(cidr); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleAddIPRule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Name          string `json:"name"`
+		Action        string `json:"action"`
+		UpstreamGroup string `json:"upstream_group"`
+		CIDRs         []string `json:"cidrs"`
+		ASNs          []int    `json:"asns"`
+		Lists         []struct {
+			URL     string `json:"url"`
+			Refresh int    `json:"refresh"`
+		} `json:"lists"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
+	if req.Action != "direct" && req.Action != "upstream" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action must be 'direct' or 'upstream'"})
+		return
+	}
+	if req.Action == "upstream" && req.UpstreamGroup == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "upstream_group is required for upstream action"})
+		return
+	}
+	if len(req.CIDRs) == 0 && len(req.Lists) == 0 && len(req.ASNs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one CIDR, ASN, or list is required"})
+		return
+	}
+
+	rule := config.IPRuleConfig{
+		Name:          req.Name,
+		Action:        req.Action,
+		UpstreamGroup: req.UpstreamGroup,
+		CIDRs:         req.CIDRs,
+		ASNs:          req.ASNs,
+	}
+	for _, l := range req.Lists {
+		rule.Lists = append(rule.Lists, config.IPListConfig{
+			URL:     l.URL,
+			Refresh: l.Refresh,
+		})
+	}
+
+	if err := s.manager.AddIPRule(rule); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"name": req.Name, "status": "ok"})
+}
+
+func (s *Server) handleDeleteIPRule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	name := strings.TrimPrefix(r.URL.Path, "/api/routing/ip-rules/")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule name is required"})
+		return
+	}
+
+	if err := s.manager.DeleteIPRule(name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleAddSNIRule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Name          string   `json:"name"`
+		Action        string   `json:"action"`
+		UpstreamGroup string   `json:"upstream_group"`
+		Domains       []string `json:"domains"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
+	if req.Action != "direct" && req.Action != "upstream" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action must be 'direct' or 'upstream'"})
+		return
+	}
+	if req.Action == "upstream" && req.UpstreamGroup == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "upstream_group is required for upstream action"})
+		return
+	}
+	if len(req.Domains) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one domain is required"})
+		return
+	}
+
+	rule := config.SNIRuleConfig{
+		Name:          req.Name,
+		Action:        req.Action,
+		UpstreamGroup: req.UpstreamGroup,
+		Domains:       req.Domains,
+	}
+
+	if err := s.manager.AddSNIRule(rule); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"name": req.Name, "status": "ok"})
+}
+
+func (s *Server) handleSNIRulesItem(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodDelete:
+		s.handleDeleteSNIRule(w, r)
+	case http.MethodPut:
+		s.handleUpdateSNIRule(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleDeleteSNIRule(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/routing/sni-rules/")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule name is required"})
+		return
+	}
+
+	if err := s.manager.DeleteSNIRule(name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleUpdateSNIRule(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/routing/sni-rules/")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule name is required"})
+		return
+	}
+
+	var req struct {
+		Action        string   `json:"action"`
+		UpstreamGroup string   `json:"upstream_group"`
+		Domains       []string `json:"domains"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.Action != "direct" && req.Action != "upstream" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action must be 'direct' or 'upstream'"})
+		return
+	}
+	if req.Action == "upstream" && req.UpstreamGroup == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "upstream_group is required for upstream action"})
+		return
+	}
+	if len(req.Domains) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one domain is required"})
+		return
+	}
+
+	rule := config.SNIRuleConfig{
+		Name:          name,
+		Action:        req.Action,
+		UpstreamGroup: req.UpstreamGroup,
+		Domains:       req.Domains,
+	}
+
+	if err := s.manager.UpdateSNIRule(rule); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleReorderRoutingCIDRs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		CIDRs []string `json:"cidrs"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if len(req.CIDRs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cidrs list is required"})
+		return
+	}
+
+	if err := s.manager.ReorderRoutingCIDRs(req.CIDRs); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleReorderIPRules(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Names []string `json:"names"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if len(req.Names) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "names list is required"})
+		return
+	}
+
+	if err := s.manager.ReorderIPRules(req.Names); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -13,7 +14,7 @@ import (
 
 type ListEntry struct {
 	URL       string
-	Format    string // "hosts" or "domains"
+	Format    string // "hosts", "domains", or "auto" (default: auto-detect)
 	Refresh   time.Duration
 	lastFetch time.Time
 }
@@ -129,6 +130,7 @@ func (bl *BlocklistLoader) fetchList(ctx context.Context, url, format string) ([
 	}
 
 	var domains []string
+	detected := format
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -136,8 +138,14 @@ func (bl *BlocklistLoader) fetchList(ctx context.Context, url, format string) ([
 			continue
 		}
 
+		// Auto-detect format from the first meaningful line.
+		if detected == "" || detected == "auto" {
+			detected = detectBlocklistFormat(line)
+			bl.logger.Debug("dns: auto-detected blocklist format", "url", url, "format", detected)
+		}
+
 		var domain string
-		if format == "hosts" {
+		if detected == "hosts" {
 			// Hosts format: "0.0.0.0 domain.com" or "127.0.0.1 domain.com"
 			fields := strings.Fields(line)
 			if len(fields) < 2 {
@@ -166,4 +174,16 @@ func (bl *BlocklistLoader) fetchList(ctx context.Context, url, format string) ([
 	}
 
 	return domains, nil
+}
+
+// detectBlocklistFormat guesses the format from the first non-comment line.
+// If the first field is an IP address (e.g. 0.0.0.0, 127.0.0.1, ::1), it's a hosts file.
+func detectBlocklistFormat(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) >= 2 {
+		if _, err := netip.ParseAddr(fields[0]); err == nil {
+			return "hosts"
+		}
+	}
+	return "domains"
 }

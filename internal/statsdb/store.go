@@ -160,6 +160,34 @@ CREATE TABLE IF NOT EXISTS dns_rules (
   priority INTEGER NOT NULL DEFAULT 0,
   created_unix INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_unix INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE TABLE IF NOT EXISTS routing_cidrs (
+  cidr TEXT PRIMARY KEY,
+  priority INTEGER NOT NULL DEFAULT 0,
+  created_unix INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE TABLE IF NOT EXISTS routing_ip_rules (
+  name TEXT PRIMARY KEY,
+  action TEXT NOT NULL,
+  upstream_group TEXT NOT NULL DEFAULT '',
+  cidrs_json TEXT NOT NULL DEFAULT '[]',
+  asns_json TEXT NOT NULL DEFAULT '[]',
+  lists_json TEXT NOT NULL DEFAULT '[]',
+  priority INTEGER NOT NULL DEFAULT 0,
+  created_unix INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_unix INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE TABLE IF NOT EXISTS routing_sni_rules (
+  name TEXT PRIMARY KEY,
+  action TEXT NOT NULL,
+  upstream_group TEXT NOT NULL DEFAULT '',
+  domains_json TEXT NOT NULL DEFAULT '[]',
+  priority INTEGER NOT NULL DEFAULT 0,
+  created_unix INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_unix INTEGER NOT NULL DEFAULT (unixepoch())
 );`
 	if _, err := s.db.Exec(ddl); err != nil {
 		return fmt.Errorf("statsdb: init schema: %w", err)
@@ -1489,6 +1517,442 @@ func (s *Store) ImportDNSRules(rules []config.DNSRuleConfig) (int, error) {
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("statsdb: commit import dns rules: %w", err)
+	}
+	return count, nil
+}
+
+// ---------------------------------------------------------------------------
+// Routing CIDRs
+// ---------------------------------------------------------------------------
+
+// ListRoutingCIDRs returns all routing CIDRs ordered by priority.
+func (s *Store) ListRoutingCIDRs() ([]string, error) {
+	rows, err := s.db.Query(`SELECT cidr FROM routing_cidrs ORDER BY priority ASC, created_unix ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list routing cidrs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var cidr string
+		if err := rows.Scan(&cidr); err != nil {
+			return nil, fmt.Errorf("statsdb: scan routing cidr: %w", err)
+		}
+		out = append(out, cidr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("statsdb: iterate routing cidrs: %w", err)
+	}
+	return out, nil
+}
+
+// AddRoutingCIDR inserts a routing CIDR with the next available priority.
+func (s *Store) AddRoutingCIDR(cidr string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO routing_cidrs (cidr, priority)
+		 VALUES (?, COALESCE((SELECT MAX(priority) FROM routing_cidrs), -1) + 1)`,
+		cidr,
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: add routing cidr %q: %w", cidr, err)
+	}
+	return nil
+}
+
+// DeleteRoutingCIDR deletes a routing CIDR by value.
+func (s *Store) DeleteRoutingCIDR(cidr string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM routing_cidrs WHERE cidr = ?`, cidr)
+	if err != nil {
+		return false, fmt.Errorf("statsdb: delete routing cidr %q: %w", cidr, err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ImportRoutingCIDRs inserts routing CIDRs from a list, skipping those that already exist.
+func (s *Store) ImportRoutingCIDRs(cidrs []string) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var maxPriority int
+	err = tx.QueryRow(`SELECT COALESCE(MAX(priority), -1) FROM routing_cidrs`).Scan(&maxPriority)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: get max priority: %w", err)
+	}
+
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO routing_cidrs (cidr, priority) VALUES (?, ?)`)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: prepare import routing cidrs: %w", err)
+	}
+	defer stmt.Close()
+
+	var count int
+	for _, cidr := range cidrs {
+		maxPriority++
+		res, err := stmt.Exec(cidr, maxPriority)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: import routing cidr %q: %w", cidr, err)
+		}
+		n, _ := res.RowsAffected()
+		count += int(n)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("statsdb: commit import routing cidrs: %w", err)
+	}
+	return count, nil
+}
+
+// ReorderRoutingCIDRs updates priority values so CIDRs appear in the given order.
+func (s *Store) ReorderRoutingCIDRs(cidrs []string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("statsdb: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`UPDATE routing_cidrs SET priority = ? WHERE cidr = ?`)
+	if err != nil {
+		return fmt.Errorf("statsdb: prepare reorder routing cidrs: %w", err)
+	}
+	defer stmt.Close()
+
+	for i, cidr := range cidrs {
+		if _, err := stmt.Exec(i, cidr); err != nil {
+			return fmt.Errorf("statsdb: reorder routing cidr %q: %w", cidr, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// UpdateRoutingCIDR replaces a CIDR value, preserving its priority.
+func (s *Store) UpdateRoutingCIDR(oldCIDR, newCIDR string) error {
+	res, err := s.db.Exec(
+		`UPDATE routing_cidrs SET cidr = ? WHERE cidr = ?`,
+		newCIDR, oldCIDR,
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: update routing cidr %q: %w", oldCIDR, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("statsdb: routing cidr %q not found", oldCIDR)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Routing IP Rules
+// ---------------------------------------------------------------------------
+
+// ListIPRules returns all IP routing rules ordered by priority.
+func (s *Store) ListIPRules() ([]config.IPRuleConfig, error) {
+	rows, err := s.db.Query(
+		`SELECT name, action, upstream_group, cidrs_json, asns_json, lists_json
+		 FROM routing_ip_rules ORDER BY priority ASC, created_unix ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list ip rules: %w", err)
+	}
+	defer rows.Close()
+
+	var out []config.IPRuleConfig
+	for rows.Next() {
+		var r config.IPRuleConfig
+		var cidrsJSON, asnsJSON, listsJSON string
+		if err := rows.Scan(&r.Name, &r.Action, &r.UpstreamGroup, &cidrsJSON, &asnsJSON, &listsJSON); err != nil {
+			return nil, fmt.Errorf("statsdb: scan ip rule: %w", err)
+		}
+		if cidrsJSON != "" && cidrsJSON != "[]" {
+			if err := json.Unmarshal([]byte(cidrsJSON), &r.CIDRs); err != nil {
+				return nil, fmt.Errorf("statsdb: unmarshal cidrs for %q: %w", r.Name, err)
+			}
+		}
+		if asnsJSON != "" && asnsJSON != "[]" {
+			if err := json.Unmarshal([]byte(asnsJSON), &r.ASNs); err != nil {
+				return nil, fmt.Errorf("statsdb: unmarshal asns for %q: %w", r.Name, err)
+			}
+		}
+		if listsJSON != "" && listsJSON != "[]" {
+			if err := json.Unmarshal([]byte(listsJSON), &r.Lists); err != nil {
+				return nil, fmt.Errorf("statsdb: unmarshal lists for %q: %w", r.Name, err)
+			}
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("statsdb: iterate ip rules: %w", err)
+	}
+	return out, nil
+}
+
+// AddIPRule inserts a new IP routing rule with the next available priority.
+func (s *Store) AddIPRule(r config.IPRuleConfig) error {
+	cidrsJSON, err := json.Marshal(r.CIDRs)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal cidrs: %w", err)
+	}
+	asnsJSON, err := json.Marshal(r.ASNs)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal asns: %w", err)
+	}
+	listsJSON, err := json.Marshal(r.Lists)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal lists: %w", err)
+	}
+
+	_, err = s.db.Exec(
+		`INSERT INTO routing_ip_rules (name, action, upstream_group, cidrs_json, asns_json, lists_json, priority)
+		 VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT MAX(priority) FROM routing_ip_rules), -1) + 1)`,
+		r.Name, r.Action, r.UpstreamGroup, string(cidrsJSON), string(asnsJSON), string(listsJSON),
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: add ip rule %q: %w", r.Name, err)
+	}
+	return nil
+}
+
+// DeleteIPRule deletes an IP routing rule by name.
+func (s *Store) DeleteIPRule(name string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM routing_ip_rules WHERE name = ?`, name)
+	if err != nil {
+		return false, fmt.Errorf("statsdb: delete ip rule %q: %w", name, err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ImportIPRules inserts IP routing rules from a list, skipping names that already exist.
+func (s *Store) ImportIPRules(rules []config.IPRuleConfig) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var maxPriority int
+	err = tx.QueryRow(`SELECT COALESCE(MAX(priority), -1) FROM routing_ip_rules`).Scan(&maxPriority)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: get max priority: %w", err)
+	}
+
+	stmt, err := tx.Prepare(
+		`INSERT OR IGNORE INTO routing_ip_rules (name, action, upstream_group, cidrs_json, asns_json, lists_json, priority)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: prepare import ip rules: %w", err)
+	}
+	defer stmt.Close()
+
+	var count int
+	for _, r := range rules {
+		cidrsJSON, err := json.Marshal(r.CIDRs)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: marshal cidrs for %q: %w", r.Name, err)
+		}
+		asnsJSON, err := json.Marshal(r.ASNs)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: marshal asns for %q: %w", r.Name, err)
+		}
+		listsJSON, err := json.Marshal(r.Lists)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: marshal lists for %q: %w", r.Name, err)
+		}
+		maxPriority++
+		res, err := stmt.Exec(r.Name, r.Action, r.UpstreamGroup, string(cidrsJSON), string(asnsJSON), string(listsJSON), maxPriority)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: import ip rule %q: %w", r.Name, err)
+		}
+		n, _ := res.RowsAffected()
+		count += int(n)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("statsdb: commit import ip rules: %w", err)
+	}
+	return count, nil
+}
+
+// ReorderIPRules updates priority values so IP rules appear in the given order.
+func (s *Store) ReorderIPRules(names []string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("statsdb: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`UPDATE routing_ip_rules SET priority = ? WHERE name = ?`)
+	if err != nil {
+		return fmt.Errorf("statsdb: prepare reorder ip rules: %w", err)
+	}
+	defer stmt.Close()
+
+	for i, name := range names {
+		if _, err := stmt.Exec(i, name); err != nil {
+			return fmt.Errorf("statsdb: reorder ip rule %q: %w", name, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// UpdateIPRule updates an existing IP rule by name.
+func (s *Store) UpdateIPRule(r config.IPRuleConfig) error {
+	cidrsJSON, err := json.Marshal(r.CIDRs)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal cidrs: %w", err)
+	}
+	asnsJSON, err := json.Marshal(r.ASNs)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal asns: %w", err)
+	}
+	listsJSON, err := json.Marshal(r.Lists)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal lists: %w", err)
+	}
+
+	res, err := s.db.Exec(
+		`UPDATE routing_ip_rules SET action = ?, upstream_group = ?, cidrs_json = ?, asns_json = ?, lists_json = ?, updated_unix = unixepoch()
+		 WHERE name = ?`,
+		r.Action, r.UpstreamGroup, string(cidrsJSON), string(asnsJSON), string(listsJSON), r.Name,
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: update ip rule %q: %w", r.Name, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("statsdb: ip rule %q not found", r.Name)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Routing SNI Rules
+// ---------------------------------------------------------------------------
+
+// ListSNIRules returns all SNI routing rules ordered by priority.
+func (s *Store) ListSNIRules() ([]config.SNIRuleConfig, error) {
+	rows, err := s.db.Query(
+		`SELECT name, action, upstream_group, domains_json
+		 FROM routing_sni_rules ORDER BY priority ASC, created_unix ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list sni rules: %w", err)
+	}
+	defer rows.Close()
+
+	var out []config.SNIRuleConfig
+	for rows.Next() {
+		var r config.SNIRuleConfig
+		var domainsJSON string
+		if err := rows.Scan(&r.Name, &r.Action, &r.UpstreamGroup, &domainsJSON); err != nil {
+			return nil, fmt.Errorf("statsdb: scan sni rule: %w", err)
+		}
+		if domainsJSON != "" && domainsJSON != "[]" {
+			if err := json.Unmarshal([]byte(domainsJSON), &r.Domains); err != nil {
+				return nil, fmt.Errorf("statsdb: unmarshal domains for %q: %w", r.Name, err)
+			}
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("statsdb: iterate sni rules: %w", err)
+	}
+	return out, nil
+}
+
+// AddSNIRule inserts a new SNI routing rule with the next available priority.
+func (s *Store) AddSNIRule(r config.SNIRuleConfig) error {
+	domainsJSON, err := json.Marshal(r.Domains)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal domains: %w", err)
+	}
+
+	_, err = s.db.Exec(
+		`INSERT INTO routing_sni_rules (name, action, upstream_group, domains_json, priority)
+		 VALUES (?, ?, ?, ?, COALESCE((SELECT MAX(priority) FROM routing_sni_rules), -1) + 1)`,
+		r.Name, r.Action, r.UpstreamGroup, string(domainsJSON),
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: add sni rule %q: %w", r.Name, err)
+	}
+	return nil
+}
+
+// DeleteSNIRule deletes an SNI routing rule by name.
+func (s *Store) DeleteSNIRule(name string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM routing_sni_rules WHERE name = ?`, name)
+	if err != nil {
+		return false, fmt.Errorf("statsdb: delete sni rule %q: %w", name, err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// UpdateSNIRule updates an existing SNI rule by name.
+func (s *Store) UpdateSNIRule(r config.SNIRuleConfig) error {
+	domainsJSON, err := json.Marshal(r.Domains)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal domains: %w", err)
+	}
+
+	res, err := s.db.Exec(
+		`UPDATE routing_sni_rules SET action = ?, upstream_group = ?, domains_json = ?, updated_unix = unixepoch()
+		 WHERE name = ?`,
+		r.Action, r.UpstreamGroup, string(domainsJSON), r.Name,
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: update sni rule %q: %w", r.Name, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("statsdb: sni rule %q not found", r.Name)
+	}
+	return nil
+}
+
+// ImportSNIRules inserts SNI routing rules from a list, skipping names that already exist.
+func (s *Store) ImportSNIRules(rules []config.SNIRuleConfig) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var maxPriority int
+	err = tx.QueryRow(`SELECT COALESCE(MAX(priority), -1) FROM routing_sni_rules`).Scan(&maxPriority)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: get max priority: %w", err)
+	}
+
+	stmt, err := tx.Prepare(
+		`INSERT OR IGNORE INTO routing_sni_rules (name, action, upstream_group, domains_json, priority)
+		 VALUES (?, ?, ?, ?, ?)`)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: prepare import sni rules: %w", err)
+	}
+	defer stmt.Close()
+
+	var count int
+	for _, r := range rules {
+		domainsJSON, err := json.Marshal(r.Domains)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: marshal domains for %q: %w", r.Name, err)
+		}
+		maxPriority++
+		res, err := stmt.Exec(r.Name, r.Action, r.UpstreamGroup, string(domainsJSON), maxPriority)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: import sni rule %q: %w", r.Name, err)
+		}
+		n, _ := res.RowsAffected()
+		count += int(n)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("statsdb: commit import sni rules: %w", err)
 	}
 	return count, nil
 }

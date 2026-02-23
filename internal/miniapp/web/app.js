@@ -15,10 +15,12 @@ if (!tg || !tg.initData) {
     let statusData = null;
     let groupsData = null;
     let dnsData = null;
+    let routingData = null;
     let usersData = null;
     let meData = null;
     let groupsLoaded = false;
     let dnsLoaded = false;
+    let routingLoaded = false;
     let usersLoaded = false;
     let currentConfigText = "";
     let currentConfigName = "";
@@ -27,6 +29,14 @@ if (!tg || !tg.initData) {
     let peerEditDisabled = false;
     let editingSecretHex = null;
     let editingProxyName = null;
+    let editingCIDR = null;
+    let editingIPRuleName = null;
+    let editingSNIRuleName = null;
+    let editingUpstreamName = null;
+    let upstreamEditDefaultOn = false;
+    let upstreamEditHealthOn = false;
+    let editingGroupName = null;
+    let groupEditOriginalMembers = {};
 
     // Modal toggle state
     let upstreamDefaultOn = false;
@@ -119,9 +129,11 @@ if (!tg || !tg.initData) {
     }
 
     // --- Toast ---
-    function showToast(message) {
+    function showToast(message, isError) {
         const t = document.getElementById("toast");
         document.getElementById("toast-message").textContent = message;
+        document.getElementById("toast-icon-success").style.display = isError ? "none" : "";
+        document.getElementById("toast-icon-error").style.display = isError ? "" : "none";
         t.classList.add("show");
         setTimeout(() => t.classList.remove("show"), 2000);
     }
@@ -144,6 +156,7 @@ if (!tg || !tg.initData) {
 
         if (page === "upstreams" && !groupsLoaded) refreshGroups();
         if (page === "dns" && !dnsLoaded) refreshDNS();
+        if (page === "routing" && !routingLoaded) refreshRouting();
         if (page === "users" && !usersLoaded) refreshUsers();
 
         try {
@@ -177,6 +190,14 @@ if (!tg || !tg.initData) {
             dnsData = d;
             dnsLoaded = true;
             renderDNS();
+        });
+    }
+
+    function refreshRouting() {
+        api("GET", "/api/routing").then((d) => {
+            routingData = d;
+            routingLoaded = true;
+            renderRouting();
         });
     }
 
@@ -214,7 +235,7 @@ if (!tg || !tg.initData) {
                 const esc = escapeHtml(name);
                 const escapedName = name.replace(/'/g, "\\'");
                 return (
-                    '<div class="list-item">' +
+                    '<div class="list-item' + (p.disabled ? ' disabled' : '') + '">' +
                     '<div class="item-icon wg-peer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div>' +
                     '<div class="item-content">' +
                     '<div class="item-title">' +
@@ -226,9 +247,6 @@ if (!tg || !tg.initData) {
                     '">' +
                     (status === "active" ? "Online" : "Offline") +
                     "</span>" +
-                    (p.disabled
-                        ? ' <span class="status-badge inactive">disabled</span>'
-                        : "") +
                     (p.last_handshake_unix > 0
                         ? " • " + timeAgo(p.last_handshake_unix)
                         : "") +
@@ -281,8 +299,9 @@ if (!tg || !tg.initData) {
                     u.type === "outline"
                         ? "item-icon outline"
                         : "item-icon amnezia";
-                const healthClass =
-                    u.state === "healthy"
+                const healthClass = !u.enabled
+                    ? ""
+                    : u.state === "healthy"
                         ? "ok"
                         : u.state === "degraded"
                           ? "checking"
@@ -295,7 +314,7 @@ if (!tg || !tg.initData) {
                           : u.state || "Unknown";
                 const badges = [];
                 if (u.default) badges.push("default");
-                if (!u.enabled) badges.push("disabled");
+                const disabledClass = !u.enabled ? " disabled" : "";
                 const badgeHtml = badges
                     .map(
                         (b) =>
@@ -307,7 +326,7 @@ if (!tg || !tg.initData) {
                 const esc = escapeHtml(u.name);
                 const escapedName = u.name.replace(/'/g, "\\'");
                 return (
-                    '<div class="list-item">' +
+                    '<div class="list-item' + disabledClass + '">' +
                     '<div class="' +
                     iconClass +
                     '"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div>' +
@@ -325,10 +344,6 @@ if (!tg || !tg.initData) {
                     "</span>" +
                     " " +
                     badgeHtml +
-                    " • ↓" +
-                    formatBytes(u.rx_bytes) +
-                    " ↑" +
-                    formatBytes(u.tx_bytes) +
                     "</div></div>" +
                     (isAdmin()
                         ? '<div class="item-action">' +
@@ -339,6 +354,9 @@ if (!tg || !tg.initData) {
                           "'," +
                           !u.enabled +
                           ',event)"><div class="toggle-knob"></div></div>' +
+                          '<button class="action-icon-btn" onclick="openUpstreamEditModal(\'' +
+                          escapedName +
+                          '\')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
                           '<button class="delete-btn" onclick="promptDelete(\'' +
                           escapedName +
                           '\',\'upstream\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>' +
@@ -382,7 +400,11 @@ if (!tg || !tg.initData) {
                         : "") +
                     "</div></div>" +
                     (isAdmin()
-                        ? '<div class="item-action"><button class="delete-btn" onclick="promptDelete(\'' +
+                        ? '<div class="item-action">' +
+                          '<button class="action-icon-btn" onclick="openGroupEditModal(\'' +
+                          escapedName +
+                          '\')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
+                          '<button class="delete-btn" onclick="promptDelete(\'' +
                           escapedName +
                           '\',\'group\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button></div>'
                         : "") +
@@ -563,6 +585,223 @@ if (!tg || !tg.initData) {
                     );
                 })
                 .join("");
+        }
+    }
+
+    // --- Render: Routing ---
+    // --- Drag & Drop Reorder ---
+    var dragState = { el: null, list: null, type: null };
+    var dragHandleSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="2"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="9" cy="18" r="2"/><circle cx="15" cy="18" r="2"/></svg>';
+
+    function initDragList(listEl, type) {
+        listEl.addEventListener('dragstart', function(e) {
+            var item = e.target.closest('.list-item');
+            if (!item) return;
+            dragState.el = item;
+            dragState.list = listEl;
+            dragState.type = type;
+            item.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', '');
+        });
+        listEl.addEventListener('dragend', function(e) {
+            var item = e.target.closest('.list-item');
+            if (item) item.classList.remove('dragging');
+            listEl.querySelectorAll('.list-item').forEach(function(el) {
+                el.classList.remove('drag-over');
+            });
+            if (dragState.el && dragState.list === listEl) {
+                saveReorder(listEl, type);
+            }
+            dragState = { el: null, list: null, type: null };
+        });
+        listEl.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            var target = e.target.closest('.list-item');
+            if (!target || target === dragState.el || target.parentNode !== listEl) return;
+            listEl.querySelectorAll('.list-item').forEach(function(el) {
+                el.classList.remove('drag-over');
+            });
+            var rect = target.getBoundingClientRect();
+            var mid = rect.top + rect.height / 2;
+            if (e.clientY < mid) {
+                target.classList.add('drag-over');
+                listEl.insertBefore(dragState.el, target);
+            } else {
+                listEl.insertBefore(dragState.el, target.nextSibling);
+            }
+        });
+        listEl.addEventListener('drop', function(e) {
+            e.preventDefault();
+        });
+
+        // Touch drag support
+        var touchDrag = { el: null, clone: null, startY: 0, moved: false };
+        listEl.addEventListener('touchstart', function(e) {
+            var handle = e.target.closest('.drag-handle');
+            if (!handle) return;
+            var item = handle.closest('.list-item');
+            if (!item) return;
+            e.preventDefault();
+            touchDrag.el = item;
+            touchDrag.startY = e.touches[0].clientY;
+            touchDrag.moved = false;
+            item.classList.add('dragging');
+            haptic('selection');
+        }, { passive: false });
+        listEl.addEventListener('touchmove', function(e) {
+            if (!touchDrag.el) return;
+            e.preventDefault();
+            touchDrag.moved = true;
+            var y = e.touches[0].clientY;
+            var items = Array.from(listEl.querySelectorAll('.list-item'));
+            items.forEach(function(el) { el.classList.remove('drag-over'); });
+            for (var i = 0; i < items.length; i++) {
+                if (items[i] === touchDrag.el) continue;
+                var rect = items[i].getBoundingClientRect();
+                var mid = rect.top + rect.height / 2;
+                if (y < mid) {
+                    items[i].classList.add('drag-over');
+                    listEl.insertBefore(touchDrag.el, items[i]);
+                    break;
+                } else if (i === items.length - 1 || y < rect.bottom) {
+                    listEl.insertBefore(touchDrag.el, items[i].nextSibling);
+                    break;
+                }
+            }
+        }, { passive: false });
+        listEl.addEventListener('touchend', function(e) {
+            if (!touchDrag.el) return;
+            touchDrag.el.classList.remove('dragging');
+            listEl.querySelectorAll('.list-item').forEach(function(el) {
+                el.classList.remove('drag-over');
+            });
+            if (touchDrag.moved) {
+                saveReorder(listEl, type);
+            }
+            touchDrag = { el: null, clone: null, startY: 0, moved: false };
+        });
+    }
+
+    function saveReorder(listEl, type) {
+        var items = Array.from(listEl.querySelectorAll('.list-item'));
+        var keys = items.map(function(el) { return el.dataset.key; }).filter(Boolean);
+        if (keys.length === 0) return;
+
+        var endpoint, body;
+        if (type === 'cidrs') {
+            endpoint = '/api/routing/cidrs/order';
+            body = { cidrs: keys };
+        } else if (type === 'ip-rules') {
+            endpoint = '/api/routing/ip-rules/order';
+            body = { names: keys };
+        } else {
+            return;
+        }
+
+        api('PUT', endpoint, body).then(function(d) {
+            if (d.error) {
+                haptic('notification', 'error');
+                showToast(d.error, true);
+                refreshRouting();
+                return;
+            }
+            haptic('notification', 'success');
+            showToast('Order saved');
+        });
+    }
+
+    function renderRouting() {
+        if (!routingData) return;
+
+        // CIDRs
+        const cidrEl = document.getElementById("routing-cidr-list");
+        const cidrs = routingData.cidrs || [];
+        if (cidrs.length === 0) {
+            cidrEl.innerHTML = '<div class="empty-state">No CIDRs configured</div>';
+        } else {
+            cidrEl.innerHTML = cidrs.map(c => {
+                const escapedCIDR = c.replace(/'/g, "\\'");
+                const isExclude = c.startsWith('!');
+                const modeBadge = isExclude
+                    ? '<span class="rule-type-badge block">Exclude</span>'
+                    : '<span class="rule-type-badge upstream">Allow</span>';
+                return '<div class="list-item" draggable="' + (isAdmin() ? 'true' : 'false') + '" data-key="' + escapeHtml(c) + '">' +
+                    (isAdmin() ? '<div class="drag-handle">' + dragHandleSvg + '</div>' : '') +
+                    '<div class="item-icon routing-cidr"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>' +
+                    '<div class="item-content">' +
+                    '<div class="item-title">' + escapeHtml(isExclude ? c.slice(1) : c) + '</div>' +
+                    '<div class="item-subtitle">' + modeBadge + '</div>' +
+                    '</div>' +
+                    (isAdmin() ? '<div class="item-action">' +
+                        '<button class="action-icon-btn" onclick="openCIDREditModal(\'' + escapedCIDR + '\')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
+                        '<button class="delete-btn" onclick="promptDelete(\'' + escapedCIDR + '\',\'routing-cidr\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>' +
+                    '</div>' : '') +
+                    '</div>';
+            }).join('');
+            if (isAdmin()) initDragList(cidrEl, 'cidrs');
+        }
+
+        // IP Rules
+        const ipEl = document.getElementById("routing-ip-rule-list");
+        const ipRules = routingData.ip_rules || [];
+        if (ipRules.length === 0) {
+            ipEl.innerHTML = '<div class="empty-state">No IP rules</div>';
+        } else {
+            ipEl.innerHTML = ipRules.map(r => {
+                const actionBadge = r.action === 'direct'
+                    ? '<span class="rule-type-badge block">Direct</span>'
+                    : '<span class="rule-type-badge upstream">Upstream</span>';
+                const info = [];
+                if ((r.cidrs || []).length > 0) info.push((r.cidrs || []).length + ' CIDR' + ((r.cidrs || []).length > 1 ? 's' : ''));
+                if ((r.asns || []).length > 0) info.push((r.asns || []).length + ' ASN' + ((r.asns || []).length > 1 ? 's' : ''));
+                if ((r.lists || []).length > 0) info.push((r.lists || []).length + ' list' + ((r.lists || []).length > 1 ? 's' : ''));
+                if (r.upstream_group) info.push('→ ' + r.upstream_group);
+                const escapedName = r.name.replace(/'/g, "\\'");
+                return '<div class="list-item" draggable="' + (isAdmin() ? 'true' : 'false') + '" data-key="' + escapeHtml(r.name) + '">' +
+                    (isAdmin() ? '<div class="drag-handle">' + dragHandleSvg + '</div>' : '') +
+                    '<div class="item-icon routing-ip-rule"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>' +
+                    '<div class="item-content">' +
+                    '<div class="item-title">' + escapeHtml(r.name) + '</div>' +
+                    '<div class="item-subtitle">' + actionBadge + ' • ' + info.join(' • ') + '</div>' +
+                    '</div>' +
+                    (isAdmin() ? '<div class="item-action">' +
+                        '<button class="action-icon-btn" onclick="openIPRuleEditModal(\'' + escapedName + '\')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
+                        '<button class="delete-btn" onclick="promptDelete(\'' + escapedName + '\',\'ip-rule\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>' +
+                    '</div>' : '') +
+                    '</div>';
+            }).join('');
+            if (isAdmin()) initDragList(ipEl, 'ip-rules');
+        }
+
+        // SNI Rules
+        const sniEl = document.getElementById("routing-sni-rule-list");
+        const sniRules = routingData.sni_rules || [];
+        if (sniRules.length === 0) {
+            sniEl.innerHTML = '<div class="empty-state">No SNI rules</div>';
+        } else {
+            sniEl.innerHTML = sniRules.map(r => {
+                const actionBadge = r.action === 'direct'
+                    ? '<span class="rule-type-badge block">Direct</span>'
+                    : '<span class="rule-type-badge upstream">Upstream</span>';
+                const domainCount = (r.domains || []).length;
+                const info = [];
+                if (domainCount > 0) info.push(domainCount + ' domain' + (domainCount > 1 ? 's' : ''));
+                if (r.upstream_group) info.push('→ ' + r.upstream_group);
+                const escapedName = r.name.replace(/'/g, "\\'");
+                return '<div class="list-item">' +
+                    '<div class="item-icon routing-sni-rule"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>' +
+                    '<div class="item-content">' +
+                    '<div class="item-title">' + escapeHtml(r.name) + '</div>' +
+                    '<div class="item-subtitle">' + actionBadge + ' • ' + info.join(' • ') + '</div>' +
+                    '</div>' +
+                    (isAdmin() ? '<div class="item-action">' +
+                        '<button class="action-icon-btn" onclick="openSNIRuleEditModal(\'' + escapedName + '\')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
+                        '<button class="delete-btn" onclick="promptDelete(\'' + escapedName + '\',\'sni-rule\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>' +
+                    '</div>' : '') +
+                    '</div>';
+            }).join('');
         }
     }
 
@@ -756,7 +995,7 @@ if (!tg || !tg.initData) {
         api("POST", "/api/peers", { name }).then((d) => {
             if (d.error) {
                 haptic("notification", "error");
-                showToast(d.error);
+                showToast(d.error, true);
                 return;
             }
             haptic("notification", "success");
@@ -842,7 +1081,7 @@ if (!tg || !tg.initData) {
         ).then((d) => {
             if (d.error) {
                 haptic("notification", "error");
-                showToast(d.error);
+                showToast(d.error, true);
                 return;
             }
             haptic("notification", "success");
@@ -856,7 +1095,7 @@ if (!tg || !tg.initData) {
         api("GET", "/api/peers/" + encodeURIComponent(name) + "/conf").then(
             (d) => {
                 if (d.error) {
-                    showToast(d.error);
+                    showToast(d.error, true);
                     return;
                 }
                 currentConfigText = d.config;
@@ -877,7 +1116,7 @@ if (!tg || !tg.initData) {
         api("GET", "/api/peers/" + encodeURIComponent(name) + "/conf").then(
             (d) => {
                 if (d.error) {
-                    showToast(d.error);
+                    showToast(d.error, true);
                     return;
                 }
                 currentConfigText = d.config;
@@ -937,6 +1176,7 @@ if (!tg || !tg.initData) {
             "New Upstream";
         document.getElementById("inp-upstream-name").value = "";
         document.getElementById("inp-upstream-transport").value = "";
+        document.getElementById("inp-upstream-groups").value = "";
         upstreamDefaultOn = false;
         upstreamHealthOn = true;
         updateToggle("inp-upstream-default", upstreamDefaultOn);
@@ -964,16 +1204,19 @@ if (!tg || !tg.initData) {
             haptic("notification", "error");
             return;
         }
+        const groupsRaw = document.getElementById("inp-upstream-groups").value.trim();
+        const groups = groupsRaw ? groupsRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
         api("POST", "/api/upstreams", {
             name,
             type: "outline",
             transport,
+            groups,
             default: upstreamDefaultOn,
             health_check: { enabled: upstreamHealthOn },
         }).then((d) => {
             if (d.error) {
                 haptic("notification", "error");
-                showToast(d.error);
+                showToast(d.error, true);
                 return;
             }
             haptic("notification", "success");
@@ -1001,13 +1244,194 @@ if (!tg || !tg.initData) {
         api("POST", "/api/groups", { name }).then((d) => {
             if (d.error) {
                 haptic("notification", "error");
-                showToast(d.error);
+                showToast(d.error, true);
                 return;
             }
             haptic("notification", "success");
             showToast("Group created");
             closeGroupModal();
             refreshGroups();
+        });
+    };
+
+    // --- Upstream Edit ---
+    window.openUpstreamEditModal = function (name) {
+        if (!statusData) return;
+        const u = (statusData.upstreams || []).find(x => x.name === name);
+        if (!u) return;
+        editingUpstreamName = name;
+
+        document.getElementById("upstream-edit-name").textContent = name;
+        document.getElementById("upstream-edit-type").textContent = u.type.toUpperCase();
+        document.getElementById("inp-upstream-edit-transport").value = "";
+        // Filter out computed groups ("all", "default")
+        const explicitGroups = (u.groups || []).filter(g => g !== "all" && g !== "default");
+        document.getElementById("inp-upstream-edit-groups").value = explicitGroups.join(", ");
+
+        upstreamEditDefaultOn = u.default;
+        upstreamEditHealthOn = true;
+        updateToggle("inp-upstream-edit-default", upstreamEditDefaultOn);
+        updateToggle("inp-upstream-edit-health", upstreamEditHealthOn);
+
+        var statsHtml =
+            '<div class="peer-stat-card"><div class="peer-stat-value">' +
+            (u.state || "unknown") +
+            '</div><div class="peer-stat-label">State</div></div>' +
+            '<div class="peer-stat-card"><div class="peer-stat-value">↓ ' +
+            formatBytes(u.rx_bytes) +
+            '</div><div class="peer-stat-label">Download</div></div>' +
+            '<div class="peer-stat-card"><div class="peer-stat-value">↑ ' +
+            formatBytes(u.tx_bytes) +
+            '</div><div class="peer-stat-label">Upload</div></div>';
+        if (u.active_connections > 0) {
+            statsHtml += '<div class="peer-stat-card"><div class="peer-stat-value">' +
+                u.active_connections +
+                '</div><div class="peer-stat-label">Active</div></div>';
+        }
+        document.getElementById("upstream-edit-stats").innerHTML = statsHtml;
+
+        openModal("upstream-edit-modal");
+    };
+    window.closeUpstreamEditModal = function () {
+        closeModal("upstream-edit-modal");
+        editingUpstreamName = null;
+    };
+    window.toggleUpstreamEditDefault = function () {
+        upstreamEditDefaultOn = !upstreamEditDefaultOn;
+        updateToggle("inp-upstream-edit-default", upstreamEditDefaultOn);
+        haptic("selection");
+    };
+    window.toggleUpstreamEditHealth = function () {
+        upstreamEditHealthOn = !upstreamEditHealthOn;
+        updateToggle("inp-upstream-edit-health", upstreamEditHealthOn);
+        haptic("selection");
+    };
+    window.saveUpstreamEdit = function () {
+        if (!editingUpstreamName) return;
+
+        var transport = document.getElementById("inp-upstream-edit-transport").value.trim();
+        var groupsRaw = document.getElementById("inp-upstream-edit-groups").value.trim();
+        var groups = groupsRaw ? groupsRaw.split(",").map(function(s) { return s.trim(); }).filter(Boolean) : [];
+
+        var body = {
+            default: upstreamEditDefaultOn,
+            groups: groups,
+            health_check: { enabled: upstreamEditHealthOn },
+        };
+        if (transport) {
+            body.transport = transport;
+        }
+
+        api("PUT", "/api/upstreams/" + encodeURIComponent(editingUpstreamName), body).then(function(d) {
+            if (d.error) {
+                haptic("notification", "error");
+                showToast(d.error, true);
+                return;
+            }
+            haptic("notification", "success");
+            showToast("Upstream updated");
+            closeUpstreamEditModal();
+            refresh();
+            if (groupsLoaded) refreshGroups();
+        });
+    };
+
+    // --- Group Edit ---
+    window.openGroupEditModal = function (name) {
+        editingGroupName = name;
+        document.getElementById("group-edit-modal-title").textContent = "Edit Group: " + name;
+
+        // Build member checkboxes from all upstreams
+        var ups = (statusData && statusData.upstreams) || [];
+        groupEditOriginalMembers = {};
+        var html = "";
+        ups.forEach(function (u) {
+            var explicitGroups = (u.groups || []).filter(function(g) { return g !== "all" && g !== "default"; });
+            var isMember = explicitGroups.indexOf(name) !== -1;
+            groupEditOriginalMembers[u.name] = isMember;
+            html += '<div class="toggle-row">' +
+                '<div><div class="toggle-label">' + escapeHtml(u.name) + '</div>' +
+                '<div class="toggle-sublabel">' + u.type.toUpperCase() + ' • ' + u.state + '</div></div>' +
+                '<div class="toggle-switch' + (isMember ? ' active' : '') +
+                '" id="group-member-' + u.name.replace(/[^a-zA-Z0-9]/g, '_') + '"' +
+                ' onclick="toggleGroupMember(\'' + u.name.replace(/'/g, "\\'") + '\')"><div class="toggle-knob"></div></div>' +
+                '</div>';
+        });
+        if (ups.length === 0) {
+            html = '<div class="empty-state">No upstreams available</div>';
+        }
+        document.getElementById("group-edit-members").innerHTML = html;
+
+        // Build consumers list
+        var consumers = [];
+        if (groupsData) {
+            var grp = groupsData.find(function(g) { return g.name === name; });
+            if (grp && grp.consumers) {
+                consumers = grp.consumers.map(function(c) { return c.type + ": " + c.name; });
+            }
+        }
+        document.getElementById("group-edit-consumers").textContent =
+            consumers.length > 0 ? consumers.join(", ") : "None";
+
+        openModal("group-edit-modal");
+    };
+    window.closeGroupEditModal = function () {
+        closeModal("group-edit-modal");
+        editingGroupName = null;
+    };
+    window.toggleGroupMember = function (upstreamName) {
+        var elId = "group-member-" + upstreamName.replace(/[^a-zA-Z0-9]/g, '_');
+        var el = document.getElementById(elId);
+        if (el.classList.contains("active")) {
+            el.classList.remove("active");
+        } else {
+            el.classList.add("active");
+        }
+        haptic("selection");
+    };
+    window.saveGroupEdit = function () {
+        if (!editingGroupName) return;
+        var ups = (statusData && statusData.upstreams) || [];
+        var promises = [];
+
+        ups.forEach(function (u) {
+            var elId = "group-member-" + u.name.replace(/[^a-zA-Z0-9]/g, '_');
+            var el = document.getElementById(elId);
+            var nowMember = el && el.classList.contains("active");
+            var wasMember = groupEditOriginalMembers[u.name] || false;
+
+            if (nowMember !== wasMember) {
+                // Get current explicit groups
+                var currentGroups = (u.groups || []).filter(function(g) { return g !== "all" && g !== "default"; });
+                var newGroups;
+                if (nowMember) {
+                    newGroups = currentGroups.concat([editingGroupName]);
+                } else {
+                    newGroups = currentGroups.filter(function(g) { return g !== editingGroupName; });
+                }
+                promises.push(
+                    api("PUT", "/api/upstreams/" + encodeURIComponent(u.name), { groups: newGroups })
+                );
+            }
+        });
+
+        if (promises.length === 0) {
+            closeGroupEditModal();
+            return;
+        }
+
+        Promise.all(promises).then(function (results) {
+            var errors = results.filter(function(d) { return d.error; });
+            if (errors.length > 0) {
+                haptic("notification", "error");
+                showToast(errors[0].error, true);
+                return;
+            }
+            haptic("notification", "success");
+            showToast("Group updated");
+            closeGroupEditModal();
+            refresh();
+            if (groupsLoaded) refreshGroups();
         });
     };
 
@@ -1018,7 +1442,7 @@ if (!tg || !tg.initData) {
             disabled: !currentlyDisabled,
         }).then((d) => {
             if (d.error) {
-                showToast(d.error);
+                showToast(d.error, true);
                 return;
             }
             refresh();
@@ -1032,7 +1456,7 @@ if (!tg || !tg.initData) {
             enabled,
         }).then((d) => {
             if (d.error) {
-                showToast(d.error);
+                showToast(d.error, true);
                 return;
             }
             refresh();
@@ -1092,7 +1516,7 @@ if (!tg || !tg.initData) {
         api("POST", "/api/proxies", { name, type, listen, username, password }).then((d) => {
             if (d.error) {
                 haptic("notification", "error");
-                showToast(d.error);
+                showToast(d.error, true);
                 return;
             }
             haptic("notification", "success");
@@ -1144,7 +1568,7 @@ if (!tg || !tg.initData) {
         api("PUT", "/api/proxies/" + encodeURIComponent(editingProxyName), body).then((d) => {
             if (d.error) {
                 haptic("notification", "error");
-                showToast(d.error);
+                showToast(d.error, true);
                 return;
             }
             haptic("notification", "success");
@@ -1162,7 +1586,7 @@ if (!tg || !tg.initData) {
         document.getElementById("inp-dns-rule-upstream").value = "";
         document.getElementById("inp-dns-rule-domains").value = "";
         document.getElementById("inp-dns-rule-list-url").value = "";
-        document.getElementById("inp-dns-rule-list-format").value = "domains";
+        document.getElementById("inp-dns-rule-list-format").value = "auto";
         toggleDNSRuleAction();
     };
     window.closeDNSRuleModal = function () {
@@ -1222,7 +1646,7 @@ if (!tg || !tg.initData) {
         }).then((d) => {
             if (d.error) {
                 haptic("notification", "error");
-                showToast(d.error);
+                showToast(d.error, true);
                 return;
             }
             haptic("notification", "success");
@@ -1308,7 +1732,7 @@ if (!tg || !tg.initData) {
             ).then((d) => {
                 if (d.error) {
                     haptic("notification", "error");
-                    showToast(d.error);
+                    showToast(d.error, true);
                     return;
                 }
                 haptic("notification", "success");
@@ -1321,7 +1745,7 @@ if (!tg || !tg.initData) {
                 (d) => {
                     if (d.error) {
                         haptic("notification", "error");
-                        showToast(d.error);
+                        showToast(d.error, true);
                         return;
                     }
                     haptic("notification", "success");
@@ -1352,7 +1776,7 @@ if (!tg || !tg.initData) {
         api("POST", "/api/users", { user, role }).then((d) => {
             if (d.error) {
                 haptic("notification", "error");
-                showToast(d.error);
+                showToast(d.error, true);
                 return;
             }
             haptic("notification", "success");
@@ -1366,7 +1790,7 @@ if (!tg || !tg.initData) {
         haptic("selection");
         api("PUT", "/api/users/" + userId, { role: newRole }).then((d) => {
             if (d.error) {
-                showToast(d.error);
+                showToast(d.error, true);
                 return;
             }
             showToast("Role updated");
@@ -1391,7 +1815,7 @@ if (!tg || !tg.initData) {
         api("POST", "/api/secrets", { type, comment }).then((d) => {
             if (d.error) {
                 haptic("notification", "error");
-                showToast(d.error);
+                showToast(d.error, true);
                 return;
             }
             haptic("notification", "success");
@@ -1509,6 +1933,9 @@ if (!tg || !tg.initData) {
             proxy: "Are you sure you want to remove this proxy server?",
             "dns-record": "Are you sure you want to remove this DNS record?",
             "dns-rule": "Are you sure you want to remove this DNS rule?",
+            "routing-cidr": "Are you sure you want to remove this CIDR?",
+            "ip-rule": "Are you sure you want to remove this IP rule?",
+            "sni-rule": "Are you sure you want to remove this SNI rule?",
             user: "Are you sure you want to remove this user?",
             secret: "Are you sure you want to remove this secret?",
         };
@@ -1543,6 +1970,18 @@ if (!tg || !tg.initData) {
                     method: "DELETE",
                     path: "/api/dns/rules/" + encodeURIComponent(id),
                 },
+                "routing-cidr": {
+                    method: "DELETE",
+                    path: "/api/routing/cidrs/" + encodeURIComponent(id),
+                },
+                "ip-rule": {
+                    method: "DELETE",
+                    path: "/api/routing/ip-rules/" + encodeURIComponent(id),
+                },
+                "sni-rule": {
+                    method: "DELETE",
+                    path: "/api/routing/sni-rules/" + encodeURIComponent(id),
+                },
                 user: { method: "DELETE", path: "/api/users/" + id },
                 secret: {
                     method: "DELETE",
@@ -1554,7 +1993,7 @@ if (!tg || !tg.initData) {
             api(ep.method, ep.path).then((d) => {
                 if (d.error) {
                     haptic("notification", "error");
-                    showToast(d.error);
+                    showToast(d.error, true);
                     return;
                 }
                 haptic("notification", "success");
@@ -1568,6 +2007,7 @@ if (!tg || !tg.initData) {
                 )
                     refresh();
                 if (type === "dns-record" || type === "dns-rule") refreshDNS();
+                if (type === "routing-cidr" || type === "ip-rule" || type === "sni-rule") refreshRouting();
                 if (type === "user") refreshUsers();
                 if ((type === "upstream" || type === "group") && groupsLoaded)
                     refreshGroups();
@@ -1582,6 +2022,278 @@ if (!tg || !tg.initData) {
 
     document.getElementById("confirm-delete-btn").onclick = function () {
         if (deleteCallback) deleteCallback();
+    };
+
+    // --- Routing: CIDR Create Modal ---
+    window.openRoutingCIDRModal = function () {
+        editingCIDR = null;
+        document.getElementById("cidr-edit-modal-title").textContent = "Add CIDR";
+        document.getElementById("inp-cidr-edit-mode").value = "allow";
+        document.getElementById("inp-cidr-edit-range").value = "";
+        openModal("cidr-edit-modal");
+    };
+    window.closeRoutingCIDRModal = function () {
+        closeModal("cidr-edit-modal");
+        editingCIDR = null;
+    };
+    window.saveRoutingCIDR = function () { saveCIDREdit(); };
+
+    // --- Routing: CIDR Edit Modal ---
+    window.openCIDREditModal = function (cidr) {
+        editingCIDR = cidr;
+        document.getElementById("cidr-edit-modal-title").textContent = "Edit CIDR";
+        const isExclude = cidr.startsWith("!");
+        document.getElementById("inp-cidr-edit-mode").value = isExclude ? "disallow" : "allow";
+        document.getElementById("inp-cidr-edit-range").value = isExclude ? cidr.slice(1) : cidr;
+        openModal("cidr-edit-modal");
+    };
+    window.closeCIDREditModal = function () {
+        closeModal("cidr-edit-modal");
+        editingCIDR = null;
+    };
+    window.saveCIDREdit = function () {
+        const mode = document.getElementById("inp-cidr-edit-mode").value;
+        const range = document.getElementById("inp-cidr-edit-range").value.trim();
+        if (!range) {
+            haptic("notification", "error");
+            showToast("IP range is required");
+            return;
+        }
+        const newCIDR = mode === "disallow" ? "!" + range : range;
+
+        if (editingCIDR) {
+            // Update existing
+            api("PUT", "/api/routing/cidrs/" + encodeURIComponent(editingCIDR), { cidr: newCIDR }).then(d => {
+                if (d.error) {
+                    haptic("notification", "error");
+                    showToast(d.error, true);
+                    return;
+                }
+                haptic("notification", "success");
+                showToast("CIDR updated");
+                closeCIDREditModal();
+                refreshRouting();
+            });
+        } else {
+            // Create new
+            api("POST", "/api/routing/cidrs", { cidr: newCIDR }).then(d => {
+                if (d.error) {
+                    haptic("notification", "error");
+                    showToast(d.error, true);
+                    return;
+                }
+                haptic("notification", "success");
+                showToast("CIDR added");
+                closeCIDREditModal();
+                refreshRouting();
+            });
+        }
+    };
+
+    // --- Routing: IP Rule Modal (create + edit) ---
+    window.openIPRuleModal = function () {
+        editingIPRuleName = null;
+        document.getElementById("ip-rule-modal-title").textContent = "Add IP Rule";
+        document.getElementById("inp-ip-rule-name").value = "";
+        document.getElementById("inp-ip-rule-name").disabled = false;
+        document.getElementById("inp-ip-rule-action").value = "direct";
+        document.getElementById("inp-ip-rule-upstream-group").value = "";
+        document.getElementById("inp-ip-rule-cidrs").value = "";
+        document.getElementById("inp-ip-rule-asns").value = "";
+        document.getElementById("inp-ip-rule-list-url").value = "";
+        toggleIPRuleAction();
+        openModal("ip-rule-modal");
+    };
+    window.openIPRuleEditModal = function (name) {
+        if (!routingData) return;
+        const rule = (routingData.ip_rules || []).find(r => r.name === name);
+        if (!rule) return;
+        editingIPRuleName = name;
+        document.getElementById("ip-rule-modal-title").textContent = "Edit IP Rule";
+        document.getElementById("inp-ip-rule-name").value = name;
+        document.getElementById("inp-ip-rule-name").disabled = true;
+        document.getElementById("inp-ip-rule-action").value = rule.action;
+        document.getElementById("inp-ip-rule-upstream-group").value = rule.upstream_group || "";
+        document.getElementById("inp-ip-rule-cidrs").value = (rule.cidrs || []).join(", ");
+        document.getElementById("inp-ip-rule-asns").value = (rule.asns || []).join(", ");
+        document.getElementById("inp-ip-rule-list-url").value =
+            (rule.lists || []).length > 0 ? rule.lists[0].url : "";
+        toggleIPRuleAction();
+        openModal("ip-rule-modal");
+    };
+    window.closeIPRuleModal = function () {
+        closeModal("ip-rule-modal");
+        editingIPRuleName = null;
+    };
+    window.toggleIPRuleAction = function () {
+        const action = document.getElementById("inp-ip-rule-action").value;
+        document.getElementById("ip-rule-upstream-group").style.display =
+            action === "upstream" ? "" : "none";
+    };
+    window.saveIPRule = function () {
+        const name = document.getElementById("inp-ip-rule-name").value.trim();
+        const action = document.getElementById("inp-ip-rule-action").value;
+        const upstreamGroup = document.getElementById("inp-ip-rule-upstream-group").value.trim();
+        const cidrsRaw = document.getElementById("inp-ip-rule-cidrs").value.trim();
+        const asnsRaw = document.getElementById("inp-ip-rule-asns").value.trim();
+        const listUrl = document.getElementById("inp-ip-rule-list-url").value.trim();
+
+        if (!name) {
+            haptic("notification", "error");
+            return;
+        }
+        if (action === "upstream" && !upstreamGroup) {
+            haptic("notification", "error");
+            showToast("Upstream group required");
+            return;
+        }
+
+        const cidrs = cidrsRaw ? cidrsRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
+        const asns = asnsRaw ? asnsRaw.split(",").map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n)) : [];
+        const lists = listUrl ? [{ url: listUrl }] : [];
+
+        if (cidrs.length === 0 && lists.length === 0 && asns.length === 0) {
+            haptic("notification", "error");
+            showToast("Add CIDRs, ASNs, or a list URL");
+            return;
+        }
+
+        const body = {
+            name,
+            action,
+            upstream_group: action === "upstream" ? upstreamGroup : "",
+            cidrs,
+            asns,
+            lists,
+        };
+
+        if (editingIPRuleName) {
+            // Update existing
+            api("PUT", "/api/routing/ip-rules/" + encodeURIComponent(editingIPRuleName), body).then(d => {
+                if (d.error) {
+                    haptic("notification", "error");
+                    showToast(d.error, true);
+                    return;
+                }
+                haptic("notification", "success");
+                showToast('IP rule "' + name + '" updated');
+                closeIPRuleModal();
+                refreshRouting();
+            });
+        } else {
+            // Create new
+            api("POST", "/api/routing/ip-rules", body).then(d => {
+                if (d.error) {
+                    haptic("notification", "error");
+                    showToast(d.error, true);
+                    return;
+                }
+                haptic("notification", "success");
+                showToast('IP rule "' + name + '" added');
+                closeIPRuleModal();
+                refreshRouting();
+            });
+        }
+    };
+
+    // --- Routing: SNI Rule Modal (create + edit) ---
+    function populateSNIRuleGroupSelect(selected) {
+        const sel = document.getElementById('inp-sni-rule-upstream-group');
+        const allGroups = [...new Set((statusData && statusData.upstreams || []).flatMap(u => u.groups || []))];
+        sel.innerHTML = '<option value="">— Select group —</option>' +
+            allGroups.map(g => '<option value="' + escapeHtml(g) + '"' +
+                (selected === g ? ' selected' : '') + '>' + escapeHtml(g) + '</option>'
+            ).join('');
+    }
+    window.openSNIRuleModal = function () {
+        editingSNIRuleName = null;
+        document.getElementById("sni-rule-modal-title").textContent = "Add SNI Rule";
+        document.getElementById("inp-sni-rule-name").value = "";
+        document.getElementById("inp-sni-rule-name").disabled = false;
+        document.getElementById("inp-sni-rule-action").value = "direct";
+        populateSNIRuleGroupSelect("");
+        document.getElementById("inp-sni-rule-domains").value = "";
+        toggleSNIRuleAction();
+        openModal("sni-rule-modal");
+    };
+    window.openSNIRuleEditModal = function (name) {
+        if (!routingData) return;
+        const rule = (routingData.sni_rules || []).find(r => r.name === name);
+        if (!rule) return;
+        editingSNIRuleName = name;
+        document.getElementById("sni-rule-modal-title").textContent = "Edit SNI Rule";
+        document.getElementById("inp-sni-rule-name").value = name;
+        document.getElementById("inp-sni-rule-name").disabled = true;
+        document.getElementById("inp-sni-rule-action").value = rule.action;
+        populateSNIRuleGroupSelect(rule.upstream_group || "");
+        document.getElementById("inp-sni-rule-domains").value = (rule.domains || []).join(", ");
+        toggleSNIRuleAction();
+        openModal("sni-rule-modal");
+    };
+    window.closeSNIRuleModal = function () {
+        closeModal("sni-rule-modal");
+        editingSNIRuleName = null;
+    };
+    window.toggleSNIRuleAction = function () {
+        const action = document.getElementById("inp-sni-rule-action").value;
+        document.getElementById("sni-rule-upstream-group").style.display =
+            action === "upstream" ? "" : "none";
+    };
+    window.saveSNIRule = function () {
+        const name = document.getElementById("inp-sni-rule-name").value.trim();
+        const action = document.getElementById("inp-sni-rule-action").value;
+        const upstreamGroup = document.getElementById("inp-sni-rule-upstream-group").value.trim();
+        const domainsRaw = document.getElementById("inp-sni-rule-domains").value.trim();
+
+        if (!name) {
+            haptic("notification", "error");
+            return;
+        }
+        if (action === "upstream" && !upstreamGroup) {
+            haptic("notification", "error");
+            showToast("Upstream group required");
+            return;
+        }
+
+        const domains = domainsRaw ? domainsRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
+        if (domains.length === 0) {
+            haptic("notification", "error");
+            showToast("Add at least one domain");
+            return;
+        }
+
+        const body = {
+            name,
+            action,
+            upstream_group: action === "upstream" ? upstreamGroup : "",
+            domains,
+        };
+
+        if (editingSNIRuleName) {
+            api("PUT", "/api/routing/sni-rules/" + encodeURIComponent(editingSNIRuleName), body).then(d => {
+                if (d.error) {
+                    haptic("notification", "error");
+                    showToast(d.error, true);
+                    return;
+                }
+                haptic("notification", "success");
+                showToast('SNI rule "' + name + '" updated');
+                closeSNIRuleModal();
+                refreshRouting();
+            });
+        } else {
+            api("POST", "/api/routing/sni-rules", body).then(d => {
+                if (d.error) {
+                    haptic("notification", "error");
+                    showToast(d.error, true);
+                    return;
+                }
+                haptic("notification", "success");
+                showToast('SNI rule "' + name + '" added');
+                closeSNIRuleModal();
+                refreshRouting();
+            });
+        }
     };
 
     // --- Toggle helper ---
