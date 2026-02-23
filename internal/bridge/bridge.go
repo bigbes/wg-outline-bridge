@@ -568,9 +568,6 @@ func (b *Bridge) PeerStatuses() []observer.PeerStatus {
 
 	var result []observer.PeerStatus
 	for name, peer := range peers {
-		if peer.Disabled {
-			continue
-		}
 		ps := observer.PeerStatus{
 			Name:      name,
 			PublicKey: peer.PublicKey,

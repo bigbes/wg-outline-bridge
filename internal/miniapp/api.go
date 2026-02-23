@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bigbes/wireguard-outline-bridge/internal/config"
+	"github.com/bigbes/wireguard-outline-bridge/internal/porttracker"
 	"github.com/bigbes/wireguard-outline-bridge/internal/statsdb"
 )
 
@@ -38,11 +39,12 @@ func sortByCreationOrder[T any](items []T, nameFunc func(T) string, order []stri
 }
 
 type statusResponse struct {
-	Daemon    daemonInfo     `json:"daemon"`
-	Peers     []peerInfo     `json:"peers"`
-	Upstreams []upstreamInfo `json:"upstreams"`
-	MTProxy   mtproxyInfo    `json:"mtproxy"`
-	Proxies   []proxyInfo    `json:"proxies"`
+	Daemon    daemonInfo              `json:"daemon"`
+	Peers     []peerInfo              `json:"peers"`
+	Upstreams []upstreamInfo          `json:"upstreams"`
+	MTProxy   mtproxyInfo             `json:"mtproxy"`
+	Proxies   []proxyInfo             `json:"proxies"`
+	UsedPorts []porttracker.PortInfo  `json:"used_ports"`
 }
 
 type daemonInfo struct {
@@ -247,6 +249,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			Link:          buildProxyLink(p, serverIP),
 		}
 		resp.Proxies = append(resp.Proxies, pi)
+	}
+
+	// Used ports.
+	if admin {
+		resp.UsedPorts = porttracker.UsedPorts(cfg)
 	}
 
 	// Sort all lists by creation time.

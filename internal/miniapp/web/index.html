@@ -906,13 +906,17 @@
                     </select>
                 </div>
                 <div class="input-group">
-                    <label class="input-label">Listen Address</label
+                    <label class="input-label">Port</label
                     ><input
-                        type="text"
+                        type="number"
                         class="tg-input"
-                        id="inp-proxy-listen"
-                        placeholder="0.0.0.0:1080"
+                        id="inp-proxy-port"
+                        placeholder="1080"
+                        min="1"
+                        max="65535"
+                        oninput="checkPortAvailability()"
                     />
+                    <div class="input-hint" id="proxy-port-hint"></div>
                 </div>
                 <div class="input-group">
                     <label class="input-label">Username (optional)</label
@@ -939,6 +943,65 @@
                 </div>
             </div>
         </div>
+        <!-- Proxy Edit Modal -->
+        <div
+            class="modal-backdrop"
+            id="proxy-edit-modal-backdrop"
+            onclick="closeProxyEditModal()"
+        ></div>
+        <div class="modal-sheet" id="proxy-edit-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closeProxyEditModal()">
+                    Cancel
+                </button>
+                <span class="modal-title">Edit Proxy</span>
+                <button class="modal-btn done" onclick="saveProxyEdit()">
+                    Save
+                </button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">Name</label>
+                    <div class="info-value" id="proxy-edit-name"></div>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Type</label>
+                    <div class="info-value" id="proxy-edit-type"></div>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Listen</label>
+                    <div class="info-value" id="proxy-edit-listen"></div>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Upstream Group</label>
+                    <select class="tg-input" id="inp-proxy-edit-upstream-group"></select>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Username (leave empty to keep)</label>
+                    <input
+                        type="text"
+                        class="tg-input"
+                        id="inp-proxy-edit-username"
+                        placeholder="user"
+                        autocomplete="off"
+                    />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Password (leave empty to keep)</label>
+                    <div class="input-with-btn">
+                        <input
+                            type="text"
+                            class="tg-input"
+                            id="inp-proxy-edit-password"
+                            placeholder="password"
+                            autocomplete="off"
+                        />
+                        <div class="input-inline-btn" onclick="generateProxyPassword()">⟳</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- DNS Rule Modal -->
         <div
             class="modal-backdrop"

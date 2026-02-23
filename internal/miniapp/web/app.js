@@ -26,6 +26,7 @@ if (!tg || !tg.initData) {
     let editingPeerName = null;
     let peerEditDisabled = false;
     let editingSecretHex = null;
+    let editingProxyName = null;
 
     // Modal toggle state
     let upstreamDefaultOn = false;
@@ -432,12 +433,15 @@ if (!tg || !tg.initData) {
                     "</div></div>" +
                     '<div class="item-action">' +
                     (p.link
-                        ? '<button class="copy-link-btn" onclick="copyText(\'' +
+                        ? '<button class="action-icon-btn" onclick="copyText(\'' +
                           p.link.replace(/'/g, "\\'") +
-                          "',event)\">Copy</button>"
+                          "',event)\" title=\"Copy\"><svg width=\"20\" height=\"20\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><rect x=\"9\" y=\"9\" width=\"13\" height=\"13\" rx=\"2\" ry=\"2\"/><path d=\"M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1\"/></svg></button>"
                         : "") +
                     (isAdmin()
-                        ? '<button class="delete-btn" onclick="promptDelete(\'' +
+                        ? '<button class="action-icon-btn" onclick="openProxyEditModal(\'' +
+                          escapedName +
+                          '\')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
+                          '<button class="delete-btn" onclick="promptDelete(\'' +
                           escapedName +
                           '\',\'proxy\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>'
                         : "") +
@@ -1039,9 +1043,11 @@ if (!tg || !tg.initData) {
     window.openProxyModal = function () {
         openModal("proxy-modal");
         document.getElementById("inp-proxy-name").value = "";
-        document.getElementById("inp-proxy-listen").value = "";
+        document.getElementById("inp-proxy-port").value = "";
         document.getElementById("inp-proxy-username").value = "";
         document.getElementById("inp-proxy-password").value = "";
+        document.getElementById("proxy-port-hint").textContent = "";
+        document.getElementById("proxy-port-hint").className = "input-hint";
     };
     window.generateProxyPassword = function () {
         const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -1054,16 +1060,35 @@ if (!tg || !tg.initData) {
     window.closeProxyModal = function () {
         closeModal("proxy-modal");
     };
+    window.checkPortAvailability = function () {
+        const hint = document.getElementById("proxy-port-hint");
+        const port = parseInt(document.getElementById("inp-proxy-port").value, 10);
+        if (!port || port < 1 || port > 65535) {
+            hint.textContent = "";
+            hint.className = "input-hint";
+            return;
+        }
+        const used = (statusData && statusData.used_ports) || [];
+        const match = used.find((p) => p.port === port);
+        if (match) {
+            hint.textContent = "⚠ Port already used by " + match.owner;
+            hint.className = "input-hint warn";
+        } else {
+            hint.textContent = "";
+            hint.className = "input-hint";
+        }
+    };
     window.saveProxy = function () {
         const type = document.getElementById("inp-proxy-type").value;
-        const listen = document.getElementById("inp-proxy-listen").value.trim();
+        const port = document.getElementById("inp-proxy-port").value.trim();
         const name = document.getElementById("inp-proxy-name").value.trim();
         const username = document.getElementById("inp-proxy-username").value.trim();
         const password = document.getElementById("inp-proxy-password").value;
-        if (!listen) {
+        if (!port || parseInt(port, 10) < 1 || parseInt(port, 10) > 65535) {
             haptic("notification", "error");
             return;
         }
+        const listen = "0.0.0.0:" + port;
         api("POST", "/api/proxies", { name, type, listen, username, password }).then((d) => {
             if (d.error) {
                 haptic("notification", "error");
@@ -1073,6 +1098,58 @@ if (!tg || !tg.initData) {
             haptic("notification", "success");
             showToast("Proxy added");
             closeProxyModal();
+            refresh();
+        });
+    };
+
+    // --- Proxy Edit ---
+    window.openProxyEditModal = function (name) {
+        if (!statusData) return;
+        const proxy = (statusData.proxies || []).find((p) => p.name === name);
+        if (!proxy) return;
+        editingProxyName = name;
+
+        document.getElementById("proxy-edit-name").textContent = name;
+        document.getElementById("proxy-edit-type").textContent = proxy.type.toUpperCase();
+        document.getElementById("proxy-edit-listen").textContent = proxy.listen;
+        document.getElementById("inp-proxy-edit-username").value = "";
+        document.getElementById("inp-proxy-edit-password").value = "";
+
+        // Populate upstream group dropdown
+        const sel = document.getElementById("inp-proxy-edit-upstream-group");
+        const allGroups = [...new Set((statusData.upstreams || []).flatMap(u => u.groups || []))];
+        sel.innerHTML = '<option value="">Default</option>' +
+            allGroups.map(g => '<option value="' + escapeHtml(g) + '"' +
+                (proxy.upstream_group === g ? ' selected' : '') + '>' + escapeHtml(g) + '</option>'
+            ).join('');
+
+        openModal("proxy-edit-modal");
+    };
+    window.closeProxyEditModal = function () {
+        closeModal("proxy-edit-modal");
+        editingProxyName = null;
+    };
+    window.saveProxyEdit = function () {
+        if (!editingProxyName) return;
+        const upstreamGroup = document.getElementById("inp-proxy-edit-upstream-group").value;
+        const username = document.getElementById("inp-proxy-edit-username").value.trim();
+        const password = document.getElementById("inp-proxy-edit-password").value;
+
+        const body = { upstream_group: upstreamGroup };
+        if (username || password) {
+            body.username = username;
+            body.password = password;
+        }
+
+        api("PUT", "/api/proxies/" + encodeURIComponent(editingProxyName), body).then((d) => {
+            if (d.error) {
+                haptic("notification", "error");
+                showToast(d.error);
+                return;
+            }
+            haptic("notification", "success");
+            showToast("Proxy updated");
+            closeProxyEditModal();
             refresh();
         });
     };

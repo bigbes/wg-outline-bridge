@@ -65,6 +65,9 @@ logs:
 restart:
     ssh {{ remote_host }} sudo systemctl restart bridge
 
+status:
+    ssh {{ remote_host }} sudo systemctl status bridge
+
 # Stop the remote service
 stop:
     ssh {{ remote_host }} sudo systemctl stop bridge

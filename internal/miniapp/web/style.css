@@ -598,6 +598,19 @@ select.tg-input {
     padding-right: 36px;
 }
 
+.input-hint {
+    font-size: 12px;
+    margin-top: 4px;
+    padding-left: 4px;
+    min-height: 16px;
+}
+.input-hint.warn {
+    color: #ff9500;
+}
+.input-hint.error {
+    color: #ff3b30;
+}
+
 .input-with-btn {
     display: flex;
     gap: 8px;
