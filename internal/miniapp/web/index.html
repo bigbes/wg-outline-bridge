@@ -690,7 +690,7 @@
             </nav>
         </div>
 
-        <!-- Peer Modal -->
+        <!-- Peer Modal (Create) -->
         <div
             class="modal-backdrop"
             id="peer-modal-backdrop"
@@ -715,6 +715,50 @@
                         id="inp-peer-name"
                         placeholder="iPhone 15 Pro"
                     />
+                </div>
+            </div>
+        </div>
+
+        <!-- Peer Edit Modal -->
+        <div
+            class="modal-backdrop"
+            id="peer-edit-modal-backdrop"
+            onclick="closePeerEditModal()"
+        ></div>
+        <div class="modal-sheet" id="peer-edit-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closePeerEditModal()">
+                    Cancel
+                </button>
+                <span class="modal-title">Edit Peer</span>
+                <button class="modal-btn done wg" onclick="savePeerEdit()">
+                    Save
+                </button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">Peer Name</label>
+                    <input
+                        type="text"
+                        class="tg-input"
+                        id="inp-peer-edit-name"
+                        placeholder="iPhone 15 Pro"
+                    />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Status</label>
+                    <div class="toggle-row" onclick="togglePeerEditDisabled()">
+                        <span class="toggle-label" id="peer-edit-status-label">Enabled</span>
+                        <div class="toggle-switch active" id="peer-edit-enabled-toggle"><div class="toggle-knob"></div></div>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Public Key</label>
+                    <div class="info-value" id="peer-edit-pubkey"></div>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Allowed IPs</label>
+                    <div class="info-value" id="peer-edit-allowed-ips"></div>
                 </div>
             </div>
         </div>
@@ -1092,13 +1136,10 @@
                     Close
                 </button>
                 <span class="modal-title" id="config-modal-title">Config</span>
-                <button
-                    class="modal-btn done wg"
-                    id="config-copy-btn"
-                    onclick="copyConfig()"
-                >
-                    Copy
-                </button>
+                <div id="config-action-btns">
+                    <button class="action-icon-btn" onclick="downloadConfig()" title="Download"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+                    <button class="action-icon-btn" onclick="copyConfig()" title="Copy"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+                </div>
             </div>
             <div class="modal-content" id="config-modal-content"></div>
         </div>

@@ -584,6 +584,34 @@ func (s *Store) DeletePeer(name string) (config.PeerConfig, bool, error) {
 	return p, true, nil
 }
 
+// RenamePeer renames a peer from oldName to newName.
+func (s *Store) RenamePeer(oldName, newName string) error {
+	_, found, err := s.GetPeer(oldName)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("statsdb: peer %q not found", oldName)
+	}
+
+	_, found, err = s.GetPeer(newName)
+	if err != nil {
+		return err
+	}
+	if found {
+		return fmt.Errorf("statsdb: peer %q already exists", newName)
+	}
+
+	_, err = s.db.Exec(
+		`UPDATE wg_peers SET name = ?, updated_unix = unixepoch() WHERE name = ?`,
+		newName, oldName,
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: rename peer %q to %q: %w", oldName, newName, err)
+	}
+	return nil
+}
+
 // ImportPeers inserts peers from a map, skipping names that already exist.
 func (s *Store) ImportPeers(peers map[string]config.PeerConfig) (int, error) {
 	tx, err := s.db.Begin()

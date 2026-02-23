@@ -868,6 +868,38 @@ func (b *Bridge) SetPeerDisabled(name string, disabled bool) error {
 	return nil
 }
 
+// RenamePeer renames a peer from oldName to newName.
+func (b *Bridge) RenamePeer(oldName, newName string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	peer, exists := b.cfg.Peers[oldName]
+	if !exists {
+		return fmt.Errorf("peer %q not found", oldName)
+	}
+
+	if _, exists := b.cfg.Peers[newName]; exists {
+		return fmt.Errorf("peer %q already exists", newName)
+	}
+
+	if err := b.statsStore.RenamePeer(oldName, newName); err != nil {
+		return fmt.Errorf("renaming peer: %w", err)
+	}
+
+	delete(b.cfg.Peers, oldName)
+	b.cfg.Peers[newName] = peer
+	if b.peerMon != nil {
+		b.peerMon.updatePeers(b.cfg.Peers)
+	}
+
+	b.logger.Info("peer renamed", "old_name", oldName, "new_name", newName)
+	return nil
+}
+
 // AddSecret generates a new MTProxy secret, saves it to the database,
 // and live-reloads the MTProxy server to accept the new secret immediately.
 func (b *Bridge) AddSecret(secretType, comment string) (string, error) {

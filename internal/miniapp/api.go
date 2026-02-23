@@ -366,7 +366,8 @@ func (s *Server) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Disabled *bool `json:"disabled"`
+		Name     *string `json:"name"`
+		Disabled *bool   `json:"disabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -377,6 +378,21 @@ func (s *Server) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 		if err := s.manager.SetPeerDisabled(name, *req.Disabled); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
+		}
+	}
+
+	if req.Name != nil {
+		newName := strings.TrimSpace(*req.Name)
+		if newName == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer name must not be empty"})
+			return
+		}
+		if newName != name {
+			if err := s.manager.RenamePeer(name, newName); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			name = newName
 		}
 	}
 

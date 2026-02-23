@@ -21,7 +21,10 @@ if (!tg || !tg.initData) {
     let dnsLoaded = false;
     let usersLoaded = false;
     let currentConfigText = "";
+    let currentConfigName = "";
     let deleteCallback = null;
+    let editingPeerName = null;
+    let peerEditDisabled = false;
 
     // Modal toggle state
     let upstreamDefaultOn = false;
@@ -240,6 +243,9 @@ if (!tg || !tg.initData) {
                     "'," +
                     p.disabled +
                     ',event)"><div class="toggle-knob"></div></div>' +
+                    '<button class="action-icon-btn" onclick="openPeerEditModal(\'' +
+                    escapedName +
+                    '\')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
                     '<button class="action-icon-btn" onclick="showPeerConf(\'' +
                     escapedName +
                     '\')" title="Config"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>' +
@@ -760,6 +766,71 @@ if (!tg || !tg.initData) {
         });
     };
 
+    window.openPeerEditModal = function (name) {
+        if (!statusData) return;
+        const peer = (statusData.peers || []).find((p) => p.name === name);
+        if (!peer) return;
+        editingPeerName = name;
+        peerEditDisabled = peer.disabled;
+        document.getElementById("inp-peer-edit-name").value = name;
+        document.getElementById("peer-edit-pubkey").textContent =
+            peer.public_key;
+        document.getElementById("peer-edit-allowed-ips").textContent =
+            peer.allowed_ips || "—";
+        updatePeerEditToggle();
+        openModal("peer-edit-modal");
+    };
+    window.closePeerEditModal = function () {
+        closeModal("peer-edit-modal");
+        editingPeerName = null;
+    };
+    window.togglePeerEditDisabled = function () {
+        peerEditDisabled = !peerEditDisabled;
+        updatePeerEditToggle();
+        haptic("selection");
+    };
+    function updatePeerEditToggle() {
+        const el = document.getElementById("peer-edit-enabled-toggle");
+        const label = document.getElementById("peer-edit-status-label");
+        if (peerEditDisabled) {
+            el.classList.remove("active");
+            label.textContent = "Disabled";
+        } else {
+            el.classList.add("active");
+            label.textContent = "Enabled";
+        }
+    }
+    window.savePeerEdit = function () {
+        if (!editingPeerName) return;
+        const newName = document
+            .getElementById("inp-peer-edit-name")
+            .value.trim();
+        if (!newName) {
+            haptic("notification", "error");
+            showToast("Name cannot be empty");
+            return;
+        }
+        const body = { disabled: peerEditDisabled };
+        if (newName !== editingPeerName) {
+            body.name = newName;
+        }
+        api(
+            "PUT",
+            "/api/peers/" + encodeURIComponent(editingPeerName),
+            body,
+        ).then((d) => {
+            if (d.error) {
+                haptic("notification", "error");
+                showToast(d.error);
+                return;
+            }
+            haptic("notification", "success");
+            showToast("Peer updated");
+            closePeerEditModal();
+            refresh();
+        });
+    };
+
     window.showPeerConf = function (name) {
         api("GET", "/api/peers/" + encodeURIComponent(name) + "/conf").then(
             (d) => {
@@ -768,9 +839,10 @@ if (!tg || !tg.initData) {
                     return;
                 }
                 currentConfigText = d.config;
+                currentConfigName = name;
                 document.getElementById("config-modal-title").textContent =
                     name;
-                document.getElementById("config-copy-btn").style.display = "";
+                document.getElementById("config-action-btns").style.display = "";
                 document.getElementById("config-modal-content").innerHTML =
                     '<pre class="config-pre">' +
                     escapeHtml(d.config) +
@@ -790,7 +862,7 @@ if (!tg || !tg.initData) {
                 currentConfigText = d.config;
                 document.getElementById("config-modal-title").textContent =
                     name + " QR";
-                document.getElementById("config-copy-btn").style.display =
+                document.getElementById("config-action-btns").style.display =
                     "none";
                 const container = document.getElementById(
                     "config-modal-content",
@@ -822,6 +894,19 @@ if (!tg || !tg.initData) {
             haptic("notification", "success");
             showToast("Copied to clipboard");
         });
+    };
+    window.downloadConfig = function () {
+        const blob = new Blob([currentConfigText], { type: "text/plain" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = (currentConfigName || "peer") + ".conf";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        haptic("notification", "success");
+        showToast("Download started");
     };
 
     // --- Upstreams ---
