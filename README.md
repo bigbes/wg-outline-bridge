@@ -108,8 +108,9 @@ wireguard:
   #   i3: ""                      # special junk packet 3
   #   i4: ""                      # special junk packet 4
   #   i5: ""                      # special junk packet 5
-outlines:
+upstreams:
   - name: "default"
+    type: outline
     transport: "ss://..."
     default: true                  # exactly one must be default
     health_check:
@@ -117,7 +118,9 @@ outlines:
       interval: 30
       target: "1.1.1.1:80"
   - name: "alt"
+    type: outline
     transport: "ss://..."
+    groups: ["video"]              # custom groups for upstream_group references
 database:
   path: "/var/lib/wg-outline-bridge/bridge.sqlite"  # empty or omitted = disabled
   flush_interval: 30                                 # seconds (default: 30)
@@ -132,16 +135,21 @@ proxies:
     password: "pass"
 ```
 
-### Outline Entries
+### Upstreams
 
-All Outline (Shadowsocks) endpoints are defined in a single `outlines` array. Each entry has:
+All upstream endpoints are defined in the `upstreams` array. Each entry has:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | yes | Identifier used in routing rules |
+| `name` | yes | Identifier used in routing rules and references |
+| `type` | yes | Upstream type (`outline`) |
 | `transport` | yes | Shadowsocks URI (`ss://...`) |
 | `default` | no | Set `true` on exactly one entry — used when no routing rule matches |
+| `enabled` | no | Whether the upstream is active (default: `true`) |
+| `groups` | no | Custom group names for `upstream_group` references |
 | `health_check` | no | Periodic TCP probe to verify the proxy is reachable |
+
+> **Legacy**: the `outlines` key (without `type` field) is still accepted and auto-converted to `upstreams` at load time.
 
 ## Routing
 
@@ -153,7 +161,7 @@ Traffic routing is decided per-connection with three levels:
 | **IP rules** | Server-side | Match destination IP against CIDR lists → `direct`, `outline`, or `default` |
 | **SNI rules** | Server-side | Match TLS SNI (port 443 only) against domain patterns → `direct`, `outline`, or `default` |
 
-Evaluation order: IP rules → SNI rules (TLS only) → default outline.
+Evaluation order: IP rules → SNI rules (TLS only) → default upstream.
 
 ### CIDR Rules (Client AllowedIPs)
 
@@ -185,7 +193,7 @@ routing:
 
 ### IP Rules
 
-Match destination IP against inline CIDRs, downloaded lists, or ASN prefixes. Lists and ASN data are fetched through the default Outline proxy and refreshed periodically.
+Match destination IP against inline CIDRs, downloaded lists, or ASN prefixes. Lists and ASN data are fetched through the default upstream and refreshed periodically.
 
 ```yaml
 routing:
@@ -223,7 +231,8 @@ routing:
   sni_rules:
     - name: "video-via-alt"
       action: outline
-      outline: "alt"          # route to named outline
+      upstream_group: "video"   # route to upstream group
+      # outline: "alt"          # legacy alternative
       domains:
         - "*.youtube.com"
         - "*.googlevideo.com"
@@ -239,8 +248,8 @@ routing:
 | Action | Description |
 |--------|-------------|
 | `direct` | Connect to destination directly, bypassing all proxies |
-| `outline` | Route through a named outline (specify `outline: "name"`) |
-| `default` | Use the default outline (same as no rule matching) |
+| `outline` | Route through a named upstream (specify `upstream_group: "group"` or legacy `outline: "name"`) |
+| `default` | Use the default upstream (same as no rule matching) |
 
 ## Proxy Servers
 
@@ -251,7 +260,7 @@ proxies:
   - name: "socks-main"
     type: socks5              # socks5, http, or https
     listen: "0.0.0.0:1080"
-    outline: ""               # optional: named outline (default = default)
+    upstream_group: ""        # optional: upstream group (default = default)
     username: "user"          # optional: enables SOCKS5 user/pass auth
     password: "pass"
 
@@ -279,7 +288,8 @@ proxies:
 | `name` | yes | Unique identifier for the proxy instance |
 | `type` | yes | `socks5`, `http`, or `https` |
 | `listen` | yes | Listen address (e.g. `0.0.0.0:1080`) |
-| `outline` | no | Named outline to use (default = default outline) |
+| `upstream_group` | no | Upstream group to route through (default = default upstream) |
+| `outline` | no | Legacy: named outline to use (auto-converted to `upstream_group`) |
 | `username` | no | Enable authentication (SOCKS5 user/pass or HTTP Basic) |
 | `password` | no | Password for authentication |
 | `tls` | https only | TLS configuration (cert files or ACME domain) |
@@ -420,7 +430,7 @@ Send `SIGHUP` to reload configuration without restarting:
 kill -HUP <pid>
 ```
 
-This reloads peers (add/remove) and swaps the default Outline client if its transport URI changed.
+This reloads peers (add/remove) and swaps the default upstream if its transport URI changed.
 
 ## Systemd Service
 

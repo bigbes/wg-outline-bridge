@@ -65,7 +65,8 @@ wireguard:
 #   enabled: true
 #   listen:
 #     - "0.0.0.0:443"
-#   outline: "default"         # which outline to use for backend connections
+#   outline: "default"         # legacy: which outline to use for backend connections
+#   upstream_group: "default"  # preferred: upstream group name (overrides outline)
 #   secrets:                   # inline 16-byte hex secrets (32 chars; optional dd/ee prefix)
 #     - "dd0123456789abcdef0123456789abcdef"
 #   stats_addr: "127.0.0.1:8080"  # HTTP stats endpoint (localhost-only, GET /stats)
@@ -84,7 +85,8 @@ wireguard:
 #   - name: "socks-main"
 #     type: socks5
 #     listen: "0.0.0.0:1080"
-#     outline: ""                # optional: named outline (default = default)
+#     outline: ""                # legacy: named outline (default = default)
+#     upstream_group: ""         # preferred: upstream group name (overrides outline)
 #     username: ""               # optional: enable user/pass authentication
 #     password: ""
 #
@@ -127,12 +129,26 @@ wireguard:
 #   domain: "admin.example.com"  # public domain (required; Telegram requires HTTPS)
 #   acme_email: "admin@example.com"  # optional email for Let's Encrypt notifications
 
-outlines:
+upstreams:
   - name: "default"
+    type: outline
     transport: "ss://CHANGE_ME"
     default: true
+#   enabled: true                # enabled by default; set false to disable
+#   groups: ["video"]            # custom groups for upstream_group references
+#   health_check:
+#     enabled: true
+#     interval: 30               # seconds
+#     target: "1.1.1.1:80"
 #  - name: "alt"
+#    type: outline
 #    transport: "ss://CHANGE_ME_ALT"
+#    groups: ["video"]
+
+# outlines:                      # legacy format (auto-converted to upstreams)
+#   - name: "default"
+#     transport: "ss://CHANGE_ME"
+#     default: true
 
 # geoip:                     # GeoIP MMDB databases for country-based routing
 #   - name: "country"         # name used in geoip: references (optional)
@@ -182,10 +198,18 @@ outlines:
 #       asns:
 #         - 13335              # Cloudflare
 #
+#     - name: "special-via-alt"
+#       action: outline
+#       outline: "alt"           # legacy: route to named outline
+#       upstream_group: "video"  # preferred: route to upstream group
+#       cidrs:
+#         - "203.0.113.0/24"
+#
 #   sni_rules:
 #     - name: "video-via-alt"
 #       action: outline
-#       outline: "alt"
+#       outline: "alt"           # legacy: route to named outline
+#       upstream_group: "video"  # preferred: route to upstream group
 #       domains:
 #         - "*.youtube.com"
 #         - "*.googlevideo.com"
