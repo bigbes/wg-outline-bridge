@@ -60,11 +60,31 @@ body {
 .status-bar {
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 8px 16px;
+    justify-content: space-between;
+    padding: 6px 16px;
     font-size: 13px;
     color: var(--text-secondary);
+    background-color: var(--card-bg);
+}
+.status-bar-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.status-bar-admin-btn {
+    background: none;
+    border: 1px solid var(--separator);
+    border-radius: 14px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 12px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background-color 0.2s;
+}
+.status-bar-admin-btn:active {
+    background-color: var(--separator);
 }
 .alive-dot {
     width: 8px;
@@ -191,6 +211,29 @@ body {
     font-size: 15px;
     color: var(--text-secondary);
     margin-top: 4px;
+}
+
+/* --- Admin Page Avatar --- */
+.admin-avatar {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+    font-weight: 600;
+    color: white;
+    margin-bottom: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    overflow: hidden;
+}
+.admin-avatar img {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    object-fit: cover;
 }
 
 /* --- Stats --- */
@@ -449,6 +492,9 @@ body {
 .action-icon-circle.routing {
     background-color: var(--routing-teal);
 }
+.action-icon-circle.admin {
+    background-color: var(--admin-gold);
+}
 .action-text {
     flex: 1;
     font-size: 17px;
@@ -471,6 +517,15 @@ body {
 }
 .action-text.routing {
     color: var(--routing-teal);
+}
+.action-text.admin {
+    color: var(--admin-gold);
+}
+.action-icon-circle.destructive {
+    background-color: var(--destructive-red);
+}
+.action-text.destructive {
+    color: var(--destructive-red);
 }
 
 /* --- Toggle Switch --- */
@@ -584,6 +639,9 @@ body {
 .modal-btn.done.routing {
     color: var(--routing-teal);
 }
+.modal-btn.done.admin {
+    color: var(--admin-gold);
+}
 .modal-title {
     font-size: 17px;
     font-weight: 600;
@@ -672,6 +730,90 @@ select.tg-input {
     user-select: none;
 }
 .input-inline-btn:active {
+    opacity: 0.6;
+}
+
+/* --- Multi-line entry rows (IP Rule CIDRs/ASNs) --- */
+.entry-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 6px;
+}
+.entry-row select.entry-type {
+    width: 90px;
+    flex-shrink: 0;
+    background-color: var(--bg-color);
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 10px 8px;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-family: "Inter", sans-serif;
+    appearance: none;
+}
+.entry-row select.entry-db {
+    width: 90px;
+    flex-shrink: 0;
+    background-color: var(--bg-color);
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 10px 8px;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-family: "Inter", sans-serif;
+    appearance: none;
+}
+.entry-row input.entry-value {
+    flex: 1;
+    min-width: 0;
+    background-color: var(--bg-color);
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 10px 10px;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-family: "Inter", sans-serif;
+}
+.entry-row input.entry-value:focus {
+    background-color: var(--separator);
+}
+.entry-row input.entry-value::placeholder {
+    color: #555;
+}
+.entry-delete-btn {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    color: #ff3b30;
+    cursor: pointer;
+    border-radius: 8px;
+    font-size: 18px;
+    padding: 0;
+}
+.entry-delete-btn:active {
+    opacity: 0.6;
+}
+.add-entry-btn {
+    display: block;
+    width: 100%;
+    padding: 10px;
+    margin-top: 4px;
+    background-color: var(--bg-color);
+    border: 1px dashed var(--separator);
+    border-radius: 10px;
+    color: var(--accent);
+    font-size: 14px;
+    font-family: "Inter", sans-serif;
+    cursor: pointer;
+    text-align: center;
+}
+.add-entry-btn:active {
     opacity: 0.6;
 }
 
@@ -809,6 +951,35 @@ select.tg-input {
 }
 .alert-btn:active {
     background-color: var(--separator);
+}
+.alert-btn.destructive {
+    color: var(--destructive-red);
+    font-weight: 600;
+}
+.alert-btn.destructive:disabled {
+    color: var(--text-secondary);
+    opacity: 0.4;
+}
+.alert-phrase {
+    font-family: monospace;
+    font-weight: 600;
+    color: var(--destructive-red);
+}
+.alert-input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--separator);
+    border-radius: 8px;
+    background-color: var(--bg-color);
+    color: var(--text-primary);
+    font-size: 15px;
+    margin-top: 12px;
+    text-align: center;
+    font-family: monospace;
+}
+.alert-input:focus {
+    border-color: var(--destructive-red);
+    outline: none;
 }
 
 /* --- Toast --- */
@@ -1046,6 +1217,62 @@ body.is-admin .action-btn.admin-only {
 }
 body.is-admin .tab-item.admin-only {
     display: flex;
+}
+.filter-checkbox.admin-only {
+    display: none;
+}
+body.is-admin .filter-checkbox.admin-only {
+    display: inline-block;
+}
+button.admin-only {
+    display: none;
+}
+body.is-admin button.admin-only {
+    display: inline-block;
+}
+.status-bar.admin-only {
+    display: none;
+}
+body.is-admin .status-bar.admin-only {
+    display: flex;
+}
+
+/* --- Section Title Row with Filter --- */
+.section-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-right: 16px;
+}
+.section-title-row .section-title {
+    flex: 1;
+}
+.filter-checkbox {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    cursor: pointer;
+    border-radius: 6px;
+    border: 2px solid var(--separator);
+    background: transparent;
+    position: relative;
+    flex-shrink: 0;
+    transition: background-color 0.2s, border-color 0.2s;
+}
+.filter-checkbox.checked {
+    background: var(--accent-blue, #007aff);
+    border-color: var(--accent-blue, #007aff);
+}
+.filter-checkbox.checked::after {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 2px;
+    width: 6px;
+    height: 10px;
+    border: solid #fff;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
 }
 
 /* --- Scrollbar --- */

@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/crypto/acme/autocert"
 
+	"github.com/bigbes/wireguard-outline-bridge/internal/geoip"
 	"github.com/bigbes/wireguard-outline-bridge/internal/observer"
 	"github.com/bigbes/wireguard-outline-bridge/internal/statsdb"
 	tgbot "github.com/bigbes/wireguard-outline-bridge/internal/telegram"
@@ -31,6 +32,7 @@ type Server struct {
 	provider        observer.StatusProvider
 	cfgProv         observer.ConfigProvider
 	manager         observer.Manager
+	geoMgr          *geoip.Manager
 	bot             *tgbot.Bot
 	store           *statsdb.Store
 	botToken        string
@@ -49,6 +51,7 @@ func New(
 	provider observer.StatusProvider,
 	cfgProv observer.ConfigProvider,
 	manager observer.Manager,
+	geoMgr *geoip.Manager,
 	bot *tgbot.Bot,
 	store *statsdb.Store,
 	botToken string,
@@ -63,6 +66,7 @@ func New(
 		provider:     provider,
 		cfgProv:      cfgProv,
 		manager:      manager,
+		geoMgr:       geoMgr,
 		bot:          bot,
 		store:        store,
 		botToken:     botToken,
@@ -153,6 +157,10 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/users/", s.authMiddleware(adminOnly(s.handleUserRoute)))
 	mux.HandleFunc("/api/invites", s.authMiddleware(adminOnly(s.handleInvites)))
 	mux.HandleFunc("/api/invites/", s.authMiddleware(adminOnly(s.handleInviteItem)))
+	mux.HandleFunc("/api/backup", s.authMiddleware(adminOnly(s.handleBackupDB)))
+	mux.HandleFunc("/api/restore", s.authMiddleware(adminOnly(s.handleRestoreDB)))
+	mux.HandleFunc("/api/restart", s.authMiddleware(adminOnly(s.handleRestart)))
+	mux.HandleFunc("/api/reset", s.authMiddleware(adminOnly(s.handleResetDB)))
 
 	// Invite redemption (validates Telegram init data but doesn't require authorization).
 	mux.HandleFunc("/api/invite", s.handleRedeemInvite)

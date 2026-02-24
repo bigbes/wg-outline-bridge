@@ -65,9 +65,12 @@
         <div id="loading">Loading...</div>
 
         <div id="app">
-            <div class="status-bar">
-                <span class="alive-dot" id="alive-dot"></span>
-                <span id="uptime"></span>
+            <div class="status-bar admin-only">
+                <div class="status-bar-left">
+                    <span class="alive-dot" id="alive-dot"></span>
+                    <span id="uptime"></span>
+                </div>
+                <button class="status-bar-admin-btn admin-only" onclick="switchTab('admin')">Admin</button>
             </div>
 
             <!-- Page: Peers (default) -->
@@ -136,7 +139,10 @@
                         />
                     </svg>
                 </div>
-                <h2 class="section-title">Client Peers</h2>
+                <div class="section-title-row">
+                    <h2 class="section-title">Client Peers</h2>
+                    <span class="filter-checkbox admin-only" id="peers-only-mine-cb" onclick="togglePeersOnlyMine()"></span>
+                </div>
                 <div class="list-group" id="peer-list"></div>
             </div>
 
@@ -633,8 +639,90 @@
                         />
                     </svg>
                 </div>
-                <h2 class="section-title">Secrets</h2>
+                <div class="section-title-row">
+                    <h2 class="section-title">Secrets</h2>
+                    <span class="filter-checkbox admin-only" id="secrets-only-mine-cb" onclick="toggleSecretsOnlyMine()"></span>
+                </div>
                 <div class="list-group" id="mtproxy-secret-list"></div>
+            </div>
+
+            <!-- Page: Admin -->
+            <div class="page" id="page-admin">
+                <header class="header">
+                    <div class="admin-avatar" id="admin-avatar"></div>
+                    <h1 class="bot-title" id="admin-name"></h1>
+                    <p class="bot-subtitle" id="admin-role"></p>
+                </header>
+                <h2 class="section-title">Database</h2>
+                <div class="action-btn" onclick="backupDB()">
+                    <div class="action-icon-circle admin">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="7 10 12 15 17 10"/>
+                            <line x1="12" y1="15" x2="12" y2="3"/>
+                        </svg>
+                    </div>
+                    <div class="action-text admin">Backup Database</div>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path d="M1 1L7 7L1 13" stroke="currentColor" stroke-width="2" fill="none" />
+                    </svg>
+                </div>
+                <div class="action-btn" onclick="restoreDB()">
+                    <div class="action-icon-circle admin">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="17 8 12 3 7 8"/>
+                            <line x1="12" y1="3" x2="12" y2="15"/>
+                        </svg>
+                    </div>
+                    <div class="action-text admin">Restore Database</div>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path d="M1 1L7 7L1 13" stroke="currentColor" stroke-width="2" fill="none" />
+                    </svg>
+                </div>
+                <input type="file" id="restore-file-input" accept=".db,.sqlite,.sqlite3,.bak" style="display:none" onchange="handleRestoreFile(this)">
+
+        <!-- Password Modal (for backup/restore) -->
+        <div class="modal-backdrop" id="password-modal-backdrop" onclick="closePasswordModal()"></div>
+        <div class="modal-sheet" id="password-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closePasswordModal()">Cancel</button>
+                <span class="modal-title" id="password-modal-title">Password</span>
+                <button class="modal-btn done admin" onclick="submitPasswordModal()">Done</button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label" id="password-modal-label">Enter password</label>
+                    <input type="password" class="tg-input" id="inp-modal-password" placeholder="Password" />
+                </div>
+            </div>
+        </div>
+                <h2 class="section-title">Instance</h2>
+                <div class="action-btn" onclick="restartInstance()">
+                    <div class="action-icon-circle admin">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M23 4v6h-6"/>
+                            <path d="M1 20v-6h6"/>
+                            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                        </svg>
+                    </div>
+                    <div class="action-text admin">Restart Instance</div>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path d="M1 1L7 7L1 13" stroke="currentColor" stroke-width="2" fill="none" />
+                    </svg>
+                </div>
+                <div class="action-btn" onclick="promptResetInstance()">
+                    <div class="action-icon-circle destructive">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="1 4 1 10 7 10"/>
+                            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+                        </svg>
+                    </div>
+                    <div class="action-text destructive">Reset Instance</div>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path d="M1 1L7 7L1 13" stroke="currentColor" stroke-width="2" fill="none" />
+                    </svg>
+                </div>
             </div>
 
             <!-- Tab Navigation -->
@@ -1495,7 +1583,7 @@
                     <label class="input-label">Mode</label>
                     <select class="tg-input" id="inp-cidr-edit-mode">
                         <option value="allow">Allow (include)</option>
-                        <option value="disallow">Exclude (bypass)</option>
+                        <option value="disallow">Direct (bypass)</option>
                     </select>
                 </div>
                 <div class="input-group">
@@ -1530,12 +1618,9 @@
                     <input type="text" class="tg-input" id="inp-ip-rule-upstream-group" placeholder="group-name" />
                 </div>
                 <div class="input-group">
-                    <label class="input-label">CIDRs (comma-separated)</label>
-                    <textarea class="tg-input tg-textarea" id="inp-ip-rule-cidrs" placeholder="10.0.0.0/8, 192.168.0.0/16" rows="3"></textarea>
-                </div>
-                <div class="input-group">
-                    <label class="input-label">ASNs (comma-separated, optional)</label>
-                    <input type="text" class="tg-input" id="inp-ip-rule-asns" placeholder="13335, 32934" />
+                    <label class="input-label">CIDRs / ASNs</label>
+                    <div id="ip-rule-entries"></div>
+                    <button type="button" class="add-entry-btn" onclick="addIPRuleEntry()">+ Add Entry</button>
                 </div>
                 <div class="input-group">
                     <label class="input-label">IP List URL (optional)</label>
@@ -1609,6 +1694,18 @@
                     <button class="alert-btn delete" id="confirm-delete-btn">
                         Delete
                     </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Reset Confirm Alert -->
+        <div class="alert-overlay" id="reset-alert-overlay">
+            <div class="alert-box">
+                <div class="alert-title">Reset Instance?</div>
+                <div class="alert-message" id="reset-alert-message"></div>
+                <div class="alert-buttons">
+                    <button class="alert-btn cancel" onclick="closeResetAlert()">Cancel</button>
+                    <button class="alert-btn destructive" id="reset-confirm-btn" disabled onclick="confirmResetInstance()">Reset</button>
                 </div>
             </div>
         </div>

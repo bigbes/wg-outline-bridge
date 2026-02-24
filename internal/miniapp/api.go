@@ -1,16 +1,20 @@
 package miniapp
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/bigbes/wireguard-outline-bridge/internal/config"
@@ -67,6 +71,7 @@ type peerInfo struct {
 	ConnectionsTotal  int64  `json:"connections_total"`
 	Disabled          bool   `json:"disabled"`
 	UpstreamGroup     string `json:"upstream_group"`
+	OwnerID           int64  `json:"owner_id,omitempty"`
 	OwnerName         string `json:"owner_name,omitempty"`
 }
 
@@ -93,6 +98,7 @@ type secretInfo struct {
 	BytesC2B          int64  `json:"bytes_c2b"`
 	BytesB2C          int64  `json:"bytes_b2c"`
 	UpstreamGroup     string `json:"upstream_group"`
+	OwnerID           int64  `json:"owner_id,omitempty"`
 	OwnerName         string `json:"owner_name,omitempty"`
 }
 
@@ -288,6 +294,16 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		for _, id := range secretOwners {
 			ownerIDs[id] = struct{}{}
 		}
+		for i := range resp.Peers {
+			if ownerID, ok := peerOwners[resp.Peers[i].Name]; ok {
+				resp.Peers[i].OwnerID = ownerID
+			}
+		}
+		for i := range resp.MTProxy.Secrets {
+			if ownerID, ok := secretOwners[resp.MTProxy.Secrets[i].Secret]; ok {
+				resp.MTProxy.Secrets[i].OwnerID = ownerID
+			}
+		}
 		if len(ownerIDs) > 0 {
 			ids := make([]int64, 0, len(ownerIDs))
 			for id := range ownerIDs {
@@ -355,8 +371,8 @@ func (s *Server) handleAddPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set ownership for guest-created peers.
-	if guest && s.store != nil {
+	// Set ownership.
+	if s.store != nil {
 		if err := s.store.SetPeerOwner(req.Name, uid); err != nil {
 			s.logger.Error("miniapp: failed to set peer owner", "peer", req.Name, "user_id", uid, "err", err)
 		}
@@ -632,8 +648,8 @@ func (s *Server) handleAddSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set ownership for guest-created secrets.
-	if guest && s.store != nil {
+	// Set ownership.
+	if s.store != nil {
 		if err := s.store.SetSecretOwner(secretHex, uid); err != nil {
 			s.logger.Error("miniapp: failed to set secret owner", "secret", secretHex, "user_id", uid, "err", err)
 		}
@@ -2051,10 +2067,16 @@ func (s *Server) handleDeleteDNSRule(w http.ResponseWriter, r *http.Request) {
 
 // --- Routing API ---
 
+type geoipDBInfo struct {
+	Name      string   `json:"name"`
+	Countries []string `json:"countries"`
+}
+
 type routingResponse struct {
-	CIDRs    []string        `json:"cidrs"`
-	IPRules  []ipRuleInfo    `json:"ip_rules"`
-	SNIRules []sniRuleInfo   `json:"sni_rules"`
+	CIDRs    []config.CIDREntry `json:"cidrs"`
+	IPRules  []ipRuleInfo       `json:"ip_rules"`
+	SNIRules []sniRuleInfo      `json:"sni_rules"`
+	GeoIPDBs []geoipDBInfo      `json:"geoip_dbs"`
 }
 
 type ipRuleInfo struct {
@@ -2094,7 +2116,7 @@ func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
 		CIDRs: routing.CIDRs,
 	}
 	if resp.CIDRs == nil {
-		resp.CIDRs = []string{}
+		resp.CIDRs = []config.CIDREntry{}
 	}
 
 	for _, rule := range routing.IPRules {
@@ -2142,6 +2164,20 @@ func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
 		resp.SNIRules = []sniRuleInfo{}
 	}
 
+	for _, g := range cfg.GeoIP {
+		countries := s.geoMgr.Countries(g.Name)
+		if countries == nil {
+			countries = []string{}
+		}
+		resp.GeoIPDBs = append(resp.GeoIPDBs, geoipDBInfo{
+			Name:      g.Name,
+			Countries: countries,
+		})
+	}
+	if resp.GeoIPDBs == nil {
+		resp.GeoIPDBs = []geoipDBInfo{}
+	}
+
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -2176,6 +2212,7 @@ func (s *Server) handleUpdateRoutingCIDR(w http.ResponseWriter, r *http.Request)
 
 	var req struct {
 		CIDR string `json:"cidr"`
+		Mode string `json:"mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -2185,8 +2222,12 @@ func (s *Server) handleUpdateRoutingCIDR(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "new cidr is required"})
 		return
 	}
+	if req.Mode == "" {
+		req.Mode = "allow"
+	}
 
-	if err := s.manager.UpdateRoutingCIDR(oldCIDR, req.CIDR); err != nil {
+	entry := config.CIDREntry{CIDR: req.CIDR, Mode: req.Mode}
+	if err := s.manager.UpdateRoutingCIDR(oldCIDR, entry); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -2254,6 +2295,7 @@ func (s *Server) handleAddRoutingCIDR(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		CIDR string `json:"cidr"`
+		Mode string `json:"mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -2263,13 +2305,17 @@ func (s *Server) handleAddRoutingCIDR(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cidr is required"})
 		return
 	}
+	if req.Mode == "" {
+		req.Mode = "allow"
+	}
 
-	if err := s.manager.AddRoutingCIDR(req.CIDR); err != nil {
+	entry := config.CIDREntry{CIDR: req.CIDR, Mode: req.Mode}
+	if err := s.manager.AddRoutingCIDR(entry); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"cidr": req.CIDR, "status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{"cidr": req.CIDR, "mode": req.Mode, "status": "ok"})
 }
 
 func (s *Server) handleDeleteRoutingCIDR(w http.ResponseWriter, r *http.Request) {
@@ -2539,6 +2585,127 @@ func (s *Server) handleReorderIPRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleBackupDB(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.store == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database not available"})
+		return
+	}
+
+	password := r.URL.Query().Get("password")
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=bridge-backup-%s.db", time.Now().Format("20060102-150405")))
+
+	if password == "" {
+		if err := s.store.Backup(w); err != nil {
+			s.logger.Error("miniapp: backup failed", "err", err)
+		}
+		return
+	}
+
+	// Encrypt: read backup into buffer, then encrypt to response.
+	var buf bytes.Buffer
+	if err := s.store.Backup(&buf); err != nil {
+		s.logger.Error("miniapp: backup failed", "err", err)
+		return
+	}
+	if err := statsdb.EncryptBackup(w, &buf, password); err != nil {
+		s.logger.Error("miniapp: encrypt backup failed", "err", err)
+	}
+}
+
+func (s *Server) handleRestoreDB(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.store == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "database not available"})
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 100<<20) // 100 MB limit
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing file"})
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read file"})
+		return
+	}
+
+	var reader io.Reader
+	if statsdb.IsEncryptedBackup(data) {
+		password := r.FormValue("password")
+		if password == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "backup is encrypted", "encrypted": true})
+			return
+		}
+		var buf bytes.Buffer
+		if err := statsdb.DecryptBackup(&buf, data, password); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "decryption failed — wrong password?"})
+			return
+		}
+		reader = &buf
+	} else {
+		reader = bytes.NewReader(data)
+	}
+
+	if err := s.store.Restore(reader); err != nil {
+		s.logger.Error("miniapp: restore failed", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	s.logger.Info("miniapp: database restored", "user_id", requestUserID(r))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.logger.Info("miniapp: restart requested", "user_id", requestUserID(r))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		p, err := os.FindProcess(os.Getpid())
+		if err != nil {
+			s.logger.Error("miniapp: failed to find self process", "err", err)
+			return
+		}
+		if err := p.Signal(syscall.SIGTERM); err != nil {
+			s.logger.Error("miniapp: failed to send SIGTERM", "err", err)
+		}
+	}()
+}
+
+func (s *Server) handleResetDB(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if err := s.manager.ResetConfig(); err != nil {
+		s.logger.Error("miniapp: reset failed", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	s.logger.Info("miniapp: instance reset", "user_id", requestUserID(r))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

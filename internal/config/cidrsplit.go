@@ -6,27 +6,72 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 var templateVarRe = regexp.MustCompile(`\{\{\s*\$([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}`)
+
+// CIDREntry represents a routing CIDR with its mode (allow/disallow).
+type CIDREntry struct {
+	CIDR string `json:"cidr" yaml:"-"`
+	Mode string `json:"mode" yaml:"-"` // "allow" or "disallow"
+}
+
+// String returns the prefixed string representation (e.g. "d:10.0.0.0/8").
+func (e CIDREntry) String() string {
+	switch e.Mode {
+	case "allow":
+		return "a:" + e.CIDR
+	case "disallow":
+		return "d:" + e.CIDR
+	default:
+		return e.CIDR
+	}
+}
+
+// ParseCIDREntry parses a prefixed CIDR string (e.g. "d:10.0.0.0/8") into a CIDREntry.
+func ParseCIDREntry(s string) (CIDREntry, error) {
+	action, cidr, err := parseCIDRRule(s)
+	if err != nil {
+		return CIDREntry{}, err
+	}
+	return CIDREntry{Mode: action, CIDR: cidr}, nil
+}
+
+func (e *CIDREntry) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.ScalarNode {
+		return fmt.Errorf("expected string, got %v", value.Kind)
+	}
+	action, cidr, err := parseCIDRRule(value.Value)
+	if err != nil {
+		return err
+	}
+	e.Mode = action
+	e.CIDR = cidr
+	return nil
+}
 
 // ExpandCIDRRuleVars replaces template variables in CIDR rules.
 // Variables use the syntax {{ $var_name }} and are looked up in the
 // provided vars map. Unknown or empty variables are left unexpanded
 // (which will cause a parse error downstream, giving a clear message).
-func ExpandCIDRRuleVars(rules []string, vars map[string]string) []string {
-	out := make([]string, len(rules))
-	for i, rule := range rules {
-		out[i] = templateVarRe.ReplaceAllStringFunc(rule, func(match string) string {
-			sub := templateVarRe.FindStringSubmatch(match)
-			if len(sub) < 2 {
+func ExpandCIDRRuleVars(entries []CIDREntry, vars map[string]string) []CIDREntry {
+	out := make([]CIDREntry, len(entries))
+	for i, entry := range entries {
+		out[i] = CIDREntry{
+			Mode: entry.Mode,
+			CIDR: templateVarRe.ReplaceAllStringFunc(entry.CIDR, func(match string) string {
+				sub := templateVarRe.FindStringSubmatch(match)
+				if len(sub) < 2 {
+					return match
+				}
+				if v, ok := vars[sub[1]]; ok && v != "" {
+					return v
+				}
 				return match
-			}
-			if v, ok := vars[sub[1]]; ok && v != "" {
-				return v
-			}
-			return match
-		})
+			}),
+		}
 	}
 	return out
 }
@@ -44,49 +89,38 @@ type CIDRRules struct {
 	Rules []CIDRRule
 }
 
-// ParseCIDRRules parses CIDR rule strings with the following formats:
-//   - "allow:<range>" or "a:<range>" — allow a CIDR range
-//   - "disallow:<range>" or "d:<range>" — disallow a CIDR range
-//   - "a:*" — allow all (0.0.0.0/0)
-//   - "d:*" — disallow all (0.0.0.0/0)
+// ParseCIDRRules converts CIDREntry values into an ordered rule set.
+// Each entry carries its action (Mode) and CIDR value already parsed
+// at YAML load time. Wildcard entries ("*") are always placed last
+// regardless of position.
 //
-// Rules are evaluated top-to-bottom; the first matching rule wins.
-// A bare CIDR without a prefix (e.g. "192.168.0.0/16") is treated as "disallow"
-// for backward compatibility. Wildcard rules ("a:*" / "d:*") are always placed
-// last regardless of position.
-//
-// Template variables (e.g. "d:{{ $server_ip }}/32") should be expanded with
+// Template variables (e.g. "{{ $server_ip }}/32") should be expanded with
 // ExpandCIDRRuleVars before calling this function.
-func ParseCIDRRules(rules []string) (*CIDRRules, error) {
+func ParseCIDRRules(entries []CIDREntry) (*CIDRRules, error) {
 	result := &CIDRRules{}
 	var wildcard *CIDRRule
-	for _, rule := range rules {
-		rule = strings.TrimSpace(rule)
-		if rule == "" {
+	for _, entry := range entries {
+		cidr := strings.TrimSpace(entry.CIDR)
+		if cidr == "" {
 			continue
 		}
 
-		action, value, err := parseCIDRRule(rule)
-		if err != nil {
-			return nil, fmt.Errorf("invalid CIDR rule %q: %w", rule, err)
-		}
-
-		if value == "*" {
+		if cidr == "*" {
 			wildcard = &CIDRRule{
-				Action:   action,
+				Action:   entry.Mode,
 				Wildcard: true,
 				Prefix:   netip.MustParsePrefix("0.0.0.0/0"),
 			}
 			continue
 		}
 
-		prefix, err := netip.ParsePrefix(value)
+		prefix, err := netip.ParsePrefix(cidr)
 		if err != nil {
-			return nil, fmt.Errorf("invalid CIDR rule %q: %w", rule, err)
+			return nil, fmt.Errorf("invalid CIDR entry %q: %w", cidr, err)
 		}
 
 		result.Rules = append(result.Rules, CIDRRule{
-			Action: action,
+			Action: entry.Mode,
 			Prefix: prefix.Masked(),
 		})
 	}

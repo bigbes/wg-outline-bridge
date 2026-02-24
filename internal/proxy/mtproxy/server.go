@@ -153,9 +153,16 @@ func (s *Server) getDialerResolver() DialerResolver {
 // UpdateSecrets replaces the server's secrets at runtime without restart.
 func (s *Server) UpdateSecrets(secrets []mpcrypto.Secret, hexes []string) {
 	s.configMu.Lock()
-	defer s.configMu.Unlock()
 	s.config.Secrets = secrets
 	s.config.SecretHexes = hexes
+	s.configMu.Unlock()
+
+	// Clear stale per-secret session stats so removed secrets
+	// don't keep appearing in SecretStatsSnapshot.
+	s.secretMu.Lock()
+	s.secretStats = make(map[int]*secretCounters)
+	s.secretMu.Unlock()
+
 	s.logger.Info("secrets updated", "count", len(secrets))
 }
 

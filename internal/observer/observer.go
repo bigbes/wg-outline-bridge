@@ -132,7 +132,7 @@ type Manager interface {
 	SetDNSEnabled(enabled bool) error
 	AddDNSRule(r config.DNSRuleConfig) error
 	DeleteDNSRule(name string) error
-	AddRoutingCIDR(cidr string) error
+	AddRoutingCIDR(entry config.CIDREntry) error
 	DeleteRoutingCIDR(cidr string) error
 	AddIPRule(r config.IPRuleConfig) error
 	DeleteIPRule(name string) error
@@ -141,10 +141,11 @@ type Manager interface {
 	UpdateSNIRule(r config.SNIRuleConfig) error
 	ReorderRoutingCIDRs(cidrs []string) error
 	ReorderIPRules(names []string) error
-	UpdateRoutingCIDR(oldCIDR, newCIDR string) error
+	UpdateRoutingCIDR(oldCIDR string, entry config.CIDREntry) error
 	UpdateIPRule(r config.IPRuleConfig) error
 	CreateGroup(name string) error
 	DeleteGroup(name string) error
+	ResetConfig() error
 }
 
 // Observer sends periodic status updates and handles bot commands via Telegram.

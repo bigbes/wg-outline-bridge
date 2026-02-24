@@ -41,6 +41,8 @@ if (!tg || !tg.initData) {
     let userEditDisabled = false;
     let invitesData = null;
     let invitesLoaded = false;
+    let peersOnlyMine = false;
+    let secretsOnlyMine = false;
 
     // Modal toggle state
     let upstreamDefaultOn = false;
@@ -164,7 +166,7 @@ if (!tg || !tg.initData) {
         if (page === "users" && !usersLoaded) refreshUsers();
 
         try {
-            sessionStorage.setItem("activeTab", page);
+            if (page !== "admin") sessionStorage.setItem("activeTab", page);
         } catch (e) {}
     }
 
@@ -223,7 +225,11 @@ if (!tg || !tg.initData) {
     // --- Render: Peers ---
     function renderPeers() {
         if (!statusData) return;
-        const peers = statusData.peers || [];
+        const allPeers = statusData.peers || [];
+        const myUID = meData && meData.user_id;
+        const peers = (peersOnlyMine && myUID)
+            ? allPeers.filter((p) => p.owner_id === myUID)
+            : allPeers;
         const el = document.getElementById("peer-list");
         const now = Math.floor(Date.now() / 1000);
         const connected = peers.filter(
@@ -734,16 +740,18 @@ if (!tg || !tg.initData) {
             cidrEl.innerHTML = '<div class="empty-state">No CIDRs configured</div>';
         } else {
             cidrEl.innerHTML = cidrs.map(c => {
-                const escapedCIDR = c.replace(/'/g, "\\'");
-                const isExclude = c.startsWith('!');
+                const cidr = c.cidr;
+                const mode = c.mode || 'allow';
+                const escapedCIDR = cidr.replace(/'/g, "\\'");
+                const isExclude = mode === 'disallow';
                 const modeBadge = isExclude
-                    ? '<span class="rule-type-badge block">Exclude</span>'
+                    ? '<span class="rule-type-badge block">Direct</span>'
                     : '<span class="rule-type-badge upstream">Allow</span>';
-                return '<div class="list-item" draggable="' + (isAdmin() ? 'true' : 'false') + '" data-key="' + escapeHtml(c) + '">' +
+                return '<div class="list-item" draggable="' + (isAdmin() ? 'true' : 'false') + '" data-key="' + escapeHtml(cidr) + '">' +
                     (isAdmin() ? '<div class="drag-handle">' + dragHandleSvg + '</div>' : '') +
                     '<div class="item-icon routing-cidr"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>' +
                     '<div class="item-content">' +
-                    '<div class="item-title">' + escapeHtml(isExclude ? c.slice(1) : c) + '</div>' +
+                    '<div class="item-title">' + escapeHtml(cidr) + '</div>' +
                     '<div class="item-subtitle">' + modeBadge + '</div>' +
                     '</div>' +
                     (isAdmin() ? '<div class="item-action">' +
@@ -877,7 +885,11 @@ if (!tg || !tg.initData) {
             return;
         }
 
-        const secrets = mt.secrets || [];
+        const allSecrets = mt.secrets || [];
+        const myUID = meData && meData.user_id;
+        const secrets = (secretsOnlyMine && myUID)
+            ? allSecrets.filter((s) => s.owner_id === myUID)
+            : allSecrets;
         const links = mt.links || [];
         document.getElementById("mtproxy-stat-secrets").textContent =
             secrets.length;
@@ -892,7 +904,7 @@ if (!tg || !tg.initData) {
 
         const secEl = document.getElementById("mtproxy-secret-list");
         if (secrets.length === 0) {
-            secEl.innerHTML = '<div class="empty-state">No secrets</div>';
+            secEl.innerHTML = '<div class="empty-state">No secrets configured</div>';
         } else {
             secEl.innerHTML = secrets
                 .map((s) => {
@@ -959,6 +971,24 @@ if (!tg || !tg.initData) {
         document.getElementById(id + "-backdrop").classList.remove("open");
         document.getElementById(id + "-sheet").classList.remove("open");
     }
+
+    // --- Filter: Only Mine ---
+    window.togglePeersOnlyMine = function () {
+        peersOnlyMine = !peersOnlyMine;
+        var cb = document.getElementById("peers-only-mine-cb");
+        if (peersOnlyMine) cb.classList.add("checked");
+        else cb.classList.remove("checked");
+        haptic("selection");
+        renderPeers();
+    };
+    window.toggleSecretsOnlyMine = function () {
+        secretsOnlyMine = !secretsOnlyMine;
+        var cb = document.getElementById("secrets-only-mine-cb");
+        if (secretsOnlyMine) cb.classList.add("checked");
+        else cb.classList.remove("checked");
+        haptic("selection");
+        renderMTProxy();
+    };
 
     // --- Peers ---
     window.openPeerModal = function () {
@@ -2130,9 +2160,11 @@ if (!tg || !tg.initData) {
     window.openCIDREditModal = function (cidr) {
         editingCIDR = cidr;
         document.getElementById("cidr-edit-modal-title").textContent = "Edit CIDR";
-        const isExclude = cidr.startsWith("!");
-        document.getElementById("inp-cidr-edit-mode").value = isExclude ? "disallow" : "allow";
-        document.getElementById("inp-cidr-edit-range").value = isExclude ? cidr.slice(1) : cidr;
+        // Look up mode from routingData
+        var entry = (routingData.cidrs || []).find(function(c) { return c.cidr === cidr; });
+        var mode = entry ? entry.mode : "allow";
+        document.getElementById("inp-cidr-edit-mode").value = mode;
+        document.getElementById("inp-cidr-edit-range").value = cidr;
         openModal("cidr-edit-modal");
     };
     window.closeCIDREditModal = function () {
@@ -2147,11 +2179,10 @@ if (!tg || !tg.initData) {
             showToast("IP range is required");
             return;
         }
-        const newCIDR = mode === "disallow" ? "!" + range : range;
 
         if (editingCIDR) {
             // Update existing
-            api("PUT", "/api/routing/cidrs/" + encodeURIComponent(editingCIDR), { cidr: newCIDR }).then(d => {
+            api("PUT", "/api/routing/cidrs/" + encodeURIComponent(editingCIDR), { cidr: range, mode: mode }).then(d => {
                 if (d.error) {
                     haptic("notification", "error");
                     showToast(d.error, true);
@@ -2164,7 +2195,7 @@ if (!tg || !tg.initData) {
             });
         } else {
             // Create new
-            api("POST", "/api/routing/cidrs", { cidr: newCIDR }).then(d => {
+            api("POST", "/api/routing/cidrs", { cidr: range, mode: mode }).then(d => {
                 if (d.error) {
                     haptic("notification", "error");
                     showToast(d.error, true);
@@ -2179,6 +2210,178 @@ if (!tg || !tg.initData) {
     };
 
     // --- Routing: IP Rule Modal (create + edit) ---
+
+    // Parse a CIDR string into {type, db, value}.
+    function parseIPRuleEntry(cidr) {
+        if (cidr.startsWith("geoip:")) {
+            const rest = cidr.substring(6);
+            const colonIdx = rest.indexOf(":");
+            if (colonIdx !== -1) {
+                return { type: "geoip", db: rest.substring(0, colonIdx), value: rest.substring(colonIdx + 1) };
+            }
+            return { type: "geoip", db: "", value: rest };
+        }
+        return { type: "cidr", db: "", value: cidr };
+    }
+
+    // Serialize entry rows back to {cidrs, asns}.
+    function collectIPRuleEntries() {
+        const cidrs = [];
+        const asns = [];
+        const container = document.getElementById("ip-rule-entries");
+        const rows = container.querySelectorAll(".entry-row");
+        rows.forEach(function (row) {
+            const type = row.querySelector(".entry-type").value;
+            const value = row.querySelector(".entry-value").value.trim();
+            if (!value) return;
+            if (type === "cidr") {
+                cidrs.push(value);
+            } else if (type === "asn") {
+                const n = parseInt(value, 10);
+                if (!isNaN(n)) asns.push(n);
+            } else if (type === "geoip") {
+                const dbSel = row.querySelector(".entry-db");
+                const db = dbSel ? dbSel.value : "";
+                if (db) {
+                    cidrs.push("geoip:" + db + ":" + value);
+                } else {
+                    cidrs.push("geoip:" + value);
+                }
+            }
+        });
+        return { cidrs, asns };
+    }
+
+    function getGeoIPDBs() {
+        return (routingData && routingData.geoip_dbs) || [];
+    }
+
+    function getGeoIPDBNames() {
+        return getGeoIPDBs().map(function (db) { return db.name; });
+    }
+
+    function getGeoIPCountries(dbName) {
+        const dbs = getGeoIPDBs();
+        if (!dbName) {
+            return dbs.length > 0 ? (dbs[0].countries || []) : [];
+        }
+        const db = dbs.find(function (d) { return d.name === dbName; });
+        return db ? (db.countries || []) : [];
+    }
+
+    let entryIdCounter = 0;
+
+    function updateEntryDatalist(inp, countries) {
+        var listId = inp.getAttribute("list");
+        if (listId) {
+            var old = document.getElementById(listId);
+            if (old) old.remove();
+        }
+        if (!countries || countries.length === 0) {
+            inp.removeAttribute("list");
+            return;
+        }
+        listId = "entry-dl-" + (++entryIdCounter);
+        var dl = document.createElement("datalist");
+        dl.id = listId;
+        countries.forEach(function (code) {
+            var o = document.createElement("option");
+            o.value = code;
+            dl.appendChild(o);
+        });
+        inp.parentNode.appendChild(dl);
+        inp.setAttribute("list", listId);
+    }
+
+    // Add an entry row to the IP rule modal.
+    window.addIPRuleEntry = function (type, db, value) {
+        type = type || "cidr";
+        db = db || "";
+        value = value || "";
+
+        const container = document.getElementById("ip-rule-entries");
+        const row = document.createElement("div");
+        row.className = "entry-row";
+
+        // Type select
+        const typeSel = document.createElement("select");
+        typeSel.className = "entry-type";
+        [["cidr", "CIDR"], ["geoip", "GeoIP"], ["asn", "ASN"]].forEach(function (opt) {
+            const o = document.createElement("option");
+            o.value = opt[0];
+            o.textContent = opt[1];
+            if (opt[0] === type) o.selected = true;
+            typeSel.appendChild(o);
+        });
+        row.appendChild(typeSel);
+
+        // DB select (geoip only)
+        const dbSel = document.createElement("select");
+        dbSel.className = "entry-db";
+        const defaultOpt = document.createElement("option");
+        defaultOpt.value = "";
+        defaultOpt.textContent = "(default)";
+        dbSel.appendChild(defaultOpt);
+        getGeoIPDBNames().forEach(function (name) {
+            const o = document.createElement("option");
+            o.value = name;
+            o.textContent = name;
+            if (name === db) o.selected = true;
+            dbSel.appendChild(o);
+        });
+        dbSel.style.display = type === "geoip" ? "" : "none";
+        row.appendChild(dbSel);
+
+        // Value input
+        const inp = document.createElement("input");
+        inp.type = "text";
+        inp.className = "entry-value";
+        inp.value = value;
+        inp.autocomplete = "off";
+        if (type === "cidr") inp.placeholder = "10.0.0.0/8";
+        else if (type === "geoip") inp.placeholder = "RU";
+        else if (type === "asn") inp.placeholder = "13335";
+        row.appendChild(inp);
+
+        // Attach datalist for geoip
+        if (type === "geoip") {
+            updateEntryDatalist(inp, getGeoIPCountries(db));
+        }
+
+        // Delete button
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "entry-delete-btn";
+        delBtn.innerHTML = "×";
+        delBtn.onclick = function () { row.remove(); };
+        row.appendChild(delBtn);
+
+        // DB change handler — update datalist
+        dbSel.onchange = function () {
+            updateEntryDatalist(inp, getGeoIPCountries(dbSel.value));
+        };
+
+        // Type change handler
+        typeSel.onchange = function () {
+            const t = typeSel.value;
+            dbSel.style.display = t === "geoip" ? "" : "none";
+            if (t === "cidr") inp.placeholder = "10.0.0.0/8";
+            else if (t === "geoip") inp.placeholder = "RU";
+            else if (t === "asn") inp.placeholder = "13335";
+            if (t === "geoip") {
+                updateEntryDatalist(inp, getGeoIPCountries(dbSel.value));
+            } else {
+                updateEntryDatalist(inp, null);
+            }
+        };
+
+        container.appendChild(row);
+    };
+
+    function clearIPRuleEntries() {
+        document.getElementById("ip-rule-entries").innerHTML = "";
+    }
+
     window.openIPRuleModal = function () {
         editingIPRuleName = null;
         document.getElementById("ip-rule-modal-title").textContent = "Add IP Rule";
@@ -2186,9 +2389,9 @@ if (!tg || !tg.initData) {
         document.getElementById("inp-ip-rule-name").disabled = false;
         document.getElementById("inp-ip-rule-action").value = "direct";
         document.getElementById("inp-ip-rule-upstream-group").value = "";
-        document.getElementById("inp-ip-rule-cidrs").value = "";
-        document.getElementById("inp-ip-rule-asns").value = "";
         document.getElementById("inp-ip-rule-list-url").value = "";
+        clearIPRuleEntries();
+        addIPRuleEntry();
         toggleIPRuleAction();
         openModal("ip-rule-modal");
     };
@@ -2202,10 +2405,19 @@ if (!tg || !tg.initData) {
         document.getElementById("inp-ip-rule-name").disabled = true;
         document.getElementById("inp-ip-rule-action").value = rule.action;
         document.getElementById("inp-ip-rule-upstream-group").value = rule.upstream_group || "";
-        document.getElementById("inp-ip-rule-cidrs").value = (rule.cidrs || []).join(", ");
-        document.getElementById("inp-ip-rule-asns").value = (rule.asns || []).join(", ");
         document.getElementById("inp-ip-rule-list-url").value =
             (rule.lists || []).length > 0 ? rule.lists[0].url : "";
+        clearIPRuleEntries();
+        (rule.cidrs || []).forEach(function (cidr) {
+            const parsed = parseIPRuleEntry(cidr);
+            addIPRuleEntry(parsed.type, parsed.db, parsed.value);
+        });
+        (rule.asns || []).forEach(function (asn) {
+            addIPRuleEntry("asn", "", String(asn));
+        });
+        if (document.getElementById("ip-rule-entries").children.length === 0) {
+            addIPRuleEntry();
+        }
         toggleIPRuleAction();
         openModal("ip-rule-modal");
     };
@@ -2222,8 +2434,6 @@ if (!tg || !tg.initData) {
         const name = document.getElementById("inp-ip-rule-name").value.trim();
         const action = document.getElementById("inp-ip-rule-action").value;
         const upstreamGroup = document.getElementById("inp-ip-rule-upstream-group").value.trim();
-        const cidrsRaw = document.getElementById("inp-ip-rule-cidrs").value.trim();
-        const asnsRaw = document.getElementById("inp-ip-rule-asns").value.trim();
         const listUrl = document.getElementById("inp-ip-rule-list-url").value.trim();
 
         if (!name) {
@@ -2236,11 +2446,10 @@ if (!tg || !tg.initData) {
             return;
         }
 
-        const cidrs = cidrsRaw ? cidrsRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
-        const asns = asnsRaw ? asnsRaw.split(",").map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n)) : [];
+        const entries = collectIPRuleEntries();
         const lists = listUrl ? [{ url: listUrl }] : [];
 
-        if (cidrs.length === 0 && lists.length === 0 && asns.length === 0) {
+        if (entries.cidrs.length === 0 && entries.asns.length === 0 && lists.length === 0) {
             haptic("notification", "error");
             showToast("Add CIDRs, ASNs, or a list URL");
             return;
@@ -2250,13 +2459,12 @@ if (!tg || !tg.initData) {
             name,
             action,
             upstream_group: action === "upstream" ? upstreamGroup : "",
-            cidrs,
-            asns,
+            cidrs: entries.cidrs,
+            asns: entries.asns,
             lists,
         };
 
         if (editingIPRuleName) {
-            // Update existing
             api("PUT", "/api/routing/ip-rules/" + encodeURIComponent(editingIPRuleName), body).then(d => {
                 if (d.error) {
                     haptic("notification", "error");
@@ -2269,7 +2477,6 @@ if (!tg || !tg.initData) {
                 refreshRouting();
             });
         } else {
-            // Create new
             api("POST", "/api/routing/ip-rules", body).then(d => {
                 if (d.error) {
                     haptic("notification", "error");
@@ -2433,12 +2640,230 @@ if (!tg || !tg.initData) {
 
     var pendingInviteToken = getInviteToken();
 
+    // --- Admin page ---
+    function populateAdminPage() {
+        var user = tg && tg.initDataUnsafe && tg.initDataUnsafe.user;
+        var avatarEl = document.getElementById("admin-avatar");
+        var nameEl = document.getElementById("admin-name");
+        var roleEl = document.getElementById("admin-role");
+        if (user) {
+            var fullName = user.first_name || "";
+            if (user.last_name) fullName += " " + user.last_name;
+            nameEl.textContent = fullName || "User";
+            if (user.photo_url) {
+                avatarEl.innerHTML = '<img src="' + escapeHtml(user.photo_url) + '" alt="">';
+            } else {
+                avatarEl.textContent = (user.first_name || "U").charAt(0).toUpperCase();
+            }
+        } else {
+            nameEl.textContent = "User";
+            avatarEl.textContent = "U";
+        }
+        roleEl.textContent = meData ? meData.role : "";
+    }
+
+    // --- Admin: Backup & Restore ---
+    // --- Password Modal ---
+    var passwordModalCallback = null;
+
+    function openPasswordModal(title, label, callback) {
+        document.getElementById("password-modal-title").textContent = title;
+        document.getElementById("password-modal-label").textContent = label;
+        document.getElementById("inp-modal-password").value = "";
+        passwordModalCallback = callback;
+        openModal("password-modal");
+        setTimeout(function () { document.getElementById("inp-modal-password").focus(); }, 300);
+    }
+    window.closePasswordModal = function () {
+        closeModal("password-modal");
+        passwordModalCallback = null;
+    };
+    window.submitPasswordModal = function () {
+        var pw = document.getElementById("inp-modal-password").value;
+        closeModal("password-modal");
+        if (passwordModalCallback) {
+            var cb = passwordModalCallback;
+            passwordModalCallback = null;
+            cb(pw);
+        }
+    };
+
+    function downloadBackup(password) {
+        var url = "/api/backup";
+        if (password) url += "?password=" + encodeURIComponent(password);
+        fetch(url, {
+            headers: { "X-Telegram-Init-Data": initData },
+        })
+            .then(function (r) {
+                if (!r.ok) return r.json().then(function (d) { throw new Error(d.error || "backup failed"); });
+                var cd = r.headers.get("Content-Disposition") || "";
+                var match = cd.match(/filename=([^\s;]+)/);
+                var fname = match ? match[1] : "bridge-backup.db";
+                return r.blob().then(function (blob) { return { blob: blob, fname: fname }; });
+            })
+            .then(function (res) {
+                var blobUrl = URL.createObjectURL(res.blob);
+                var a = document.createElement("a");
+                a.href = blobUrl;
+                a.download = res.fname;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(blobUrl);
+                haptic("notification", "success");
+                showToast("Backup downloaded" + (password ? " (encrypted)" : ""));
+            })
+            .catch(function (err) {
+                haptic("notification", "error");
+                showToast(err.message, true);
+            });
+    }
+
+    function backupDB() {
+        haptic("impact", "medium");
+        openPasswordModal("Backup Password", "Optional — leave empty for unencrypted backup", function (pw) {
+            downloadBackup(pw);
+        });
+    }
+
+    function restoreDB() {
+        haptic("selection");
+        if (!confirm("This will replace the current database. A backup of the existing database will be kept. Continue?")) return;
+        document.getElementById("restore-file-input").click();
+    }
+
+    var resetPhrase = "";
+
+    function generatePhrase() {
+        var words = ["alpha", "bravo", "delta", "echo", "foxtrot", "gamma", "hotel", "india", "kilo", "lima", "oscar", "papa", "romeo", "sierra", "tango", "zulu"];
+        var a = words[Math.floor(Math.random() * words.length)];
+        var b = words[Math.floor(Math.random() * words.length)];
+        var n = Math.floor(Math.random() * 90) + 10;
+        return a + "-" + b + "-" + n;
+    }
+
+    window.restartInstance = function () {
+        haptic("impact");
+        if (!confirm("This will restart the bridge process. All active connections will be briefly interrupted. Continue?")) return;
+        haptic("impact", "heavy");
+        api("POST", "/api/restart")
+            .then(function (d) {
+                if (d.error) {
+                    haptic("notification", "error");
+                    showToast(d.error, true);
+                    return;
+                }
+                haptic("notification", "success");
+                showToast("Instance is restarting…");
+            })
+            .catch(function (err) {
+                haptic("notification", "error");
+                showToast(err.message, true);
+            });
+    };
+
+    window.promptResetInstance = function () {
+        haptic("impact");
+        resetPhrase = generatePhrase();
+        var msgEl = document.getElementById("reset-alert-message");
+        msgEl.innerHTML = 'This will erase <strong>ALL</strong> data and re-populate from the initial configuration. This cannot be undone.<br><br>Type <span class="alert-phrase">' + resetPhrase + '</span> to confirm:<br><input class="alert-input" id="reset-phrase-input" autocomplete="off" spellcheck="false" placeholder="Type the phrase above">';
+        document.getElementById("reset-confirm-btn").disabled = true;
+        document.getElementById("reset-alert-overlay").classList.add("open");
+        var inp = document.getElementById("reset-phrase-input");
+        inp.addEventListener("input", function () {
+            document.getElementById("reset-confirm-btn").disabled = inp.value.trim() !== resetPhrase;
+        });
+        setTimeout(function () { inp.focus(); }, 100);
+    };
+
+    window.closeResetAlert = function () {
+        document.getElementById("reset-alert-overlay").classList.remove("open");
+        resetPhrase = "";
+    };
+
+    window.confirmResetInstance = function () {
+        var inp = document.getElementById("reset-phrase-input");
+        if (!inp || inp.value.trim() !== resetPhrase) return;
+        closeResetAlert();
+        haptic("impact", "heavy");
+        api("POST", "/api/reset")
+            .then(function (d) {
+                if (d.error) {
+                    haptic("notification", "error");
+                    showToast(d.error, true);
+                    return;
+                }
+                haptic("notification", "success");
+                showToast("Instance reset successfully");
+                groupsLoaded = false;
+                dnsLoaded = false;
+                routingLoaded = false;
+                usersLoaded = false;
+                invitesLoaded = false;
+                refresh();
+            })
+            .catch(function (err) {
+                haptic("notification", "error");
+                showToast(err.message, true);
+            });
+    };
+
+    function uploadRestore(file, password) {
+        var form = new FormData();
+        form.append("file", file);
+        if (password) form.append("password", password);
+        fetch("/api/restore", {
+            method: "POST",
+            headers: { "X-Telegram-Init-Data": initData },
+            body: form,
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                if (d.encrypted) {
+                    // Server detected encrypted backup, prompt for password.
+                    openPasswordModal("Restore Password", "This backup is encrypted — enter password to decrypt", function (pw) {
+                        if (!pw) { showToast("Password is required", true); return; }
+                        uploadRestore(file, pw);
+                    });
+                    return;
+                }
+                if (d.error) {
+                    haptic("notification", "error");
+                    showToast(d.error, true);
+                    return;
+                }
+                haptic("notification", "success");
+                showToast("Database restored");
+                refresh();
+            })
+            .catch(function (err) {
+                haptic("notification", "error");
+                showToast(err.message, true);
+            });
+    }
+
+    function handleRestoreFile(input) {
+        var file = input.files && input.files[0];
+        if (!file) return;
+        input.value = "";
+        uploadRestore(file, "");
+    }
+
     api("GET", "/api/me")
         .then((d) => {
             meData = d;
             if (d.role === "admin") document.body.classList.add("is-admin");
             document.getElementById("loading").style.display = "none";
             document.getElementById("app").style.display = "block";
+            populateAdminPage();
+            // Restore saved tab now that app is visible and admin-only tabs are shown
+            try {
+                const savedTab = sessionStorage.getItem("activeTab");
+                if (savedTab) {
+                    const tabEl = document.querySelector('.tab-item[data-page="' + savedTab + '"]');
+                    if (tabEl && tabEl.offsetParent !== null) switchTab(savedTab);
+                }
+            } catch (e) {}
             refresh();
         })
         .catch((err) => {
@@ -2458,15 +2883,6 @@ if (!tg || !tg.initData) {
             document.getElementById("loading").textContent =
                 "Failed to load: " + err.message;
         });
-
-    // Restore tab (only if the tab is visible)
-    try {
-        const savedTab = sessionStorage.getItem("activeTab");
-        if (savedTab) {
-            const tabEl = document.querySelector('.tab-item[data-page="' + savedTab + '"]');
-            if (tabEl && tabEl.offsetParent !== null) switchTab(savedTab);
-        }
-    } catch (e) {}
 
     // Auto-refresh
     setInterval(refresh, 30000);

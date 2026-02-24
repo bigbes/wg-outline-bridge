@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 // Store is a SQLite-backed persistent stats store.
 type Store struct {
 	db     *sql.DB
+	path   string
 	logger *slog.Logger
 }
 
@@ -37,7 +40,7 @@ func Open(path string, logger *slog.Logger) (*Store, error) {
 		}
 	}
 
-	s := &Store{db: db, logger: logger}
+	s := &Store{db: db, path: path, logger: logger}
 	if err := s.initSchema(); err != nil {
 		db.Close()
 		return nil, err
@@ -48,6 +51,86 @@ func Open(path string, logger *slog.Logger) (*Store, error) {
 // Close closes the underlying database.
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+// Backup writes a consistent snapshot of the database to w.
+func (s *Store) Backup(w io.Writer) error {
+	if _, err := s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		return fmt.Errorf("statsdb: checkpoint: %w", err)
+	}
+	f, err := os.Open(s.path)
+	if err != nil {
+		return fmt.Errorf("statsdb: open for backup: %w", err)
+	}
+	defer f.Close()
+	if _, err := io.Copy(w, f); err != nil {
+		return fmt.Errorf("statsdb: backup copy: %w", err)
+	}
+	return nil
+}
+
+// Restore replaces the current database with the data from r.
+// The new file is validated before swapping. A .bak copy of the
+// previous database is kept alongside the original path.
+func (s *Store) Restore(r io.Reader) error {
+	tmpPath := s.path + ".restore"
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("statsdb: create restore file: %w", err)
+	}
+	if _, err := io.Copy(f, r); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("statsdb: write restore file: %w", err)
+	}
+	f.Close()
+
+	// Validate the uploaded file is a usable SQLite database.
+	testDB, err := sql.Open("sqlite", tmpPath)
+	if err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("statsdb: invalid database: %w", err)
+	}
+	var count int
+	if err := testDB.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table'").Scan(&count); err != nil {
+		testDB.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("statsdb: invalid database: %w", err)
+	}
+	testDB.Close()
+
+	// Close current database and swap files.
+	s.db.Close()
+
+	bakPath := s.path + ".bak"
+	os.Rename(s.path, bakPath)
+	os.Remove(s.path + "-wal")
+	os.Remove(s.path + "-shm")
+
+	if err := os.Rename(tmpPath, s.path); err != nil {
+		os.Rename(bakPath, s.path)
+		return fmt.Errorf("statsdb: rename restore file: %w", err)
+	}
+
+	newDB, err := sql.Open("sqlite", s.path)
+	if err != nil {
+		os.Rename(bakPath, s.path)
+		return fmt.Errorf("statsdb: reopen after restore: %w", err)
+	}
+	for _, pragma := range []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA busy_timeout=5000",
+	} {
+		if _, err := newDB.Exec(pragma); err != nil {
+			newDB.Close()
+			os.Rename(bakPath, s.path)
+			return fmt.Errorf("statsdb: pragma after restore: %w", err)
+		}
+	}
+
+	s.db = newDB
+	return nil
 }
 
 func (s *Store) initSchema() error {
@@ -164,6 +247,7 @@ CREATE TABLE IF NOT EXISTS dns_rules (
 
 CREATE TABLE IF NOT EXISTS routing_cidrs (
   cidr TEXT PRIMARY KEY,
+  mode TEXT NOT NULL DEFAULT 'disallow',
   priority INTEGER NOT NULL DEFAULT 0,
   created_unix INTEGER NOT NULL DEFAULT (unixepoch())
 );
@@ -225,6 +309,7 @@ func (s *Store) migrateSchema() error {
 		{"allowed_users", "disabled", `ALTER TABLE allowed_users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0`},
 		{"allowed_users", "max_peers", `ALTER TABLE allowed_users ADD COLUMN max_peers INTEGER`},
 		{"allowed_users", "max_secrets", `ALTER TABLE allowed_users ADD COLUMN max_secrets INTEGER`},
+		{"routing_cidrs", "mode", `ALTER TABLE routing_cidrs ADD COLUMN mode TEXT NOT NULL DEFAULT 'disallow'`},
 	}
 	for _, m := range migrations {
 		var count int
@@ -241,7 +326,127 @@ func (s *Store) migrateSchema() error {
 			}
 		}
 	}
+
+	// Migrate routing_cidrs: parse old prefixed strings (e.g. "a:10.0.0.0/8")
+	// into separate cidr + mode columns.
+	if err := s.migrateRoutingCIDRs(); err != nil {
+		return fmt.Errorf("migrate routing cidrs: %w", err)
+	}
+
 	return nil
+}
+
+// migrateRoutingCIDRs parses legacy prefixed CIDR strings stored in the cidr
+// column (e.g. "a:10.0.0.0/8", "d:192.168.0.0/16", "!10.0.0.0/8") and
+// rewrites them as clean CIDR + mode.
+func (s *Store) migrateRoutingCIDRs() error {
+	rows, err := s.db.Query(`SELECT cidr, mode, priority, created_unix FROM routing_cidrs ORDER BY priority ASC, created_unix ASC`)
+	if err != nil {
+		return fmt.Errorf("read routing cidrs: %w", err)
+	}
+	defer rows.Close()
+
+	type row struct {
+		cidr        string
+		mode        string
+		priority    int
+		createdUnix int64
+	}
+	var toMigrate []row
+	needsMigration := false
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.cidr, &r.mode, &r.priority, &r.createdUnix); err != nil {
+			return fmt.Errorf("scan routing cidr: %w", err)
+		}
+		// Detect legacy prefixed strings by checking for known prefixes or "!" prefix.
+		if strings.HasPrefix(r.cidr, "a:") || strings.HasPrefix(r.cidr, "d:") ||
+			strings.HasPrefix(r.cidr, "allow:") || strings.HasPrefix(r.cidr, "disallow:") ||
+			strings.HasPrefix(r.cidr, "!") {
+			needsMigration = true
+		}
+		toMigrate = append(toMigrate, r)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate routing cidrs: %w", err)
+	}
+	if !needsMigration || len(toMigrate) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	for _, r := range toMigrate {
+		entry, err := parseLegacyCIDR(r.cidr)
+		if err != nil {
+			s.logger.Warn("routing cidrs migration: skipping unparseable entry", "cidr", r.cidr, "err", err)
+			continue
+		}
+		if entry.CIDR == r.cidr && entry.Mode == r.mode {
+			continue // already clean
+		}
+		// Delete old row, insert cleaned one (handles PK change).
+		if _, err := tx.Exec(`DELETE FROM routing_cidrs WHERE cidr = ?`, r.cidr); err != nil {
+			return fmt.Errorf("delete old cidr %q: %w", r.cidr, err)
+		}
+		if _, err := tx.Exec(
+			`INSERT OR IGNORE INTO routing_cidrs (cidr, mode, priority, created_unix) VALUES (?, ?, ?, ?)`,
+			entry.CIDR, entry.Mode, r.priority, r.createdUnix,
+		); err != nil {
+			return fmt.Errorf("insert migrated cidr %q: %w", entry.CIDR, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration: %w", err)
+	}
+	s.logger.Info("migrated routing cidrs to structured format")
+	return nil
+}
+
+// parseLegacyCIDR parses a legacy CIDR string that may have prefixes like
+// "a:", "d:", "allow:", "disallow:", or "!" into a CIDREntry.
+func parseLegacyCIDR(s string) (config.CIDREntry, error) {
+	// Try the standard config parser first (handles a:/d:/allow:/disallow: and bare CIDRs).
+	entry, err := config.ParseCIDREntry(s)
+	if err == nil {
+		return entry, nil
+	}
+	// Handle miniapp "!" prefix convention.
+	if strings.HasPrefix(s, "!") {
+		return config.CIDREntry{CIDR: s[1:], Mode: "disallow"}, nil
+	}
+	return config.CIDREntry{}, fmt.Errorf("unknown CIDR format %q", s)
+}
+
+// Reset drops all tables and re-initialises the schema, effectively
+// creating a fresh empty database without replacing the file.
+func (s *Store) Reset() error {
+	rows, err := s.db.Query(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
+	if err != nil {
+		return fmt.Errorf("statsdb: list tables: %w", err)
+	}
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return fmt.Errorf("statsdb: scan table name: %w", err)
+		}
+		tables = append(tables, name)
+	}
+	rows.Close()
+
+	for _, t := range tables {
+		if _, err := s.db.Exec("DROP TABLE IF EXISTS " + t); err != nil {
+			return fmt.Errorf("statsdb: drop table %s: %w", t, err)
+		}
+	}
+	return s.initSchema()
 }
 
 // SetDaemonStartTime records the daemon start time (upsert, id=1).
@@ -1697,20 +1902,20 @@ func (s *Store) ImportDNSRules(rules []config.DNSRuleConfig) (int, error) {
 // ---------------------------------------------------------------------------
 
 // ListRoutingCIDRs returns all routing CIDRs ordered by priority.
-func (s *Store) ListRoutingCIDRs() ([]string, error) {
-	rows, err := s.db.Query(`SELECT cidr FROM routing_cidrs ORDER BY priority ASC, created_unix ASC`)
+func (s *Store) ListRoutingCIDRs() ([]config.CIDREntry, error) {
+	rows, err := s.db.Query(`SELECT cidr, mode FROM routing_cidrs ORDER BY priority ASC, created_unix ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: list routing cidrs: %w", err)
 	}
 	defer rows.Close()
 
-	var out []string
+	var out []config.CIDREntry
 	for rows.Next() {
-		var cidr string
-		if err := rows.Scan(&cidr); err != nil {
+		var entry config.CIDREntry
+		if err := rows.Scan(&entry.CIDR, &entry.Mode); err != nil {
 			return nil, fmt.Errorf("statsdb: scan routing cidr: %w", err)
 		}
-		out = append(out, cidr)
+		out = append(out, entry)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("statsdb: iterate routing cidrs: %w", err)
@@ -1719,14 +1924,14 @@ func (s *Store) ListRoutingCIDRs() ([]string, error) {
 }
 
 // AddRoutingCIDR inserts a routing CIDR with the next available priority.
-func (s *Store) AddRoutingCIDR(cidr string) error {
+func (s *Store) AddRoutingCIDR(entry config.CIDREntry) error {
 	_, err := s.db.Exec(
-		`INSERT INTO routing_cidrs (cidr, priority)
-		 VALUES (?, COALESCE((SELECT MAX(priority) FROM routing_cidrs), -1) + 1)`,
-		cidr,
+		`INSERT INTO routing_cidrs (cidr, mode, priority)
+		 VALUES (?, ?, COALESCE((SELECT MAX(priority) FROM routing_cidrs), -1) + 1)`,
+		entry.CIDR, entry.Mode,
 	)
 	if err != nil {
-		return fmt.Errorf("statsdb: add routing cidr %q: %w", cidr, err)
+		return fmt.Errorf("statsdb: add routing cidr %q: %w", entry.CIDR, err)
 	}
 	return nil
 }
@@ -1742,7 +1947,7 @@ func (s *Store) DeleteRoutingCIDR(cidr string) (bool, error) {
 }
 
 // ImportRoutingCIDRs inserts routing CIDRs from a list, skipping those that already exist.
-func (s *Store) ImportRoutingCIDRs(cidrs []string) (int, error) {
+func (s *Store) ImportRoutingCIDRs(entries []config.CIDREntry) (int, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, fmt.Errorf("statsdb: begin tx: %w", err)
@@ -1755,18 +1960,18 @@ func (s *Store) ImportRoutingCIDRs(cidrs []string) (int, error) {
 		return 0, fmt.Errorf("statsdb: get max priority: %w", err)
 	}
 
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO routing_cidrs (cidr, priority) VALUES (?, ?)`)
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO routing_cidrs (cidr, mode, priority) VALUES (?, ?, ?)`)
 	if err != nil {
 		return 0, fmt.Errorf("statsdb: prepare import routing cidrs: %w", err)
 	}
 	defer stmt.Close()
 
 	var count int
-	for _, cidr := range cidrs {
+	for _, entry := range entries {
 		maxPriority++
-		res, err := stmt.Exec(cidr, maxPriority)
+		res, err := stmt.Exec(entry.CIDR, entry.Mode, maxPriority)
 		if err != nil {
-			return 0, fmt.Errorf("statsdb: import routing cidr %q: %w", cidr, err)
+			return 0, fmt.Errorf("statsdb: import routing cidr %q: %w", entry.CIDR, err)
 		}
 		n, _ := res.RowsAffected()
 		count += int(n)
@@ -1801,11 +2006,11 @@ func (s *Store) ReorderRoutingCIDRs(cidrs []string) error {
 	return tx.Commit()
 }
 
-// UpdateRoutingCIDR replaces a CIDR value, preserving its priority.
-func (s *Store) UpdateRoutingCIDR(oldCIDR, newCIDR string) error {
+// UpdateRoutingCIDR replaces a CIDR entry, preserving its priority.
+func (s *Store) UpdateRoutingCIDR(oldCIDR string, entry config.CIDREntry) error {
 	res, err := s.db.Exec(
-		`UPDATE routing_cidrs SET cidr = ? WHERE cidr = ?`,
-		newCIDR, oldCIDR,
+		`UPDATE routing_cidrs SET cidr = ?, mode = ? WHERE cidr = ?`,
+		entry.CIDR, entry.Mode, oldCIDR,
 	)
 	if err != nil {
 		return fmt.Errorf("statsdb: update routing cidr %q: %w", oldCIDR, err)

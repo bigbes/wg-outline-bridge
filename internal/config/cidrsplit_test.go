@@ -8,51 +8,51 @@ import (
 func TestExpandCIDRRuleVars(t *testing.T) {
 	tests := []struct {
 		name  string
-		rules []string
+		rules []CIDREntry
 		vars  map[string]string
-		want  []string
+		want  []CIDREntry
 	}{
 		{
 			name:  "server_ip substituted",
-			rules: []string{"d:{{ $server_ip }}/32", "a:*"},
+			rules: []CIDREntry{{Mode: "disallow", CIDR: "{{ $server_ip }}/32"}, {Mode: "allow", CIDR: "*"}},
 			vars:  map[string]string{"server_ip": "203.0.113.1"},
-			want:  []string{"d:203.0.113.1/32", "a:*"},
+			want:  []CIDREntry{{Mode: "disallow", CIDR: "203.0.113.1/32"}, {Mode: "allow", CIDR: "*"}},
 		},
 		{
 			name:  "no spacing in braces",
-			rules: []string{"d:{{$server_ip}}/32"},
+			rules: []CIDREntry{{Mode: "disallow", CIDR: "{{$server_ip}}/32"}},
 			vars:  map[string]string{"server_ip": "10.0.0.1"},
-			want:  []string{"d:10.0.0.1/32"},
+			want:  []CIDREntry{{Mode: "disallow", CIDR: "10.0.0.1/32"}},
 		},
 		{
 			name:  "unknown var left unexpanded",
-			rules: []string{"d:{{ $unknown }}/32"},
+			rules: []CIDREntry{{Mode: "disallow", CIDR: "{{ $unknown }}/32"}},
 			vars:  map[string]string{"server_ip": "10.0.0.1"},
-			want:  []string{"d:{{ $unknown }}/32"},
+			want:  []CIDREntry{{Mode: "disallow", CIDR: "{{ $unknown }}/32"}},
 		},
 		{
 			name:  "empty var left unexpanded",
-			rules: []string{"d:{{ $server_ip }}/32"},
+			rules: []CIDREntry{{Mode: "disallow", CIDR: "{{ $server_ip }}/32"}},
 			vars:  map[string]string{"server_ip": ""},
-			want:  []string{"d:{{ $server_ip }}/32"},
+			want:  []CIDREntry{{Mode: "disallow", CIDR: "{{ $server_ip }}/32"}},
 		},
 		{
 			name:  "no vars no change",
-			rules: []string{"d:10.0.0.0/8", "a:*"},
+			rules: []CIDREntry{{Mode: "disallow", CIDR: "10.0.0.0/8"}, {Mode: "allow", CIDR: "*"}},
 			vars:  map[string]string{"server_ip": "1.2.3.4"},
-			want:  []string{"d:10.0.0.0/8", "a:*"},
+			want:  []CIDREntry{{Mode: "disallow", CIDR: "10.0.0.0/8"}, {Mode: "allow", CIDR: "*"}},
 		},
 		{
 			name:  "nil vars",
-			rules: []string{"d:{{ $server_ip }}/32"},
+			rules: []CIDREntry{{Mode: "disallow", CIDR: "{{ $server_ip }}/32"}},
 			vars:  nil,
-			want:  []string{"d:{{ $server_ip }}/32"},
+			want:  []CIDREntry{{Mode: "disallow", CIDR: "{{ $server_ip }}/32"}},
 		},
 		{
 			name:  "multiple vars in one rule",
-			rules: []string{"d:{{ $server_ip }}/{{ $bits }}"},
+			rules: []CIDREntry{{Mode: "disallow", CIDR: "{{ $server_ip }}/{{ $bits }}"}},
 			vars:  map[string]string{"server_ip": "1.2.3.0", "bits": "24"},
-			want:  []string{"d:1.2.3.0/24"},
+			want:  []CIDREntry{{Mode: "disallow", CIDR: "1.2.3.0/24"}},
 		},
 	}
 
@@ -63,8 +63,9 @@ func TestExpandCIDRRuleVars(t *testing.T) {
 				t.Fatalf("got %d rules, want %d", len(got), len(tt.want))
 			}
 			for i := range got {
-				if got[i] != tt.want[i] {
-					t.Errorf("rule %d: got %q, want %q", i, got[i], tt.want[i])
+				if got[i].Mode != tt.want[i].Mode || got[i].CIDR != tt.want[i].CIDR {
+					t.Errorf("rule %d: got {Mode:%q CIDR:%q}, want {Mode:%q CIDR:%q}",
+						i, got[i].Mode, got[i].CIDR, tt.want[i].Mode, tt.want[i].CIDR)
 				}
 			}
 		})
@@ -171,50 +172,55 @@ func TestExcludePrefixes(t *testing.T) {
 func TestParseCIDRRules(t *testing.T) {
 	tests := []struct {
 		name    string
-		rules   []string
+		entries []CIDREntry
 		want    []CIDRRule
 		wantErr bool
 	}{
 		{
-			name:  "disallow with d: prefix",
-			rules: []string{"d:192.168.0.0/16"},
+			name:    "disallow with d: prefix",
+			entries: []CIDREntry{{Mode: "disallow", CIDR: "192.168.0.0/16"}},
 			want: []CIDRRule{
 				{Action: "disallow", Prefix: netip.MustParsePrefix("192.168.0.0/16")},
 			},
 		},
 		{
-			name:  "allow with a: prefix",
-			rules: []string{"a:10.0.0.0/8"},
+			name:    "allow with a: prefix",
+			entries: []CIDREntry{{Mode: "allow", CIDR: "10.0.0.0/8"}},
 			want: []CIDRRule{
 				{Action: "allow", Prefix: netip.MustParsePrefix("10.0.0.0/8")},
 			},
 		},
 		{
-			name:  "full prefixes",
-			rules: []string{"allow:10.0.0.0/8", "disallow:192.168.0.0/16"},
+			name:    "full prefixes",
+			entries: []CIDREntry{{Mode: "allow", CIDR: "10.0.0.0/8"}, {Mode: "disallow", CIDR: "192.168.0.0/16"}},
 			want: []CIDRRule{
 				{Action: "allow", Prefix: netip.MustParsePrefix("10.0.0.0/8")},
 				{Action: "disallow", Prefix: netip.MustParsePrefix("192.168.0.0/16")},
 			},
 		},
 		{
-			name:  "wildcard placed last",
-			rules: []string{"a:*", "d:10.0.0.0/8"},
+			name:    "wildcard placed last",
+			entries: []CIDREntry{{Mode: "allow", CIDR: "*"}, {Mode: "disallow", CIDR: "10.0.0.0/8"}},
 			want: []CIDRRule{
 				{Action: "disallow", Prefix: netip.MustParsePrefix("10.0.0.0/8")},
 				{Action: "allow", Prefix: netip.MustParsePrefix("0.0.0.0/0"), Wildcard: true},
 			},
 		},
 		{
-			name:  "bare CIDR treated as disallow",
-			rules: []string{"192.168.0.0/16"},
+			name:    "bare CIDR treated as disallow",
+			entries: []CIDREntry{{Mode: "disallow", CIDR: "192.168.0.0/16"}},
 			want: []CIDRRule{
 				{Action: "disallow", Prefix: netip.MustParsePrefix("192.168.0.0/16")},
 			},
 		},
 		{
-			name:  "order preserved with wildcard last",
-			rules: []string{"a:10.100.0.0/24", "d:10.0.0.0/8", "d:192.168.0.0/16", "a:*"},
+			name: "order preserved with wildcard last",
+			entries: []CIDREntry{
+				{Mode: "allow", CIDR: "10.100.0.0/24"},
+				{Mode: "disallow", CIDR: "10.0.0.0/8"},
+				{Mode: "disallow", CIDR: "192.168.0.0/16"},
+				{Mode: "allow", CIDR: "*"},
+			},
 			want: []CIDRRule{
 				{Action: "allow", Prefix: netip.MustParsePrefix("10.100.0.0/24")},
 				{Action: "disallow", Prefix: netip.MustParsePrefix("10.0.0.0/8")},
@@ -223,21 +229,16 @@ func TestParseCIDRRules(t *testing.T) {
 			},
 		},
 		{
-			name:    "invalid rule",
-			rules:   []string{"x:something"},
-			wantErr: true,
-		},
-		{
 			name:    "invalid CIDR",
-			rules:   []string{"d:not-a-cidr"},
+			entries: []CIDREntry{{Mode: "disallow", CIDR: "not-a-cidr"}},
 			wantErr: true,
 		},
 		{
 			name: "empty rules",
 		},
 		{
-			name:  "non-canonical prefix is masked",
-			rules: []string{"a:10.0.0.1/24"},
+			name:    "non-canonical prefix is masked",
+			entries: []CIDREntry{{Mode: "allow", CIDR: "10.0.0.1/24"}},
 			want: []CIDRRule{
 				{Action: "allow", Prefix: netip.MustParsePrefix("10.0.0.0/24")},
 			},
@@ -246,7 +247,7 @@ func TestParseCIDRRules(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseCIDRRules(tt.rules)
+			got, err := ParseCIDRRules(tt.entries)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -274,7 +275,7 @@ func TestParseCIDRRules(t *testing.T) {
 func TestComputeAllowedIPs(t *testing.T) {
 	tests := []struct {
 		name     string
-		rules    []string
+		entries  []CIDREntry
 		serverIP string
 		want     string
 	}{
@@ -283,19 +284,26 @@ func TestComputeAllowedIPs(t *testing.T) {
 			want: "0.0.0.0/0",
 		},
 		{
-			name:  "disallow only (implicit deny rest)",
-			rules: []string{"d:10.0.0.0/8"},
-			want:  "",
+			name:    "disallow only (implicit deny rest)",
+			entries: []CIDREntry{{Mode: "disallow", CIDR: "10.0.0.0/8"}},
+			want:    "",
 		},
 		{
-			name:  "disallow then allow all",
-			rules: []string{"d:10.0.0.0/8", "a:*"},
+			name:    "disallow then allow all",
+			entries: []CIDREntry{{Mode: "disallow", CIDR: "10.0.0.0/8"}, {Mode: "allow", CIDR: "*"}},
 			want: "0.0.0.0/5, 8.0.0.0/7, 11.0.0.0/8, 12.0.0.0/6, " +
 				"16.0.0.0/4, 32.0.0.0/3, 64.0.0.0/2, 128.0.0.0/1",
 		},
 		{
-			name:  "allow subnet then disallow parent then allow all",
-			rules: []string{"a:10.100.0.0/24", "d:10.0.0.0/8", "d:127.0.0.0/8", "d:172.16.0.0/12", "d:192.168.0.0/16", "a:*"},
+			name: "allow subnet then disallow parent then allow all",
+			entries: []CIDREntry{
+				{Mode: "allow", CIDR: "10.100.0.0/24"},
+				{Mode: "disallow", CIDR: "10.0.0.0/8"},
+				{Mode: "disallow", CIDR: "127.0.0.0/8"},
+				{Mode: "disallow", CIDR: "172.16.0.0/12"},
+				{Mode: "disallow", CIDR: "192.168.0.0/16"},
+				{Mode: "allow", CIDR: "*"},
+			},
 			want: "0.0.0.0/5, 8.0.0.0/7, 10.100.0.0/24, 11.0.0.0/8, 12.0.0.0/6, " +
 				"16.0.0.0/4, 32.0.0.0/3, " +
 				"64.0.0.0/3, 96.0.0.0/4, 112.0.0.0/5, 120.0.0.0/6, 124.0.0.0/7, 126.0.0.0/8, " +
@@ -309,34 +317,34 @@ func TestComputeAllowedIPs(t *testing.T) {
 				"200.0.0.0/5, 208.0.0.0/4, 224.0.0.0/3",
 		},
 		{
-			name:  "only explicit allows",
-			rules: []string{"a:10.0.0.0/8", "a:192.168.0.0/16"},
-			want:  "10.0.0.0/8, 192.168.0.0/16",
+			name:    "only explicit allows",
+			entries: []CIDREntry{{Mode: "allow", CIDR: "10.0.0.0/8"}, {Mode: "allow", CIDR: "192.168.0.0/16"}},
+			want:    "10.0.0.0/8, 192.168.0.0/16",
 		},
 		{
 			name:     "server IP excluded",
-			rules:    []string{"a:203.0.113.0/24"},
+			entries:  []CIDREntry{{Mode: "allow", CIDR: "203.0.113.0/24"}},
 			serverIP: "203.0.113.1",
 			want: "203.0.113.0/32, 203.0.113.2/31, 203.0.113.4/30, " +
 				"203.0.113.8/29, 203.0.113.16/28, 203.0.113.32/27, " +
 				"203.0.113.64/26, 203.0.113.128/25",
 		},
 		{
-			name:  "disallow all",
-			rules: []string{"d:*"},
-			want:  "",
+			name:    "disallow all",
+			entries: []CIDREntry{{Mode: "disallow", CIDR: "*"}},
+			want:    "",
 		},
 		{
 			name:     "server IP via template variable",
-			rules:    []string{"d:{{ $server_ip }}/32", "a:203.0.113.0/24"},
+			entries:  []CIDREntry{{Mode: "disallow", CIDR: "{{ $server_ip }}/32"}, {Mode: "allow", CIDR: "203.0.113.0/24"}},
 			serverIP: "203.0.113.1",
 			want: "203.0.113.0/32, 203.0.113.2/31, 203.0.113.4/30, " +
 				"203.0.113.8/29, 203.0.113.16/28, 203.0.113.32/27, " +
 				"203.0.113.64/26, 203.0.113.128/25",
 		},
 		{
-			name:  "bare CIDR backward compat with allow all",
-			rules: []string{"192.168.0.0/16", "a:*"},
+			name:    "bare CIDR backward compat with allow all",
+			entries: []CIDREntry{{Mode: "disallow", CIDR: "192.168.0.0/16"}, {Mode: "allow", CIDR: "*"}},
 			want: "0.0.0.0/1, 128.0.0.0/2, " +
 				"192.0.0.0/9, 192.128.0.0/11, 192.160.0.0/13, " +
 				"192.169.0.0/16, 192.170.0.0/15, 192.172.0.0/14, " +
@@ -348,7 +356,7 @@ func TestComputeAllowedIPs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			expanded := ExpandCIDRRuleVars(tt.rules, map[string]string{"server_ip": tt.serverIP})
+			expanded := ExpandCIDRRuleVars(tt.entries, map[string]string{"server_ip": tt.serverIP})
 			rules, err := ParseCIDRRules(expanded)
 			if err != nil {
 				t.Fatalf("ParseCIDRRules: %v", err)

@@ -115,7 +115,7 @@ type PeerConfig struct {
 }
 
 type RoutingConfig struct {
-	CIDRs    []string        `yaml:"cidrs"`
+	CIDRs    []CIDREntry     `yaml:"cidrs"`
 	IPRules  []IPRuleConfig  `yaml:"ip_rules"`
 	SNIRules []SNIRuleConfig `yaml:"sni_rules"`
 }

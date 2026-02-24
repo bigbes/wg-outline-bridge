@@ -376,7 +376,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 			if b.cfg.CacheDir != "" {
 				acmeDir = filepath.Join(b.cfg.CacheDir, "acme", "miniapp")
 			}
-			maSrv := miniapp.New(b, b, b, bot, b.statsStore, b.cfg.Telegram.Token, b.cfg.Telegram.AllowedUsers, b.cfg.MiniApp.Listen, b.cfg.MiniApp.Domain, b.cfg.MiniApp.ACMEEmail, acmeDir, b.logger)
+			maSrv := miniapp.New(b, b, b, geoMgr, bot, b.statsStore, b.cfg.Telegram.Token, b.cfg.Telegram.AllowedUsers, b.cfg.MiniApp.Listen, b.cfg.MiniApp.Domain, b.cfg.MiniApp.ACMEEmail, acmeDir, b.logger)
 			go func() {
 				if err := maSrv.Run(ctx); err != nil {
 					b.logger.Error("miniapp server error", "err", err)
@@ -502,6 +502,97 @@ func (b *Bridge) Reload() error {
 
 	b.logger.Info("configuration reloaded",
 		"peers_added", len(diff.Added),
+		"peers_removed", len(diff.Removed),
+	)
+	return nil
+}
+
+// ResetConfig resets the database, re-seeds it from the file-based
+// configuration (not the live in-memory config), and reconciles the
+// running state so that dynamically-added peers, secrets, upstreams,
+// etc. are actually removed.
+func (b *Bridge) ResetConfig() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	if err := b.statsStore.Reset(); err != nil {
+		return fmt.Errorf("resetting database: %w", err)
+	}
+
+	// Load config from files (not from the live in-memory config).
+	fileCfg, err := config.Load(b.configPath)
+	if err != nil {
+		return fmt.Errorf("loading file config: %w", err)
+	}
+
+	// Re-seed the DB from the file-based config (except secrets and
+	// peers — reset means a clean slate for those).
+	if len(fileCfg.Upstreams) > 0 {
+		b.statsStore.ImportUpstreams(fileCfg.Upstreams)
+	}
+	if len(fileCfg.Proxies) > 0 {
+		b.statsStore.ImportProxyServers(fileCfg.Proxies)
+	}
+	if len(fileCfg.DNS.Records) > 0 {
+		b.statsStore.ImportDNSRecords(fileCfg.DNS.Records)
+	}
+	if len(fileCfg.DNS.Rules) > 0 {
+		b.statsStore.ImportDNSRules(fileCfg.DNS.Rules)
+	}
+	if len(fileCfg.Routing.CIDRs) > 0 {
+		b.statsStore.ImportRoutingCIDRs(fileCfg.Routing.CIDRs)
+	}
+	if len(fileCfg.Routing.IPRules) > 0 {
+		b.statsStore.ImportIPRules(fileCfg.Routing.IPRules)
+	}
+	if len(fileCfg.Routing.SNIRules) > 0 {
+		b.statsStore.ImportSNIRules(fileCfg.Routing.SNIRules)
+	}
+
+	// Reset means zero peers and zero secrets.
+	fileCfg.Peers = make(map[string]config.PeerConfig)
+	fileCfg.MTProxy.Secrets = nil
+
+	// Reconcile runtime state: remove all peers.
+	diff := config.DiffPeers(b.cfg.Peers, fileCfg.Peers)
+	for name, peer := range diff.Removed {
+		b.logger.Info("reset: removing peer", "name", name, "public_key", peer.PublicKey)
+		uapi, err := config.PeerUAPIRemove(peer.PublicKey)
+		if err != nil {
+			b.logger.Error("reset: failed to generate remove UAPI", "err", err)
+			continue
+		}
+		if err := b.wgDev.IpcSet(uapi); err != nil {
+			b.logger.Error("reset: failed to remove peer via UAPI", "err", err)
+			continue
+		}
+		for _, ip := range peerAllowedIPs(peer) {
+			closed := b.tracker.CloseBySource(ip)
+			if closed > 0 {
+				b.logger.Info("reset: closed connections for removed peer", "ip", ip, "count", closed)
+			}
+		}
+	}
+
+	// Reconcile upstreams.
+	specs := fileCfg.ToUpstreamSpecs()
+	if err := b.upstreams.Apply(specs); err != nil {
+		b.logger.Error("reset: failed to reload upstreams", "err", err)
+	}
+
+	b.cfg = fileCfg
+	b.reloadMTProxySecrets()
+	b.reloadDNSRules()
+
+	if b.peerMon != nil {
+		b.peerMon.updatePeers(fileCfg.Peers)
+	}
+
+	b.logger.Info("reset: configuration reset to file-based config",
 		"peers_removed", len(diff.Removed),
 	)
 	return nil
@@ -1870,7 +1961,7 @@ func buildDNSRules(cfg config.DNSConfig, logger *slog.Logger) []dns.Rule {
 	return rules
 }
 
-func (b *Bridge) AddRoutingCIDR(cidr string) error {
+func (b *Bridge) AddRoutingCIDR(entry config.CIDREntry) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -1879,17 +1970,17 @@ func (b *Bridge) AddRoutingCIDR(cidr string) error {
 	}
 
 	for _, existing := range b.cfg.Routing.CIDRs {
-		if existing == cidr {
-			return fmt.Errorf("routing cidr %q already exists", cidr)
+		if existing.CIDR == entry.CIDR {
+			return fmt.Errorf("routing cidr %q already exists", entry.CIDR)
 		}
 	}
 
-	if err := b.statsStore.AddRoutingCIDR(cidr); err != nil {
+	if err := b.statsStore.AddRoutingCIDR(entry); err != nil {
 		return fmt.Errorf("saving routing cidr: %w", err)
 	}
 
-	b.cfg.Routing.CIDRs = append(b.cfg.Routing.CIDRs, cidr)
-	b.logger.Info("routing cidr added", "cidr", cidr)
+	b.cfg.Routing.CIDRs = append(b.cfg.Routing.CIDRs, entry)
+	b.logger.Info("routing cidr added", "cidr", entry.CIDR, "mode", entry.Mode)
 	return nil
 }
 
@@ -1909,9 +2000,9 @@ func (b *Bridge) DeleteRoutingCIDR(cidr string) error {
 		return fmt.Errorf("routing cidr %q not found", cidr)
 	}
 
-	cidrs := make([]string, 0, len(b.cfg.Routing.CIDRs))
+	cidrs := make([]config.CIDREntry, 0, len(b.cfg.Routing.CIDRs))
 	for _, c := range b.cfg.Routing.CIDRs {
-		if c != cidr {
+		if c.CIDR != cidr {
 			cidrs = append(cidrs, c)
 		}
 	}
@@ -2058,7 +2149,18 @@ func (b *Bridge) ReorderRoutingCIDRs(cidrs []string) error {
 		return fmt.Errorf("reordering routing cidrs: %w", err)
 	}
 
-	b.cfg.Routing.CIDRs = cidrs
+	// Rebuild the in-memory slice in the new order.
+	entryMap := make(map[string]config.CIDREntry, len(b.cfg.Routing.CIDRs))
+	for _, e := range b.cfg.Routing.CIDRs {
+		entryMap[e.CIDR] = e
+	}
+	reordered := make([]config.CIDREntry, 0, len(cidrs))
+	for _, c := range cidrs {
+		if e, ok := entryMap[c]; ok {
+			reordered = append(reordered, e)
+		}
+	}
+	b.cfg.Routing.CIDRs = reordered
 	b.logger.Info("routing cidrs reordered")
 	return nil
 }
@@ -2092,7 +2194,7 @@ func (b *Bridge) ReorderIPRules(names []string) error {
 	return nil
 }
 
-func (b *Bridge) UpdateRoutingCIDR(oldCIDR, newCIDR string) error {
+func (b *Bridge) UpdateRoutingCIDR(oldCIDR string, entry config.CIDREntry) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -2100,18 +2202,18 @@ func (b *Bridge) UpdateRoutingCIDR(oldCIDR, newCIDR string) error {
 		return fmt.Errorf("database not configured")
 	}
 
-	if err := b.statsStore.UpdateRoutingCIDR(oldCIDR, newCIDR); err != nil {
+	if err := b.statsStore.UpdateRoutingCIDR(oldCIDR, entry); err != nil {
 		return fmt.Errorf("updating routing cidr: %w", err)
 	}
 
 	for i, c := range b.cfg.Routing.CIDRs {
-		if c == oldCIDR {
-			b.cfg.Routing.CIDRs[i] = newCIDR
+		if c.CIDR == oldCIDR {
+			b.cfg.Routing.CIDRs[i] = entry
 			break
 		}
 	}
 
-	b.logger.Info("routing cidr updated", "old", oldCIDR, "new", newCIDR)
+	b.logger.Info("routing cidr updated", "old", oldCIDR, "new", entry.CIDR, "mode", entry.Mode)
 	return nil
 }
 

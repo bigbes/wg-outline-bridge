@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -207,6 +208,35 @@ func (db *DB) setReader(r *maxminddb.Reader) {
 	}
 }
 
+// Countries returns all unique ISO country codes found in the database.
+func (db *DB) Countries() []string {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	if db.reader == nil {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	for result := range db.reader.Networks() {
+		var record countryRecord
+		if err := result.Decode(&record); err != nil {
+			continue
+		}
+		code := record.Country.ISOCode
+		if code != "" {
+			seen[code] = struct{}{}
+		}
+	}
+
+	codes := make([]string, 0, len(seen))
+	for code := range seen {
+		codes = append(codes, code)
+	}
+	sort.Strings(codes)
+	return codes
+}
+
 // LookupCountry returns the ISO country code for the given IP address.
 // Returns empty string if the IP is not found.
 func (db *DB) LookupCountry(addr netip.Addr) string {
@@ -308,6 +338,37 @@ func (m *Manager) LookupCountry(dbName string, addr netip.Addr) string {
 		return ""
 	}
 	return db.LookupCountry(addr)
+}
+
+// DBNames returns the names of all loaded databases.
+func (m *Manager) DBNames() []string {
+	if m == nil {
+		return nil
+	}
+	names := make([]string, 0, len(m.dbs))
+	for name := range m.dbs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// Countries returns the unique ISO country codes for the named database.
+// If dbName is empty, uses the first (default) database.
+func (m *Manager) Countries(dbName string) []string {
+	if m == nil {
+		return nil
+	}
+	var db *DB
+	if dbName == "" {
+		db = m.first
+	} else {
+		db = m.dbs[dbName]
+	}
+	if db == nil {
+		return nil
+	}
+	return db.Countries()
 }
 
 // StartRefresh starts background refresh goroutines for all databases.
