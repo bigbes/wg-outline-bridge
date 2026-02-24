@@ -186,7 +186,6 @@ CREATE TABLE IF NOT EXISTS proxy_servers (
   name TEXT PRIMARY KEY,
   type TEXT NOT NULL,
   listen TEXT NOT NULL,
-  outline TEXT NOT NULL DEFAULT '',
   username TEXT NOT NULL DEFAULT '',
   password TEXT NOT NULL DEFAULT '',
   tls_cert_file TEXT NOT NULL DEFAULT '',
@@ -327,100 +326,7 @@ func (s *Store) migrateSchema() error {
 		}
 	}
 
-	// Migrate routing_cidrs: parse old prefixed strings (e.g. "a:10.0.0.0/8")
-	// into separate cidr + mode columns.
-	if err := s.migrateRoutingCIDRs(); err != nil {
-		return fmt.Errorf("migrate routing cidrs: %w", err)
-	}
-
 	return nil
-}
-
-// migrateRoutingCIDRs parses legacy prefixed CIDR strings stored in the cidr
-// column (e.g. "a:10.0.0.0/8", "d:192.168.0.0/16", "!10.0.0.0/8") and
-// rewrites them as clean CIDR + mode.
-func (s *Store) migrateRoutingCIDRs() error {
-	rows, err := s.db.Query(`SELECT cidr, mode, priority, created_unix FROM routing_cidrs ORDER BY priority ASC, created_unix ASC`)
-	if err != nil {
-		return fmt.Errorf("read routing cidrs: %w", err)
-	}
-	defer rows.Close()
-
-	type row struct {
-		cidr        string
-		mode        string
-		priority    int
-		createdUnix int64
-	}
-	var toMigrate []row
-	needsMigration := false
-	for rows.Next() {
-		var r row
-		if err := rows.Scan(&r.cidr, &r.mode, &r.priority, &r.createdUnix); err != nil {
-			return fmt.Errorf("scan routing cidr: %w", err)
-		}
-		// Detect legacy prefixed strings by checking for known prefixes or "!" prefix.
-		if strings.HasPrefix(r.cidr, "a:") || strings.HasPrefix(r.cidr, "d:") ||
-			strings.HasPrefix(r.cidr, "allow:") || strings.HasPrefix(r.cidr, "disallow:") ||
-			strings.HasPrefix(r.cidr, "!") {
-			needsMigration = true
-		}
-		toMigrate = append(toMigrate, r)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate routing cidrs: %w", err)
-	}
-	if !needsMigration || len(toMigrate) == 0 {
-		return nil
-	}
-
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback()
-
-	for _, r := range toMigrate {
-		entry, err := parseLegacyCIDR(r.cidr)
-		if err != nil {
-			s.logger.Warn("routing cidrs migration: skipping unparseable entry", "cidr", r.cidr, "err", err)
-			continue
-		}
-		if entry.CIDR == r.cidr && entry.Mode == r.mode {
-			continue // already clean
-		}
-		// Delete old row, insert cleaned one (handles PK change).
-		if _, err := tx.Exec(`DELETE FROM routing_cidrs WHERE cidr = ?`, r.cidr); err != nil {
-			return fmt.Errorf("delete old cidr %q: %w", r.cidr, err)
-		}
-		if _, err := tx.Exec(
-			`INSERT OR IGNORE INTO routing_cidrs (cidr, mode, priority, created_unix) VALUES (?, ?, ?, ?)`,
-			entry.CIDR, entry.Mode, r.priority, r.createdUnix,
-		); err != nil {
-			return fmt.Errorf("insert migrated cidr %q: %w", entry.CIDR, err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit migration: %w", err)
-	}
-	s.logger.Info("migrated routing cidrs to structured format")
-	return nil
-}
-
-// parseLegacyCIDR parses a legacy CIDR string that may have prefixes like
-// "a:", "d:", "allow:", "disallow:", or "!" into a CIDREntry.
-func parseLegacyCIDR(s string) (config.CIDREntry, error) {
-	// Try the standard config parser first (handles a:/d:/allow:/disallow: and bare CIDRs).
-	entry, err := config.ParseCIDREntry(s)
-	if err == nil {
-		return entry, nil
-	}
-	// Handle miniapp "!" prefix convention.
-	if strings.HasPrefix(s, "!") {
-		return config.CIDREntry{CIDR: s[1:], Mode: "disallow"}, nil
-	}
-	return config.CIDREntry{}, fmt.Errorf("unknown CIDR format %q", s)
 }
 
 // Reset drops all tables and re-initialises the schema, effectively
@@ -1070,7 +976,7 @@ func (s *Store) SetSecretUpstreamGroup(secretHex, group string) error {
 // ListProxyServers returns all proxy server configs from the database.
 func (s *Store) ListProxyServers() ([]config.ProxyServerConfig, error) {
 	rows, err := s.db.Query(
-		`SELECT name, type, listen, outline, username, password,
+		`SELECT name, type, listen, username, password,
 		        tls_cert_file, tls_key_file, tls_domain, tls_acme_email, upstream_group
 		 FROM proxy_servers`)
 	if err != nil {
@@ -1081,8 +987,7 @@ func (s *Store) ListProxyServers() ([]config.ProxyServerConfig, error) {
 	var out []config.ProxyServerConfig
 	for rows.Next() {
 		var p config.ProxyServerConfig
-		var deprecatedOutline string
-		if err := rows.Scan(&p.Name, &p.Type, &p.Listen, &deprecatedOutline,
+		if err := rows.Scan(&p.Name, &p.Type, &p.Listen,
 			&p.Username, &p.Password,
 			&p.TLS.CertFile, &p.TLS.KeyFile, &p.TLS.Domain, &p.TLS.ACMEEmail, &p.UpstreamGroup); err != nil {
 			return nil, fmt.Errorf("statsdb: scan proxy server: %w", err)
@@ -1098,10 +1003,10 @@ func (s *Store) ListProxyServers() ([]config.ProxyServerConfig, error) {
 // AddProxyServer inserts a new proxy server config.
 func (s *Store) AddProxyServer(p config.ProxyServerConfig) error {
 	_, err := s.db.Exec(
-		`INSERT INTO proxy_servers (name, type, listen, outline, username, password,
+		`INSERT INTO proxy_servers (name, type, listen, username, password,
 		                            tls_cert_file, tls_key_file, tls_domain, tls_acme_email, upstream_group)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Name, p.Type, p.Listen, "", p.Username, p.Password,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Name, p.Type, p.Listen, p.Username, p.Password,
 		p.TLS.CertFile, p.TLS.KeyFile, p.TLS.Domain, p.TLS.ACMEEmail, p.UpstreamGroup,
 	)
 	if err != nil {
@@ -1155,9 +1060,9 @@ func (s *Store) ImportProxyServers(proxies []config.ProxyServerConfig) (int, err
 	defer tx.Rollback()
 
 	stmt, err := tx.Prepare(
-		`INSERT OR IGNORE INTO proxy_servers (name, type, listen, outline, username, password,
+		`INSERT OR IGNORE INTO proxy_servers (name, type, listen, username, password,
 		                                      tls_cert_file, tls_key_file, tls_domain, tls_acme_email, upstream_group)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return 0, fmt.Errorf("statsdb: prepare import proxy servers: %w", err)
 	}
@@ -1165,7 +1070,7 @@ func (s *Store) ImportProxyServers(proxies []config.ProxyServerConfig) (int, err
 
 	var count int
 	for _, p := range proxies {
-		res, err := stmt.Exec(p.Name, p.Type, p.Listen, "", p.Username, p.Password,
+		res, err := stmt.Exec(p.Name, p.Type, p.Listen, p.Username, p.Password,
 			p.TLS.CertFile, p.TLS.KeyFile, p.TLS.Domain, p.TLS.ACMEEmail, p.UpstreamGroup)
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: import proxy server %q: %w", p.Name, err)

@@ -149,7 +149,6 @@ All upstream endpoints are defined in the `upstreams` array. Each entry has:
 | `groups` | no | Custom group names for `upstream_group` references |
 | `health_check` | no | Periodic TCP probe to verify the proxy is reachable |
 
-> **Legacy**: the `outlines` key (without `type` field) is still accepted and auto-converted to `upstreams` at load time.
 
 ## Routing
 
@@ -230,9 +229,8 @@ Match the TLS Server Name Indication from the ClientHello on port 443. Supports 
 routing:
   sni_rules:
     - name: "video-via-alt"
-      action: outline
+      action: upstream
       upstream_group: "video"   # route to upstream group
-      # outline: "alt"          # legacy alternative
       domains:
         - "*.youtube.com"
         - "*.googlevideo.com"
@@ -248,7 +246,7 @@ routing:
 | Action | Description |
 |--------|-------------|
 | `direct` | Connect to destination directly, bypassing all proxies |
-| `outline` | Route through a named upstream (specify `upstream_group: "group"` or legacy `outline: "name"`) |
+| `upstream` | Route through a named upstream (specify `upstream_group: "group"`) |
 | `default` | Use the default upstream (same as no rule matching) |
 
 ## Proxy Servers
@@ -289,7 +287,6 @@ proxies:
 | `type` | yes | `socks5`, `http`, or `https` |
 | `listen` | yes | Listen address (e.g. `0.0.0.0:1080`) |
 | `upstream_group` | no | Upstream group to route through (default = default upstream) |
-| `outline` | no | Legacy: named outline to use (auto-converted to `upstream_group`) |
 | `username` | no | Enable authentication (SOCKS5 user/pass or HTTP Basic) |
 | `password` | no | Password for authentication |
 | `tls` | https only | TLS configuration (cert files or ACME domain) |

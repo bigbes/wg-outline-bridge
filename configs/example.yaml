@@ -65,8 +65,7 @@ wireguard:
 #   enabled: true
 #   listen:
 #     - "0.0.0.0:443"
-#   outline: "default"         # legacy: which outline to use for backend connections
-#   upstream_group: "default"  # preferred: upstream group name (overrides outline)
+#   upstream_group: "default"  # upstream group name for backend connections
 #   secrets:                   # inline 16-byte hex secrets (32 chars; optional dd/ee prefix)
 #     - "dd0123456789abcdef0123456789abcdef"
 #   stats_addr: "127.0.0.1:8080"  # HTTP stats endpoint (localhost-only, GET /stats)
@@ -85,22 +84,19 @@ wireguard:
 #   - name: "socks-main"
 #     type: socks5
 #     listen: "0.0.0.0:1080"
-#     outline: ""                # legacy: named outline (default = default)
-#     upstream_group: ""         # preferred: upstream group name (overrides outline)
+#     upstream_group: ""         # upstream group name
 #     username: ""               # optional: enable user/pass authentication
 #     password: ""
 #
 #   - name: "http-main"
 #     type: http
 #     listen: "0.0.0.0:8080"
-#     outline: ""
 #     username: "user"           # HTTP Basic auth
 #     password: "pass"
 #
 #   - name: "https-secure"
 #     type: https
 #     listen: "0.0.0.0:8443"
-#     outline: ""
 #     username: "user"
 #     password: "pass"
 #     tls:
@@ -144,11 +140,6 @@ upstreams:
 #    type: outline
 #    transport: "ss://CHANGE_ME_ALT"
 #    groups: ["video"]
-
-# outlines:                      # legacy format (auto-converted to upstreams)
-#   - name: "default"
-#     transport: "ss://CHANGE_ME"
-#     default: true
 
 # geoip:                     # GeoIP MMDB databases for country-based routing
 #   - name: "country"         # name used in geoip: references (optional)
@@ -199,17 +190,15 @@ upstreams:
 #         - 13335              # Cloudflare
 #
 #     - name: "special-via-alt"
-#       action: outline
-#       outline: "alt"           # legacy: route to named outline
-#       upstream_group: "video"  # preferred: route to upstream group
+#       action: upstream
+#       upstream_group: "video"  # route to upstream group
 #       cidrs:
 #         - "203.0.113.0/24"
 #
 #   sni_rules:
 #     - name: "video-via-alt"
-#       action: outline
-#       outline: "alt"           # legacy: route to named outline
-#       upstream_group: "video"  # preferred: route to upstream group
+#       action: upstream
+#       upstream_group: "video"  # route to upstream group
 #       domains:
 #         - "*.youtube.com"
 #         - "*.googlevideo.com"

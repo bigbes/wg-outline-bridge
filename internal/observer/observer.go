@@ -399,7 +399,7 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 		} else if o.manager == nil {
 			reply = "⚠️ Management not available (database not configured)"
 		} else if args == "" {
-			reply = "Usage: /addproxy &lt;type&gt; &lt;listen&gt; [name] [outline] [user:pass]\n\nExamples:\n/addproxy socks5 0.0.0.0:1080\n/addproxy http 0.0.0.0:8080 my-http default user:pass\n/addproxy socks5 0.0.0.0:1080 my-socks default user:pass"
+			reply = "Usage: /addproxy &lt;type&gt; &lt;listen&gt; [name] [upstream_group] [user:pass]\n\nExamples:\n/addproxy socks5 0.0.0.0:1080\n/addproxy http 0.0.0.0:8080 my-http default user:pass\n/addproxy socks5 0.0.0.0:1080 my-socks default user:pass"
 			html = true
 		} else {
 			reply = o.handleAddProxy(args)
@@ -480,7 +480,7 @@ func (o *Observer) handleCommand(ctx context.Context, msg *telegram.Message) {
 			"/delpeer <name> — delete a WireGuard peer\n" +
 			"/addsecret [type] [comment] — add a new MTProxy secret\n" +
 			"/delsecret <hex> — delete an MTProxy secret\n" +
-			"/addproxy <type> <listen> [name] [outline] [user:pass] — add a proxy server\n" +
+			"/addproxy <type> <listen> [name] [upstream_group] [user:pass] — add a proxy server\n" +
 			"/delproxy <name> — delete a proxy server\n" +
 			"/listproxy — list proxy servers and connection links\n" +
 			"/addupstream <name> <transport> [groups] [default] — add an upstream\n" +
@@ -894,7 +894,7 @@ func (o *Observer) handleDelSecret(secretHex string) string {
 func (o *Observer) handleAddProxy(args string) string {
 	parts := strings.Fields(args)
 	if len(parts) < 2 {
-		return "Usage: /addproxy &lt;type&gt; &lt;listen&gt; [name] [outline] [user:pass]"
+		return "Usage: /addproxy &lt;type&gt; &lt;listen&gt; [name] [upstream_group] [user:pass]"
 	}
 
 	p := config.ProxyServerConfig{

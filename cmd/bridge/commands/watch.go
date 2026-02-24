@@ -22,13 +22,9 @@ func Watch(args []string, logger *slog.Logger) {
 	logPath := fs.String("log", "output.log", "path to output log file")
 	fs.Parse(args)
 
-	_, migrated, err := config.Migrate(*configPath)
-	if err != nil {
+	if _, err := config.Load(*configPath); err != nil {
 		logger.Error("failed to load config", "err", err)
 		os.Exit(1)
-	}
-	if migrated {
-		logger.Info("config migrated with new fields", "path", *configPath)
 	}
 
 	execPath, err := os.Executable()

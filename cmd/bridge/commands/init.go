@@ -37,8 +37,9 @@ func Init(args []string, logger *slog.Logger) {
   mtu: 1420
   dns: "1.1.1.1"
 
-outlines:
+upstreams:
   - name: "default"
+    type: outline
     transport: "%s"
     default: true
 `, privateKey, *listenPort, *address, *transport)
