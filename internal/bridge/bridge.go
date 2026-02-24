@@ -1094,6 +1094,35 @@ func (b *Bridge) SetPeerExcludePrivate(name string, excludePrivate bool) error {
 	return nil
 }
 
+// SetPeerExcludeServer updates the exclude_server flag for a peer.
+func (b *Bridge) SetPeerExcludeServer(name string, excludeServer bool) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	peer, exists := b.cfg.Peers[name]
+	if !exists {
+		return fmt.Errorf("peer %q not found", name)
+	}
+
+	if peer.ExcludeServer == excludeServer {
+		return nil
+	}
+
+	if err := b.statsStore.SetPeerExcludeServer(name, excludeServer); err != nil {
+		return fmt.Errorf("saving peer exclude_server: %w", err)
+	}
+
+	peer.ExcludeServer = excludeServer
+	b.cfg.Peers[name] = peer
+
+	b.logger.Info("peer exclude_server changed", "name", name, "exclude_server", excludeServer)
+	return nil
+}
+
 // RenamePeer renames a peer from oldName to newName.
 func (b *Bridge) RenamePeer(oldName, newName string) error {
 	b.mu.Lock()

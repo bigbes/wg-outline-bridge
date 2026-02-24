@@ -112,6 +112,7 @@ type PeerConfig struct {
 	PresharedKey   string `yaml:"preshared_key"`
 	Disabled       bool   `yaml:"disabled"`
 	ExcludePrivate bool   `yaml:"-"`
+	ExcludeServer  bool   `yaml:"-"`
 	UpstreamGroup  string `yaml:"-"`
 }
 

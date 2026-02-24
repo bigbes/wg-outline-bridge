@@ -92,6 +92,8 @@ func PrivateNetworkCIDRs(wgAddress string) []CIDREntry {
 			entries = append([]CIDREntry{{Mode: "allow", CIDR: prefix.Masked().String()}}, entries...)
 		}
 	}
+	// Allow everything else not matched by the deny rules above.
+	entries = append(entries, CIDREntry{Mode: "allow", CIDR: "*"})
 	return entries
 }
 

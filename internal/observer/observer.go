@@ -122,6 +122,7 @@ type Manager interface {
 	DeleteUpstream(name string) error
 	SetPeerDisabled(name string, disabled bool) error
 	SetPeerExcludePrivate(name string, excludePrivate bool) error
+	SetPeerExcludeServer(name string, excludeServer bool) error
 	SetPeerUpstreamGroup(name, group string) error
 	SetProxyUpstreamGroup(name, group string) error
 	SetProxyAuth(name, username, password string) error
@@ -762,7 +763,11 @@ func (o *Observer) formatShowConf(name string) string {
 	}
 	cidrRules, err := config.ParseCIDRRules(config.ExpandCIDRRuleVars(cidrs, cidrVars))
 	if err == nil {
-		if computed := config.ComputeAllowedIPs(cidrRules, ""); computed != "" {
+		excludeIP := ""
+		if peer.ExcludeServer {
+			excludeIP = serverIP
+		}
+		if computed := config.ComputeAllowedIPs(cidrRules, excludeIP); computed != "" {
 			allowedIPs = computed
 		}
 	}
@@ -827,7 +832,11 @@ func (o *Observer) handleAddPeer(name string) string {
 	}
 	cidrRules, err := config.ParseCIDRRules(config.ExpandCIDRRuleVars(cidrs, cidrVars))
 	if err == nil {
-		if computed := config.ComputeAllowedIPs(cidrRules, ""); computed != "" {
+		excludeIP := ""
+		if peer.ExcludeServer {
+			excludeIP = serverIP
+		}
+		if computed := config.ComputeAllowedIPs(cidrRules, excludeIP); computed != "" {
 			allowedIPs = computed
 		}
 	}

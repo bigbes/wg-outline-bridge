@@ -28,6 +28,7 @@ if (!tg || !tg.initData) {
     let editingPeerName = null;
     let peerEditDisabled = false;
     let peerEditExcludePrivate = true;
+    let peerEditExcludeServer = false;
     let editingSecretHex = null;
     let editingProxyName = null;
     let editingCIDR = null;
@@ -1025,6 +1026,7 @@ if (!tg || !tg.initData) {
         editingPeerName = name;
         peerEditDisabled = peer.disabled;
         peerEditExcludePrivate = peer.exclude_private !== false;
+        peerEditExcludeServer = peer.exclude_server === true;
         document.getElementById("inp-peer-edit-name").value = name;
         document.getElementById("peer-edit-pubkey").textContent =
             peer.public_key;
@@ -1051,6 +1053,7 @@ if (!tg || !tg.initData) {
 
         updatePeerEditToggle();
         updatePeerEditExcludePrivateToggle();
+        updatePeerEditExcludeServerToggle();
         openModal("peer-edit-modal");
     };
     window.closePeerEditModal = function () {
@@ -1089,6 +1092,22 @@ if (!tg || !tg.initData) {
             label.textContent = "Disabled";
         }
     }
+    window.togglePeerEditExcludeServer = function () {
+        peerEditExcludeServer = !peerEditExcludeServer;
+        updatePeerEditExcludeServerToggle();
+        haptic("selection");
+    };
+    function updatePeerEditExcludeServerToggle() {
+        const el = document.getElementById("peer-edit-exclude-server-toggle");
+        const label = document.getElementById("peer-edit-exclude-server-label");
+        if (peerEditExcludeServer) {
+            el.classList.add("active");
+            label.textContent = "Enabled";
+        } else {
+            el.classList.remove("active");
+            label.textContent = "Disabled";
+        }
+    }
     window.savePeerEdit = function () {
         if (!editingPeerName) return;
         const newName = document
@@ -1099,7 +1118,7 @@ if (!tg || !tg.initData) {
             showToast("Name cannot be empty");
             return;
         }
-        const body = { disabled: peerEditDisabled, exclude_private: peerEditExcludePrivate };
+        const body = { disabled: peerEditDisabled, exclude_private: peerEditExcludePrivate, exclude_server: peerEditExcludeServer };
         if (newName !== editingPeerName) {
             body.name = newName;
         }

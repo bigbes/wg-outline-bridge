@@ -70,7 +70,12 @@
                     <span class="alive-dot" id="alive-dot"></span>
                     <span id="uptime"></span>
                 </div>
-                <button class="status-bar-admin-btn admin-only" onclick="switchTab('admin')">Admin</button>
+                <button
+                    class="status-bar-admin-btn admin-only"
+                    onclick="switchTab('admin')"
+                >
+                    Admin
+                </button>
             </div>
 
             <!-- Page: Peers (default) -->
@@ -141,7 +146,11 @@
                 </div>
                 <div class="section-title-row">
                     <h2 class="section-title">Client Peers</h2>
-                    <span class="filter-checkbox admin-only" id="peers-only-mine-cb" onclick="togglePeersOnlyMine()"></span>
+                    <span
+                        class="filter-checkbox admin-only"
+                        id="peers-only-mine-cb"
+                        onclick="togglePeersOnlyMine()"
+                    ></span>
                 </div>
                 <div class="list-group" id="peer-list"></div>
             </div>
@@ -450,39 +459,98 @@
             <div class="page" id="page-routing">
                 <header class="header">
                     <div class="bot-icon routing">
-                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
-                            <path d="M22 12h-4l-3 9L9 3l-3 9H2" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <svg
+                            width="40"
+                            height="40"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                        >
+                            <path
+                                d="M22 12h-4l-3 9L9 3l-3 9H2"
+                                stroke="white"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            />
                         </svg>
                     </div>
                     <h1 class="bot-title">Routing</h1>
                     <p class="bot-subtitle">IP & SNI routing rules</p>
                 </header>
-                <div class="action-btn admin-only" onclick="openRoutingCIDRModal()">
+                <div
+                    class="action-btn admin-only"
+                    onclick="openRoutingCIDRModal()"
+                >
                     <div class="action-icon-circle routing">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                            <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                        >
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
                         </svg>
                     </div>
                     <div class="action-text routing">Add CIDR</div>
-                    <svg class="chevron" viewBox="0 0 8 14"><path d="M1 1L7 7L1 13" stroke="currentColor" stroke-width="2" fill="none" /></svg>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
+                    </svg>
                 </div>
                 <div class="action-btn admin-only" onclick="openIPRuleModal()">
                     <div class="action-icon-circle routing">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                            <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                        >
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
                         </svg>
                     </div>
                     <div class="action-text routing">Add IP Rule</div>
-                    <svg class="chevron" viewBox="0 0 8 14"><path d="M1 1L7 7L1 13" stroke="currentColor" stroke-width="2" fill="none" /></svg>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
+                    </svg>
                 </div>
                 <div class="action-btn admin-only" onclick="openSNIRuleModal()">
                     <div class="action-icon-circle routing">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                            <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                        >
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
                         </svg>
                     </div>
                     <div class="action-text routing">Add SNI Rule</div>
-                    <svg class="chevron" viewBox="0 0 8 14"><path d="M1 1L7 7L1 13" stroke="currentColor" stroke-width="2" fill="none" /></svg>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
+                    </svg>
                 </div>
                 <h2 class="section-title">CIDRs</h2>
                 <div class="list-group" id="routing-cidr-list"></div>
@@ -561,14 +629,30 @@
                 </div>
                 <div class="action-btn admin-only" onclick="openInviteModal()">
                     <div class="action-icon-circle users">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                        >
+                            <path
+                                d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"
+                            />
+                            <path
+                                d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"
+                            />
                         </svg>
                     </div>
                     <div class="action-text users">Create Invite Link</div>
                     <svg class="chevron" viewBox="0 0 8 14">
-                        <path d="M1 1L7 7L1 13" stroke="currentColor" stroke-width="2" fill="none" />
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
                     </svg>
                 </div>
                 <h2 class="section-title">Invite Links</h2>
@@ -641,7 +725,11 @@
                 </div>
                 <div class="section-title-row">
                     <h2 class="section-title">Secrets</h2>
-                    <span class="filter-checkbox admin-only" id="secrets-only-mine-cb" onclick="toggleSecretsOnlyMine()"></span>
+                    <span
+                        class="filter-checkbox admin-only"
+                        id="secrets-only-mine-cb"
+                        onclick="toggleSecretsOnlyMine()"
+                    ></span>
                 </div>
                 <div class="list-group" id="mtproxy-secret-list"></div>
             </div>
@@ -656,71 +744,154 @@
                 <h2 class="section-title">Database</h2>
                 <div class="action-btn" onclick="backupDB()">
                     <div class="action-icon-circle admin">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                            <polyline points="7 10 12 15 17 10"/>
-                            <line x1="12" y1="15" x2="12" y2="3"/>
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <path
+                                d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"
+                            />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" y1="15" x2="12" y2="3" />
                         </svg>
                     </div>
                     <div class="action-text admin">Backup Database</div>
                     <svg class="chevron" viewBox="0 0 8 14">
-                        <path d="M1 1L7 7L1 13" stroke="currentColor" stroke-width="2" fill="none" />
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
                     </svg>
                 </div>
                 <div class="action-btn" onclick="restoreDB()">
                     <div class="action-icon-circle admin">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                            <polyline points="17 8 12 3 7 8"/>
-                            <line x1="12" y1="3" x2="12" y2="15"/>
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <path
+                                d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"
+                            />
+                            <polyline points="17 8 12 3 7 8" />
+                            <line x1="12" y1="3" x2="12" y2="15" />
                         </svg>
                     </div>
                     <div class="action-text admin">Restore Database</div>
                     <svg class="chevron" viewBox="0 0 8 14">
-                        <path d="M1 1L7 7L1 13" stroke="currentColor" stroke-width="2" fill="none" />
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
                     </svg>
                 </div>
-                <input type="file" id="restore-file-input" accept=".db,.sqlite,.sqlite3,.bak" style="display:none" onchange="handleRestoreFile(this)">
+                <input
+                    type="file"
+                    id="restore-file-input"
+                    accept=".db,.sqlite,.sqlite3,.bak"
+                    style="display: none"
+                    onchange="handleRestoreFile(this)"
+                />
 
-        <!-- Password Modal (for backup/restore) -->
-        <div class="modal-backdrop" id="password-modal-backdrop" onclick="closePasswordModal()"></div>
-        <div class="modal-sheet" id="password-modal-sheet">
-            <div class="modal-header">
-                <button class="modal-btn cancel" onclick="closePasswordModal()">Cancel</button>
-                <span class="modal-title" id="password-modal-title">Password</span>
-                <button class="modal-btn done admin" onclick="submitPasswordModal()">Done</button>
-            </div>
-            <div class="modal-content">
-                <div class="input-group">
-                    <label class="input-label" id="password-modal-label">Enter password</label>
-                    <input type="password" class="tg-input" id="inp-modal-password" placeholder="Password" />
+                <!-- Password Modal (for backup/restore) -->
+                <div
+                    class="modal-backdrop"
+                    id="password-modal-backdrop"
+                    onclick="closePasswordModal()"
+                ></div>
+                <div class="modal-sheet" id="password-modal-sheet">
+                    <div class="modal-header">
+                        <button
+                            class="modal-btn cancel"
+                            onclick="closePasswordModal()"
+                        >
+                            Cancel
+                        </button>
+                        <span class="modal-title" id="password-modal-title"
+                            >Password</span
+                        >
+                        <button
+                            class="modal-btn done admin"
+                            onclick="submitPasswordModal()"
+                        >
+                            Done
+                        </button>
+                    </div>
+                    <div class="modal-content">
+                        <div class="input-group">
+                            <label class="input-label" id="password-modal-label"
+                                >Enter password</label
+                            >
+                            <input
+                                type="password"
+                                class="tg-input"
+                                id="inp-modal-password"
+                                placeholder="Password"
+                            />
+                        </div>
+                    </div>
                 </div>
-            </div>
-        </div>
                 <h2 class="section-title">Instance</h2>
                 <div class="action-btn" onclick="restartInstance()">
                     <div class="action-icon-circle admin">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M23 4v6h-6"/>
-                            <path d="M1 20v-6h6"/>
-                            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <path d="M23 4v6h-6" />
+                            <path d="M1 20v-6h6" />
+                            <path
+                                d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"
+                            />
                         </svg>
                     </div>
                     <div class="action-text admin">Restart Instance</div>
                     <svg class="chevron" viewBox="0 0 8 14">
-                        <path d="M1 1L7 7L1 13" stroke="currentColor" stroke-width="2" fill="none" />
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
                     </svg>
                 </div>
                 <div class="action-btn" onclick="promptResetInstance()">
                     <div class="action-icon-circle destructive">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="1 4 1 10 7 10"/>
-                            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <polyline points="1 4 1 10 7 10" />
+                            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
                         </svg>
                     </div>
                     <div class="action-text destructive">Reset Instance</div>
                     <svg class="chevron" viewBox="0 0 8 14">
-                        <path d="M1 1L7 7L1 13" stroke="currentColor" stroke-width="2" fill="none" />
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
                     </svg>
                 </div>
             </div>
@@ -830,7 +1001,11 @@
                         stroke="currentColor"
                         stroke-width="2"
                     >
-                        <path d="M22 12h-4l-3 9L9 3l-3 9H2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path
+                            d="M22 12h-4l-3 9L9 3l-3 9H2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        />
                     </svg>
                     <span>Routing</span>
                 </div>
@@ -911,25 +1086,75 @@
                 <div class="input-group">
                     <label class="input-label">Status</label>
                     <div class="toggle-row" onclick="togglePeerEditDisabled()">
-                        <span class="toggle-label" id="peer-edit-status-label">Enabled</span>
-                        <div class="toggle-switch active" id="peer-edit-enabled-toggle"><div class="toggle-knob"></div></div>
+                        <span class="toggle-label" id="peer-edit-status-label"
+                            >Enabled</span
+                        >
+                        <div
+                            class="toggle-switch active"
+                            id="peer-edit-enabled-toggle"
+                        >
+                            <div class="toggle-knob"></div>
+                        </div>
                     </div>
                 </div>
                 <div class="input-group">
                     <label class="input-label">Exclude Private IPs</label>
-                    <div class="toggle-row" onclick="togglePeerEditExcludePrivate()">
-                        <span class="toggle-label" id="peer-edit-exclude-private-label">Enabled</span>
-                        <div class="toggle-switch active" id="peer-edit-exclude-private-toggle"><div class="toggle-knob"></div></div>
+                    <div class="input-hint">
+                        Exclude IPs 10.0.0.0/8, 127.0.0.0/8, 172.16.0.0/12,
+                        192.168.0.0/16 from routing.
                     </div>
-                    <div class="input-hint">Exclude local/private networks (10.0.0.0/8, 127.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) from VPN routing</div>
+                    <div
+                        class="toggle-row"
+                        onclick="togglePeerEditExcludePrivate()"
+                    >
+                        <span
+                            class="toggle-label"
+                            id="peer-edit-exclude-private-label"
+                            >Enabled</span
+                        >
+                        <div
+                            class="toggle-switch active"
+                            id="peer-edit-exclude-private-toggle"
+                        >
+                            <div class="toggle-knob"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Exclude Server IP</label>
+                    <div class="input-hint">
+                        Exclude VPN server IP from routing through the tunnel
+                    </div>
+                    <div
+                        class="toggle-row"
+                        onclick="togglePeerEditExcludeServer()"
+                    >
+                        <span
+                            class="toggle-label"
+                            id="peer-edit-exclude-server-label"
+                            >Enabled</span
+                        >
+                        <div
+                            class="toggle-switch active"
+                            id="peer-edit-exclude-server-toggle"
+                        >
+                            <div class="toggle-knob"></div>
+                        </div>
+                    </div>
                 </div>
                 <div class="input-group">
                     <label class="input-label">Upstream Group</label>
-                    <select class="tg-input" id="inp-peer-edit-upstream-group"></select>
+                    <select
+                        class="tg-input"
+                        id="inp-peer-edit-upstream-group"
+                    ></select>
                 </div>
                 <div class="input-group">
                     <label class="input-label">Public Key</label>
-                    <div class="info-value truncate" id="peer-edit-pubkey"></div>
+                    <div
+                        class="info-value truncate"
+                        id="peer-edit-pubkey"
+                    ></div>
                 </div>
                 <div class="input-group">
                     <label class="input-label">Allowed IPs</label>
@@ -984,7 +1209,12 @@
                 </div>
                 <div class="input-group">
                     <label class="input-label">Groups (comma-separated)</label>
-                    <input type="text" class="tg-input" id="inp-upstream-groups" placeholder="group1, group2" />
+                    <input
+                        type="text"
+                        class="tg-input"
+                        id="inp-upstream-groups"
+                        placeholder="group1, group2"
+                    />
                 </div>
                 <div class="toggle-row">
                     <div>
@@ -1018,12 +1248,26 @@
         </div>
 
         <!-- Upstream Edit Modal -->
-        <div class="modal-backdrop" id="upstream-edit-modal-backdrop" onclick="closeUpstreamEditModal()"></div>
+        <div
+            class="modal-backdrop"
+            id="upstream-edit-modal-backdrop"
+            onclick="closeUpstreamEditModal()"
+        ></div>
         <div class="modal-sheet" id="upstream-edit-modal-sheet">
             <div class="modal-header">
-                <button class="modal-btn cancel" onclick="closeUpstreamEditModal()">Cancel</button>
+                <button
+                    class="modal-btn cancel"
+                    onclick="closeUpstreamEditModal()"
+                >
+                    Cancel
+                </button>
                 <span class="modal-title">Edit Upstream</span>
-                <button class="modal-btn done upstream" onclick="saveUpstreamEdit()">Save</button>
+                <button
+                    class="modal-btn done upstream"
+                    onclick="saveUpstreamEdit()"
+                >
+                    Save
+                </button>
             </div>
             <div class="modal-content">
                 <div class="input-group">
@@ -1035,19 +1279,37 @@
                     <div class="info-value" id="upstream-edit-type"></div>
                 </div>
                 <div class="input-group">
-                    <label class="input-label">Transport URI (leave empty to keep current)</label>
-                    <input type="text" class="tg-input" id="inp-upstream-edit-transport" placeholder="ss://... (leave empty to keep)" />
+                    <label class="input-label"
+                        >Transport URI (leave empty to keep current)</label
+                    >
+                    <input
+                        type="text"
+                        class="tg-input"
+                        id="inp-upstream-edit-transport"
+                        placeholder="ss://... (leave empty to keep)"
+                    />
                 </div>
                 <div class="input-group">
                     <label class="input-label">Groups (comma-separated)</label>
-                    <input type="text" class="tg-input" id="inp-upstream-edit-groups" placeholder="group1, group2" />
+                    <input
+                        type="text"
+                        class="tg-input"
+                        id="inp-upstream-edit-groups"
+                        placeholder="group1, group2"
+                    />
                 </div>
                 <div class="toggle-row">
                     <div>
                         <div class="toggle-label">Default</div>
-                        <div class="toggle-sublabel">Use as default upstream</div>
+                        <div class="toggle-sublabel">
+                            Use as default upstream
+                        </div>
                     </div>
-                    <div class="toggle-switch" id="inp-upstream-edit-default" onclick="toggleUpstreamEditDefault()">
+                    <div
+                        class="toggle-switch"
+                        id="inp-upstream-edit-default"
+                        onclick="toggleUpstreamEditDefault()"
+                    >
                         <div class="toggle-knob"></div>
                     </div>
                 </div>
@@ -1056,7 +1318,11 @@
                         <div class="toggle-label">Health Check</div>
                         <div class="toggle-sublabel">Monitor availability</div>
                     </div>
-                    <div class="toggle-switch" id="inp-upstream-edit-health" onclick="toggleUpstreamEditHealth()">
+                    <div
+                        class="toggle-switch"
+                        id="inp-upstream-edit-health"
+                        onclick="toggleUpstreamEditHealth()"
+                    >
                         <div class="toggle-knob"></div>
                     </div>
                 </div>
@@ -1097,12 +1363,28 @@
         </div>
 
         <!-- Group Edit Modal -->
-        <div class="modal-backdrop" id="group-edit-modal-backdrop" onclick="closeGroupEditModal()"></div>
+        <div
+            class="modal-backdrop"
+            id="group-edit-modal-backdrop"
+            onclick="closeGroupEditModal()"
+        ></div>
         <div class="modal-sheet" id="group-edit-modal-sheet">
             <div class="modal-header">
-                <button class="modal-btn cancel" onclick="closeGroupEditModal()">Cancel</button>
-                <span class="modal-title" id="group-edit-modal-title">Edit Group</span>
-                <button class="modal-btn done upstream" onclick="saveGroupEdit()">Save</button>
+                <button
+                    class="modal-btn cancel"
+                    onclick="closeGroupEditModal()"
+                >
+                    Cancel
+                </button>
+                <span class="modal-title" id="group-edit-modal-title"
+                    >Edit Group</span
+                >
+                <button
+                    class="modal-btn done upstream"
+                    onclick="saveGroupEdit()"
+                >
+                    Save
+                </button>
             </div>
             <div class="modal-content">
                 <div class="input-group">
@@ -1183,7 +1465,12 @@
                             placeholder="password"
                             autocomplete="off"
                         />
-                        <div class="input-inline-btn" onclick="generateProxyPassword()">⟳</div>
+                        <div
+                            class="input-inline-btn"
+                            onclick="generateProxyPassword()"
+                        >
+                            ⟳
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1196,7 +1483,10 @@
         ></div>
         <div class="modal-sheet" id="proxy-edit-modal-sheet">
             <div class="modal-header">
-                <button class="modal-btn cancel" onclick="closeProxyEditModal()">
+                <button
+                    class="modal-btn cancel"
+                    onclick="closeProxyEditModal()"
+                >
                     Cancel
                 </button>
                 <span class="modal-title">Edit Proxy</span>
@@ -1219,10 +1509,15 @@
                 </div>
                 <div class="input-group">
                     <label class="input-label">Upstream Group</label>
-                    <select class="tg-input" id="inp-proxy-edit-upstream-group"></select>
+                    <select
+                        class="tg-input"
+                        id="inp-proxy-edit-upstream-group"
+                    ></select>
                 </div>
                 <div class="input-group">
-                    <label class="input-label">Username (leave empty to keep)</label>
+                    <label class="input-label"
+                        >Username (leave empty to keep)</label
+                    >
                     <input
                         type="text"
                         class="tg-input"
@@ -1232,7 +1527,9 @@
                     />
                 </div>
                 <div class="input-group">
-                    <label class="input-label">Password (leave empty to keep)</label>
+                    <label class="input-label"
+                        >Password (leave empty to keep)</label
+                    >
                     <div class="input-with-btn">
                         <input
                             type="text"
@@ -1241,7 +1538,12 @@
                             placeholder="password"
                             autocomplete="off"
                         />
-                        <div class="input-inline-btn" onclick="generateProxyPassword()">⟳</div>
+                        <div
+                            class="input-inline-btn"
+                            onclick="generateProxyPassword()"
+                        >
+                            ⟳
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1425,18 +1727,31 @@
                 </div>
                 <div class="input-group">
                     <label class="input-label">Custom Name (optional)</label>
-                    <input type="text" class="tg-input" id="inp-user-custom-name" placeholder="Display name" />
+                    <input
+                        type="text"
+                        class="tg-input"
+                        id="inp-user-custom-name"
+                        placeholder="Display name"
+                    />
                 </div>
             </div>
         </div>
 
         <!-- User Edit Modal -->
-        <div class="modal-backdrop" id="user-edit-modal-backdrop" onclick="closeUserEditModal()"></div>
+        <div
+            class="modal-backdrop"
+            id="user-edit-modal-backdrop"
+            onclick="closeUserEditModal()"
+        ></div>
         <div class="modal-sheet" id="user-edit-modal-sheet">
             <div class="modal-header">
-                <button class="modal-btn cancel" onclick="closeUserEditModal()">Cancel</button>
+                <button class="modal-btn cancel" onclick="closeUserEditModal()">
+                    Cancel
+                </button>
                 <span class="modal-title">Edit User</span>
-                <button class="modal-btn done users" onclick="saveUserEdit()">Save</button>
+                <button class="modal-btn done users" onclick="saveUserEdit()">
+                    Save
+                </button>
             </div>
             <div class="modal-content">
                 <div class="input-group">
@@ -1445,7 +1760,12 @@
                 </div>
                 <div class="input-group">
                     <label class="input-label">Custom Name</label>
-                    <input type="text" class="tg-input" id="inp-user-edit-custom-name" placeholder="Display name" />
+                    <input
+                        type="text"
+                        class="tg-input"
+                        id="inp-user-edit-custom-name"
+                        placeholder="Display name"
+                    />
                 </div>
                 <div class="input-group">
                     <label class="input-label">Role</label>
@@ -1457,20 +1777,47 @@
                 <div class="input-group">
                     <label class="input-label">Status</label>
                     <div class="toggle-row" onclick="toggleUserEditDisabled()">
-                        <span class="toggle-label" id="user-edit-status-label">Enabled</span>
-                        <div class="toggle-switch active" id="user-edit-enabled-toggle"><div class="toggle-knob"></div></div>
+                        <span class="toggle-label" id="user-edit-status-label"
+                            >Enabled</span
+                        >
+                        <div
+                            class="toggle-switch active"
+                            id="user-edit-enabled-toggle"
+                        >
+                            <div class="toggle-knob"></div>
+                        </div>
                     </div>
                 </div>
                 <div class="input-group" id="user-edit-limits-group">
                     <label class="input-label">Limits</label>
-                    <div style="display:flex;gap:8px">
-                        <div style="flex:1">
-                            <label class="input-label" style="font-size:12px;margin-bottom:2px">Max Peers</label>
-                            <input type="number" class="tg-input" id="inp-user-edit-max-peers" placeholder="default (5)" min="0" />
+                    <div style="display: flex; gap: 8px">
+                        <div style="flex: 1">
+                            <label
+                                class="input-label"
+                                style="font-size: 12px; margin-bottom: 2px"
+                                >Max Peers</label
+                            >
+                            <input
+                                type="number"
+                                class="tg-input"
+                                id="inp-user-edit-max-peers"
+                                placeholder="default (5)"
+                                min="0"
+                            />
                         </div>
-                        <div style="flex:1">
-                            <label class="input-label" style="font-size:12px;margin-bottom:2px">Max Secrets</label>
-                            <input type="number" class="tg-input" id="inp-user-edit-max-secrets" placeholder="default (5)" min="0" />
+                        <div style="flex: 1">
+                            <label
+                                class="input-label"
+                                style="font-size: 12px; margin-bottom: 2px"
+                                >Max Secrets</label
+                            >
+                            <input
+                                type="number"
+                                class="tg-input"
+                                id="inp-user-edit-max-secrets"
+                                placeholder="default (5)"
+                                min="0"
+                            />
                         </div>
                     </div>
                 </div>
@@ -1478,12 +1825,20 @@
         </div>
 
         <!-- Invite Modal -->
-        <div class="modal-backdrop" id="invite-modal-backdrop" onclick="closeInviteModal()"></div>
+        <div
+            class="modal-backdrop"
+            id="invite-modal-backdrop"
+            onclick="closeInviteModal()"
+        ></div>
         <div class="modal-sheet" id="invite-modal-sheet">
             <div class="modal-header">
-                <button class="modal-btn cancel" onclick="closeInviteModal()">Cancel</button>
+                <button class="modal-btn cancel" onclick="closeInviteModal()">
+                    Cancel
+                </button>
                 <span class="modal-title">Create Invite Link</span>
-                <button class="modal-btn done users" onclick="saveInvite()">Create</button>
+                <button class="modal-btn done users" onclick="saveInvite()">
+                    Create
+                </button>
             </div>
             <div class="modal-content">
                 <div class="input-group">
@@ -1504,11 +1859,17 @@
         ></div>
         <div class="modal-sheet" id="secret-edit-modal-sheet">
             <div class="modal-header">
-                <button class="modal-btn cancel" onclick="closeSecretEditModal()">
+                <button
+                    class="modal-btn cancel"
+                    onclick="closeSecretEditModal()"
+                >
                     Cancel
                 </button>
                 <span class="modal-title">Edit Secret</span>
-                <button class="modal-btn done mtproxy" onclick="saveSecretEdit()">
+                <button
+                    class="modal-btn done mtproxy"
+                    onclick="saveSecretEdit()"
+                >
                     Save
                 </button>
             </div>
@@ -1532,7 +1893,10 @@
                 </div>
                 <div class="input-group">
                     <label class="input-label">Upstream Group</label>
-                    <select class="tg-input" id="inp-secret-edit-upstream-group"></select>
+                    <select
+                        class="tg-input"
+                        id="inp-secret-edit-upstream-group"
+                    ></select>
                 </div>
                 <div class="input-group">
                     <label class="input-label">Stats</label>
@@ -1579,12 +1943,22 @@
         </div>
 
         <!-- CIDR Edit Modal -->
-        <div class="modal-backdrop" id="cidr-edit-modal-backdrop" onclick="closeCIDREditModal()"></div>
+        <div
+            class="modal-backdrop"
+            id="cidr-edit-modal-backdrop"
+            onclick="closeCIDREditModal()"
+        ></div>
         <div class="modal-sheet" id="cidr-edit-modal-sheet">
             <div class="modal-header">
-                <button class="modal-btn cancel" onclick="closeCIDREditModal()">Cancel</button>
-                <span class="modal-title" id="cidr-edit-modal-title">Edit CIDR</span>
-                <button class="modal-btn done routing" onclick="saveCIDREdit()">Done</button>
+                <button class="modal-btn cancel" onclick="closeCIDREditModal()">
+                    Cancel
+                </button>
+                <span class="modal-title" id="cidr-edit-modal-title"
+                    >Edit CIDR</span
+                >
+                <button class="modal-btn done routing" onclick="saveCIDREdit()">
+                    Done
+                </button>
             </div>
             <div class="modal-content">
                 <div class="input-group">
@@ -1596,74 +1970,149 @@
                 </div>
                 <div class="input-group">
                     <label class="input-label">IP Range (CIDR)</label>
-                    <input type="text" class="tg-input" id="inp-cidr-edit-range" placeholder="10.0.0.0/8" />
+                    <input
+                        type="text"
+                        class="tg-input"
+                        id="inp-cidr-edit-range"
+                        placeholder="10.0.0.0/8"
+                    />
                 </div>
             </div>
         </div>
 
         <!-- IP Rule Modal -->
-        <div class="modal-backdrop" id="ip-rule-modal-backdrop" onclick="closeIPRuleModal()"></div>
+        <div
+            class="modal-backdrop"
+            id="ip-rule-modal-backdrop"
+            onclick="closeIPRuleModal()"
+        ></div>
         <div class="modal-sheet" id="ip-rule-modal-sheet">
             <div class="modal-header">
-                <button class="modal-btn cancel" onclick="closeIPRuleModal()">Cancel</button>
-                <span class="modal-title" id="ip-rule-modal-title">Add IP Rule</span>
-                <button class="modal-btn done routing" onclick="saveIPRule()">Done</button>
+                <button class="modal-btn cancel" onclick="closeIPRuleModal()">
+                    Cancel
+                </button>
+                <span class="modal-title" id="ip-rule-modal-title"
+                    >Add IP Rule</span
+                >
+                <button class="modal-btn done routing" onclick="saveIPRule()">
+                    Done
+                </button>
             </div>
             <div class="modal-content">
                 <div class="input-group">
                     <label class="input-label">Rule Name</label>
-                    <input type="text" class="tg-input" id="inp-ip-rule-name" placeholder="ru-direct" />
+                    <input
+                        type="text"
+                        class="tg-input"
+                        id="inp-ip-rule-name"
+                        placeholder="ru-direct"
+                    />
                 </div>
                 <div class="input-group">
                     <label class="input-label">Action</label>
-                    <select class="tg-input" id="inp-ip-rule-action" onchange="toggleIPRuleAction()">
+                    <select
+                        class="tg-input"
+                        id="inp-ip-rule-action"
+                        onchange="toggleIPRuleAction()"
+                    >
                         <option value="direct">Direct (bypass proxy)</option>
                         <option value="upstream">Use Upstream Group</option>
                     </select>
                 </div>
-                <div class="input-group" id="ip-rule-upstream-group" style="display:none">
+                <div
+                    class="input-group"
+                    id="ip-rule-upstream-group"
+                    style="display: none"
+                >
                     <label class="input-label">Upstream Group</label>
-                    <input type="text" class="tg-input" id="inp-ip-rule-upstream-group" placeholder="group-name" />
+                    <input
+                        type="text"
+                        class="tg-input"
+                        id="inp-ip-rule-upstream-group"
+                        placeholder="group-name"
+                    />
                 </div>
                 <div class="input-group">
                     <label class="input-label">CIDRs / ASNs</label>
                     <div id="ip-rule-entries"></div>
-                    <button type="button" class="add-entry-btn" onclick="addIPRuleEntry()">+ Add Entry</button>
+                    <button
+                        type="button"
+                        class="add-entry-btn"
+                        onclick="addIPRuleEntry()"
+                    >
+                        + Add Entry
+                    </button>
                 </div>
                 <div class="input-group">
                     <label class="input-label">IP List URL (optional)</label>
-                    <input type="text" class="tg-input" id="inp-ip-rule-list-url" placeholder="https://example.com/iplist.txt" />
+                    <input
+                        type="text"
+                        class="tg-input"
+                        id="inp-ip-rule-list-url"
+                        placeholder="https://example.com/iplist.txt"
+                    />
                 </div>
             </div>
         </div>
 
         <!-- SNI Rule Modal -->
-        <div class="modal-backdrop" id="sni-rule-modal-backdrop" onclick="closeSNIRuleModal()"></div>
+        <div
+            class="modal-backdrop"
+            id="sni-rule-modal-backdrop"
+            onclick="closeSNIRuleModal()"
+        ></div>
         <div class="modal-sheet" id="sni-rule-modal-sheet">
             <div class="modal-header">
-                <button class="modal-btn cancel" onclick="closeSNIRuleModal()">Cancel</button>
-                <span class="modal-title" id="sni-rule-modal-title">Add SNI Rule</span>
-                <button class="modal-btn done routing" onclick="saveSNIRule()">Done</button>
+                <button class="modal-btn cancel" onclick="closeSNIRuleModal()">
+                    Cancel
+                </button>
+                <span class="modal-title" id="sni-rule-modal-title"
+                    >Add SNI Rule</span
+                >
+                <button class="modal-btn done routing" onclick="saveSNIRule()">
+                    Done
+                </button>
             </div>
             <div class="modal-content">
                 <div class="input-group">
                     <label class="input-label">Rule Name</label>
-                    <input type="text" class="tg-input" id="inp-sni-rule-name" placeholder="ru-domains" />
+                    <input
+                        type="text"
+                        class="tg-input"
+                        id="inp-sni-rule-name"
+                        placeholder="ru-domains"
+                    />
                 </div>
                 <div class="input-group">
                     <label class="input-label">Action</label>
-                    <select class="tg-input" id="inp-sni-rule-action" onchange="toggleSNIRuleAction()">
+                    <select
+                        class="tg-input"
+                        id="inp-sni-rule-action"
+                        onchange="toggleSNIRuleAction()"
+                    >
                         <option value="direct">Direct (bypass proxy)</option>
                         <option value="upstream">Use Upstream Group</option>
                     </select>
                 </div>
-                <div class="input-group" id="sni-rule-upstream-group" style="display:none">
+                <div
+                    class="input-group"
+                    id="sni-rule-upstream-group"
+                    style="display: none"
+                >
                     <label class="input-label">Upstream Group</label>
-                    <select class="tg-input" id="inp-sni-rule-upstream-group"></select>
+                    <select
+                        class="tg-input"
+                        id="inp-sni-rule-upstream-group"
+                    ></select>
                 </div>
                 <div class="input-group">
                     <label class="input-label">Domains (comma-separated)</label>
-                    <input type="text" class="tg-input" id="inp-sni-rule-domains" placeholder="*.example.com, site.org" />
+                    <input
+                        type="text"
+                        class="tg-input"
+                        id="inp-sni-rule-domains"
+                        placeholder="*.example.com, site.org"
+                    />
                 </div>
             </div>
         </div>
@@ -1681,8 +2130,52 @@
                 </button>
                 <span class="modal-title" id="config-modal-title">Config</span>
                 <div id="config-action-btns">
-                    <button class="action-icon-btn" onclick="downloadConfig()" title="Download"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
-                    <button class="action-icon-btn" onclick="copyConfig()" title="Copy"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+                    <button
+                        class="action-icon-btn"
+                        onclick="downloadConfig()"
+                        title="Download"
+                    >
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <path
+                                d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"
+                            />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" y1="15" x2="12" y2="3" />
+                        </svg>
+                    </button>
+                    <button
+                        class="action-icon-btn"
+                        onclick="copyConfig()"
+                        title="Copy"
+                    >
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2"
+                        >
+                            <rect
+                                x="9"
+                                y="9"
+                                width="13"
+                                height="13"
+                                rx="2"
+                                ry="2"
+                            />
+                            <path
+                                d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+                            />
+                        </svg>
+                    </button>
                 </div>
             </div>
             <div class="modal-content" id="config-modal-content"></div>
@@ -1712,8 +2205,20 @@
                 <div class="alert-title">Reset Instance?</div>
                 <div class="alert-message" id="reset-alert-message"></div>
                 <div class="alert-buttons">
-                    <button class="alert-btn cancel" onclick="closeResetAlert()">Cancel</button>
-                    <button class="alert-btn destructive" id="reset-confirm-btn" disabled onclick="confirmResetInstance()">Reset</button>
+                    <button
+                        class="alert-btn cancel"
+                        onclick="closeResetAlert()"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        class="alert-btn destructive"
+                        id="reset-confirm-btn"
+                        disabled
+                        onclick="confirmResetInstance()"
+                    >
+                        Reset
+                    </button>
                 </div>
             </div>
         </div>
@@ -1735,7 +2240,7 @@
                 fill="none"
                 stroke="currentColor"
                 stroke-width="2"
-                style="display:none"
+                style="display: none"
             >
                 <line x1="18" y1="6" x2="6" y2="18" />
                 <line x1="6" y1="6" x2="18" y2="18" />

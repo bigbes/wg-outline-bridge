@@ -75,7 +75,11 @@ func ShowConf(args []string, logger *slog.Logger) {
 		logger.Error("failed to parse CIDR rules", "err", err)
 		os.Exit(1)
 	}
-	if computed := config.ComputeAllowedIPs(cidrRules, ""); computed != "" {
+	excludeIP := ""
+	if peer.ExcludeServer {
+		excludeIP = serverIP
+	}
+	if computed := config.ComputeAllowedIPs(cidrRules, excludeIP); computed != "" {
 		allowedIPs = computed
 	}
 

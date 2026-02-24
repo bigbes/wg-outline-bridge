@@ -315,6 +315,7 @@ func (s *Store) migrateSchema() error {
 		{"allowed_users", "max_secrets", `ALTER TABLE allowed_users ADD COLUMN max_secrets INTEGER`},
 		{"routing_cidrs", "mode", `ALTER TABLE routing_cidrs ADD COLUMN mode TEXT NOT NULL DEFAULT 'disallow'`},
 		{"wg_peers", "exclude_private", `ALTER TABLE wg_peers ADD COLUMN exclude_private INTEGER NOT NULL DEFAULT 1`},
+		{"wg_peers", "exclude_server", `ALTER TABLE wg_peers ADD COLUMN exclude_server INTEGER NOT NULL DEFAULT 0`},
 	}
 	for _, m := range migrations {
 		var count int
@@ -674,7 +675,7 @@ func (s *Store) GetMTSecretStats() (map[string]MTSecretRecord, error) {
 // ListPeers returns all peers from the database keyed by name.
 func (s *Store) ListPeers() (map[string]config.PeerConfig, error) {
 	rows, err := s.db.Query(
-		`SELECT name, private_key, public_key, preshared_key, allowed_ips, disabled, upstream_group, exclude_private
+		`SELECT name, private_key, public_key, preshared_key, allowed_ips, disabled, upstream_group, exclude_private, exclude_server
 		 FROM wg_peers`)
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: list peers: %w", err)
@@ -685,12 +686,13 @@ func (s *Store) ListPeers() (map[string]config.PeerConfig, error) {
 	for rows.Next() {
 		var name string
 		var p config.PeerConfig
-		var disabled, excludePrivate int
-		if err := rows.Scan(&name, &p.PrivateKey, &p.PublicKey, &p.PresharedKey, &p.AllowedIPs, &disabled, &p.UpstreamGroup, &excludePrivate); err != nil {
+		var disabled, excludePrivate, excludeServer int
+		if err := rows.Scan(&name, &p.PrivateKey, &p.PublicKey, &p.PresharedKey, &p.AllowedIPs, &disabled, &p.UpstreamGroup, &excludePrivate, &excludeServer); err != nil {
 			return nil, fmt.Errorf("statsdb: scan peer: %w", err)
 		}
 		p.Disabled = disabled != 0
 		p.ExcludePrivate = excludePrivate != 0
+		p.ExcludeServer = excludeServer != 0
 		out[name] = p
 	}
 	if err := rows.Err(); err != nil {
@@ -727,9 +729,13 @@ func (s *Store) UpsertPeer(name string, peer config.PeerConfig) error {
 	if peer.ExcludePrivate {
 		excludePrivate = 1
 	}
+	excludeServer := 0
+	if peer.ExcludeServer {
+		excludeServer = 1
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO wg_peers (name, private_key, public_key, preshared_key, allowed_ips, disabled, upstream_group, exclude_private)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO wg_peers (name, private_key, public_key, preshared_key, allowed_ips, disabled, upstream_group, exclude_private, exclude_server)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(name) DO UPDATE SET
 		   private_key = excluded.private_key,
 		   public_key = excluded.public_key,
@@ -738,8 +744,9 @@ func (s *Store) UpsertPeer(name string, peer config.PeerConfig) error {
 		   disabled = excluded.disabled,
 		   upstream_group = excluded.upstream_group,
 		   exclude_private = excluded.exclude_private,
+		   exclude_server = excluded.exclude_server,
 		   updated_unix = unixepoch()`,
-		name, peer.PrivateKey, peer.PublicKey, peer.PresharedKey, peer.AllowedIPs, disabled, peer.UpstreamGroup, excludePrivate,
+		name, peer.PrivateKey, peer.PublicKey, peer.PresharedKey, peer.AllowedIPs, disabled, peer.UpstreamGroup, excludePrivate, excludeServer,
 	)
 	if err != nil {
 		return fmt.Errorf("statsdb: upsert peer %q: %w", name, err)
@@ -848,6 +855,23 @@ func (s *Store) SetPeerExcludePrivate(name string, excludePrivate bool) error {
 	res, err := s.db.Exec(`UPDATE wg_peers SET exclude_private = ?, updated_unix = unixepoch() WHERE name = ?`, val, name)
 	if err != nil {
 		return fmt.Errorf("statsdb: set peer exclude_private %q: %w", name, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("peer %q not found", name)
+	}
+	return nil
+}
+
+// SetPeerExcludeServer updates the exclude_server flag for a peer.
+func (s *Store) SetPeerExcludeServer(name string, excludeServer bool) error {
+	val := 0
+	if excludeServer {
+		val = 1
+	}
+	res, err := s.db.Exec(`UPDATE wg_peers SET exclude_server = ?, updated_unix = unixepoch() WHERE name = ?`, val, name)
+	if err != nil {
+		return fmt.Errorf("statsdb: set peer exclude_server %q: %w", name, err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {

@@ -71,6 +71,7 @@ type peerInfo struct {
 	ConnectionsTotal  int64  `json:"connections_total"`
 	Disabled          bool   `json:"disabled"`
 	ExcludePrivate    bool   `json:"exclude_private"`
+	ExcludeServer     bool   `json:"exclude_server"`
 	UpstreamGroup     string `json:"upstream_group"`
 	OwnerID           int64  `json:"owner_id,omitempty"`
 	OwnerName         string `json:"owner_name,omitempty"`
@@ -191,6 +192,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			pi.AllowedIPs = pc.AllowedIPs
 			pi.Disabled = pc.Disabled
 			pi.ExcludePrivate = pc.ExcludePrivate
+			pi.ExcludeServer = pc.ExcludeServer
 			pi.UpstreamGroup = pc.UpstreamGroup
 		}
 		resp.Peers = append(resp.Peers, pi)
@@ -444,6 +446,7 @@ func (s *Server) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 		Name           *string `json:"name"`
 		Disabled       *bool   `json:"disabled"`
 		ExcludePrivate *bool   `json:"exclude_private"`
+		ExcludeServer  *bool   `json:"exclude_server"`
 		UpstreamGroup  *string `json:"upstream_group"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -460,6 +463,13 @@ func (s *Server) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 
 	if req.ExcludePrivate != nil {
 		if err := s.manager.SetPeerExcludePrivate(name, *req.ExcludePrivate); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	if req.ExcludeServer != nil {
+		if err := s.manager.SetPeerExcludeServer(name, *req.ExcludeServer); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -541,7 +551,11 @@ func (s *Server) handlePeerConf(w http.ResponseWriter, r *http.Request) {
 	}
 	cidrRules, err := config.ParseCIDRRules(config.ExpandCIDRRuleVars(cidrs, cidrVars))
 	if err == nil {
-		if computed := config.ComputeAllowedIPs(cidrRules, ""); computed != "" {
+		excludeIP := ""
+		if peer.ExcludeServer {
+			excludeIP = serverIP
+		}
+		if computed := config.ComputeAllowedIPs(cidrRules, excludeIP); computed != "" {
 			allowedIPs = computed
 		}
 	}
