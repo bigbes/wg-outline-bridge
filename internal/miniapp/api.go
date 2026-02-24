@@ -70,6 +70,7 @@ type peerInfo struct {
 	ActiveConnections int    `json:"active_connections"`
 	ConnectionsTotal  int64  `json:"connections_total"`
 	Disabled          bool   `json:"disabled"`
+	ExcludePrivate    bool   `json:"exclude_private"`
 	UpstreamGroup     string `json:"upstream_group"`
 	OwnerID           int64  `json:"owner_id,omitempty"`
 	OwnerName         string `json:"owner_name,omitempty"`
@@ -189,6 +190,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		if pc, ok := allPeers[p.Name]; ok {
 			pi.AllowedIPs = pc.AllowedIPs
 			pi.Disabled = pc.Disabled
+			pi.ExcludePrivate = pc.ExcludePrivate
 			pi.UpstreamGroup = pc.UpstreamGroup
 		}
 		resp.Peers = append(resp.Peers, pi)
@@ -439,9 +441,10 @@ func (s *Server) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name          *string `json:"name"`
-		Disabled      *bool   `json:"disabled"`
-		UpstreamGroup *string `json:"upstream_group"`
+		Name           *string `json:"name"`
+		Disabled       *bool   `json:"disabled"`
+		ExcludePrivate *bool   `json:"exclude_private"`
+		UpstreamGroup  *string `json:"upstream_group"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -450,6 +453,13 @@ func (s *Server) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 
 	if req.Disabled != nil {
 		if err := s.manager.SetPeerDisabled(name, *req.Disabled); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	if req.ExcludePrivate != nil {
+		if err := s.manager.SetPeerExcludePrivate(name, *req.ExcludePrivate); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -525,9 +535,13 @@ func (s *Server) handlePeerConf(w http.ResponseWriter, r *http.Request) {
 
 	allowedIPs := "0.0.0.0/0"
 	cidrVars := map[string]string{"server_ip": serverIP}
-	cidrRules, err := config.ParseCIDRRules(config.ExpandCIDRRuleVars(cfg.Routing.CIDRs, cidrVars))
+	cidrs := cfg.Routing.CIDRs
+	if peer.ExcludePrivate {
+		cidrs = append(config.PrivateNetworkCIDRs(cfg.WireGuard.Address), cidrs...)
+	}
+	cidrRules, err := config.ParseCIDRRules(config.ExpandCIDRRuleVars(cidrs, cidrVars))
 	if err == nil {
-		if computed := config.ComputeAllowedIPs(cidrRules, serverIP); computed != "" {
+		if computed := config.ComputeAllowedIPs(cidrRules, ""); computed != "" {
 			allowedIPs = computed
 		}
 	}

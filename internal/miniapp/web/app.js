@@ -27,6 +27,7 @@ if (!tg || !tg.initData) {
     let deleteCallback = null;
     let editingPeerName = null;
     let peerEditDisabled = false;
+    let peerEditExcludePrivate = true;
     let editingSecretHex = null;
     let editingProxyName = null;
     let editingCIDR = null;
@@ -1023,6 +1024,7 @@ if (!tg || !tg.initData) {
         if (!peer) return;
         editingPeerName = name;
         peerEditDisabled = peer.disabled;
+        peerEditExcludePrivate = peer.exclude_private !== false;
         document.getElementById("inp-peer-edit-name").value = name;
         document.getElementById("peer-edit-pubkey").textContent =
             peer.public_key;
@@ -1048,6 +1050,7 @@ if (!tg || !tg.initData) {
             ).join('');
 
         updatePeerEditToggle();
+        updatePeerEditExcludePrivateToggle();
         openModal("peer-edit-modal");
     };
     window.closePeerEditModal = function () {
@@ -1070,6 +1073,22 @@ if (!tg || !tg.initData) {
             label.textContent = "Enabled";
         }
     }
+    window.togglePeerEditExcludePrivate = function () {
+        peerEditExcludePrivate = !peerEditExcludePrivate;
+        updatePeerEditExcludePrivateToggle();
+        haptic("selection");
+    };
+    function updatePeerEditExcludePrivateToggle() {
+        const el = document.getElementById("peer-edit-exclude-private-toggle");
+        const label = document.getElementById("peer-edit-exclude-private-label");
+        if (peerEditExcludePrivate) {
+            el.classList.add("active");
+            label.textContent = "Enabled";
+        } else {
+            el.classList.remove("active");
+            label.textContent = "Disabled";
+        }
+    }
     window.savePeerEdit = function () {
         if (!editingPeerName) return;
         const newName = document
@@ -1080,7 +1099,7 @@ if (!tg || !tg.initData) {
             showToast("Name cannot be empty");
             return;
         }
-        const body = { disabled: peerEditDisabled };
+        const body = { disabled: peerEditDisabled, exclude_private: peerEditExcludePrivate };
         if (newName !== editingPeerName) {
             body.name = newName;
         }

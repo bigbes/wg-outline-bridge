@@ -76,6 +76,25 @@ func ExpandCIDRRuleVars(entries []CIDREntry, vars map[string]string) []CIDREntry
 	return out
 }
 
+// PrivateNetworkCIDRs returns CIDR entries that exclude private/special IP
+// ranges from VPN routing while allowing the WireGuard subnet itself.
+// The wgAddress should be the WireGuard server address (e.g. "10.100.0.1/24").
+func PrivateNetworkCIDRs(wgAddress string) []CIDREntry {
+	entries := []CIDREntry{
+		{Mode: "disallow", CIDR: "10.0.0.0/8"},
+		{Mode: "disallow", CIDR: "127.0.0.0/8"},
+		{Mode: "disallow", CIDR: "172.16.0.0/12"},
+		{Mode: "disallow", CIDR: "192.168.0.0/16"},
+	}
+	if wgAddress != "" {
+		if prefix, err := netip.ParsePrefix(wgAddress); err == nil {
+			// Allow the WireGuard subnet (must come before deny rules).
+			entries = append([]CIDREntry{{Mode: "allow", CIDR: prefix.Masked().String()}}, entries...)
+		}
+	}
+	return entries
+}
+
 // CIDRRule is a single allow/disallow rule.
 type CIDRRule struct {
 	Action   string // "allow" or "disallow"

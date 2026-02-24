@@ -121,6 +121,7 @@ type Manager interface {
 	UpdateUpstream(u config.UpstreamConfig) error
 	DeleteUpstream(name string) error
 	SetPeerDisabled(name string, disabled bool) error
+	SetPeerExcludePrivate(name string, excludePrivate bool) error
 	SetPeerUpstreamGroup(name, group string) error
 	SetProxyUpstreamGroup(name, group string) error
 	SetProxyAuth(name, username, password string) error
@@ -755,9 +756,13 @@ func (o *Observer) formatShowConf(name string) string {
 
 	allowedIPs := "0.0.0.0/0"
 	cidrVars := map[string]string{"server_ip": serverIP}
-	cidrRules, err := config.ParseCIDRRules(config.ExpandCIDRRuleVars(cfg.Routing.CIDRs, cidrVars))
+	cidrs := cfg.Routing.CIDRs
+	if peer.ExcludePrivate {
+		cidrs = append(config.PrivateNetworkCIDRs(cfg.WireGuard.Address), cidrs...)
+	}
+	cidrRules, err := config.ParseCIDRRules(config.ExpandCIDRRuleVars(cidrs, cidrVars))
 	if err == nil {
-		if computed := config.ComputeAllowedIPs(cidrRules, serverIP); computed != "" {
+		if computed := config.ComputeAllowedIPs(cidrRules, ""); computed != "" {
 			allowedIPs = computed
 		}
 	}
@@ -816,9 +821,13 @@ func (o *Observer) handleAddPeer(name string) string {
 
 	allowedIPs := "0.0.0.0/0"
 	cidrVars := map[string]string{"server_ip": serverIP}
-	cidrRules, err := config.ParseCIDRRules(config.ExpandCIDRRuleVars(cfg.Routing.CIDRs, cidrVars))
+	cidrs := cfg.Routing.CIDRs
+	if peer.ExcludePrivate {
+		cidrs = append(config.PrivateNetworkCIDRs(cfg.WireGuard.Address), cidrs...)
+	}
+	cidrRules, err := config.ParseCIDRRules(config.ExpandCIDRRuleVars(cidrs, cidrVars))
 	if err == nil {
-		if computed := config.ComputeAllowedIPs(cidrRules, serverIP); computed != "" {
+		if computed := config.ComputeAllowedIPs(cidrRules, ""); computed != "" {
 			allowedIPs = computed
 		}
 	}

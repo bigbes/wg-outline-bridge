@@ -102,12 +102,13 @@ func GenConf(args []string, logger *slog.Logger) {
 
 	allowedIPs := "0.0.0.0/0"
 	cidrVars := map[string]string{"server_ip": serverIP}
-	cidrRules, err := config.ParseCIDRRules(config.ExpandCIDRRuleVars(cfg.Routing.CIDRs, cidrVars))
+	cidrs := append(config.PrivateNetworkCIDRs(cfg.WireGuard.Address), cfg.Routing.CIDRs...)
+	cidrRules, err := config.ParseCIDRRules(config.ExpandCIDRRuleVars(cidrs, cidrVars))
 	if err != nil {
 		logger.Error("failed to parse CIDR rules", "err", err)
 		os.Exit(1)
 	}
-	if computed := config.ComputeAllowedIPs(cidrRules, serverIP); computed != "" {
+	if computed := config.ComputeAllowedIPs(cidrRules, ""); computed != "" {
 		allowedIPs = computed
 	}
 

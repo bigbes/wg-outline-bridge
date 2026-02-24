@@ -916,6 +916,14 @@
                     </div>
                 </div>
                 <div class="input-group">
+                    <label class="input-label">Exclude Private IPs</label>
+                    <div class="toggle-row" onclick="togglePeerEditExcludePrivate()">
+                        <span class="toggle-label" id="peer-edit-exclude-private-label">Enabled</span>
+                        <div class="toggle-switch active" id="peer-edit-exclude-private-toggle"><div class="toggle-knob"></div></div>
+                    </div>
+                    <div class="input-hint">Exclude local/private networks (10.0.0.0/8, 127.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) from VPN routing</div>
+                </div>
+                <div class="input-group">
                     <label class="input-label">Upstream Group</label>
                     <select class="tg-input" id="inp-peer-edit-upstream-group"></select>
                 </div>

@@ -198,73 +198,69 @@ func (b *Bridge) Run(ctx context.Context) error {
 			b.cfg.DNS.Records = dbDNSRecords
 		}
 
-		// Seed config-file DNS rules into DB, then use DB as source of truth.
-		if len(b.cfg.DNS.Rules) > 0 {
+		// Seed config-file DNS rules into DB (only on first run), then use DB as source of truth.
+		if !store.IsSeeded("dns_rules") && len(b.cfg.DNS.Rules) > 0 {
 			imported, err := store.ImportDNSRules(b.cfg.DNS.Rules)
 			if err != nil {
 				b.logger.Error("failed to import dns rules to database", "err", err)
 			} else if imported > 0 {
 				b.logger.Info("imported file dns rules to database", "count", imported)
 			}
+			store.MarkSeeded("dns_rules")
 		}
 		dbDNSRules, err := store.ListDNSRules()
 		if err != nil {
 			b.logger.Error("failed to list db dns rules", "err", err)
 		}
-		if len(dbDNSRules) > 0 {
-			b.cfg.DNS.Rules = dbDNSRules
-		}
+		b.cfg.DNS.Rules = dbDNSRules
 
-		// Seed config-file routing CIDRs into DB, then use DB as source of truth.
-		if len(b.cfg.Routing.CIDRs) > 0 {
+		// Seed config-file routing CIDRs into DB (only on first run), then use DB as source of truth.
+		if !store.IsSeeded("routing_cidrs") && len(b.cfg.Routing.CIDRs) > 0 {
 			imported, err := store.ImportRoutingCIDRs(b.cfg.Routing.CIDRs)
 			if err != nil {
 				b.logger.Error("failed to import routing cidrs to database", "err", err)
 			} else if imported > 0 {
 				b.logger.Info("imported file routing cidrs to database", "count", imported)
 			}
+			store.MarkSeeded("routing_cidrs")
 		}
 		dbCIDRs, err := store.ListRoutingCIDRs()
 		if err != nil {
 			b.logger.Error("failed to list db routing cidrs", "err", err)
 		}
-		if len(dbCIDRs) > 0 {
-			b.cfg.Routing.CIDRs = dbCIDRs
-		}
+		b.cfg.Routing.CIDRs = dbCIDRs
 
-		// Seed config-file IP rules into DB, then use DB as source of truth.
-		if len(b.cfg.Routing.IPRules) > 0 {
+		// Seed config-file IP rules into DB (only on first run), then use DB as source of truth.
+		if !store.IsSeeded("routing_ip_rules") && len(b.cfg.Routing.IPRules) > 0 {
 			imported, err := store.ImportIPRules(b.cfg.Routing.IPRules)
 			if err != nil {
 				b.logger.Error("failed to import ip rules to database", "err", err)
 			} else if imported > 0 {
 				b.logger.Info("imported file ip rules to database", "count", imported)
 			}
+			store.MarkSeeded("routing_ip_rules")
 		}
 		dbIPRules, err := store.ListIPRules()
 		if err != nil {
 			b.logger.Error("failed to list db ip rules", "err", err)
 		}
-		if len(dbIPRules) > 0 {
-			b.cfg.Routing.IPRules = dbIPRules
-		}
+		b.cfg.Routing.IPRules = dbIPRules
 
-		// Seed config-file SNI rules into DB, then use DB as source of truth.
-		if len(b.cfg.Routing.SNIRules) > 0 {
+		// Seed config-file SNI rules into DB (only on first run), then use DB as source of truth.
+		if !store.IsSeeded("routing_sni_rules") && len(b.cfg.Routing.SNIRules) > 0 {
 			imported, err := store.ImportSNIRules(b.cfg.Routing.SNIRules)
 			if err != nil {
 				b.logger.Error("failed to import sni rules to database", "err", err)
 			} else if imported > 0 {
 				b.logger.Info("imported file sni rules to database", "count", imported)
 			}
+			store.MarkSeeded("routing_sni_rules")
 		}
 		dbSNIRules, err := store.ListSNIRules()
 		if err != nil {
 			b.logger.Error("failed to list db sni rules", "err", err)
 		}
-		if len(dbSNIRules) > 0 {
-			b.cfg.Routing.SNIRules = dbSNIRules
-		}
+		b.cfg.Routing.SNIRules = dbSNIRules
 
 		// Load persisted DNS enabled state from DB (overrides config file).
 		if dnsEnabled, ok := store.GetDNSEnabled(); ok {
@@ -543,15 +539,19 @@ func (b *Bridge) ResetConfig() error {
 	if len(fileCfg.DNS.Rules) > 0 {
 		b.statsStore.ImportDNSRules(fileCfg.DNS.Rules)
 	}
+	b.statsStore.MarkSeeded("dns_rules")
 	if len(fileCfg.Routing.CIDRs) > 0 {
 		b.statsStore.ImportRoutingCIDRs(fileCfg.Routing.CIDRs)
 	}
+	b.statsStore.MarkSeeded("routing_cidrs")
 	if len(fileCfg.Routing.IPRules) > 0 {
 		b.statsStore.ImportIPRules(fileCfg.Routing.IPRules)
 	}
+	b.statsStore.MarkSeeded("routing_ip_rules")
 	if len(fileCfg.Routing.SNIRules) > 0 {
 		b.statsStore.ImportSNIRules(fileCfg.Routing.SNIRules)
 	}
+	b.statsStore.MarkSeeded("routing_sni_rules")
 
 	// Reset means zero peers and zero secrets.
 	fileCfg.Peers = make(map[string]config.PeerConfig)
@@ -886,10 +886,11 @@ func (b *Bridge) AddPeer(name string) (config.PeerConfig, error) {
 	}
 
 	peer := config.PeerConfig{
-		PrivateKey:   privateKey,
-		PublicKey:    publicKey,
-		PresharedKey: presharedKey,
-		AllowedIPs:   clientIP + "/32",
+		PrivateKey:     privateKey,
+		PublicKey:      publicKey,
+		PresharedKey:   presharedKey,
+		AllowedIPs:     clientIP + "/32",
+		ExcludePrivate: true,
 	}
 
 	if err := b.statsStore.UpsertPeer(name, peer); err != nil {
@@ -1061,6 +1062,35 @@ func (b *Bridge) SetPeerUpstreamGroup(name, group string) error {
 	}
 
 	b.logger.Info("peer upstream group changed", "name", name, "upstream_group", group)
+	return nil
+}
+
+// SetPeerExcludePrivate updates the exclude_private flag for a peer.
+func (b *Bridge) SetPeerExcludePrivate(name string, excludePrivate bool) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	peer, exists := b.cfg.Peers[name]
+	if !exists {
+		return fmt.Errorf("peer %q not found", name)
+	}
+
+	if peer.ExcludePrivate == excludePrivate {
+		return nil
+	}
+
+	if err := b.statsStore.SetPeerExcludePrivate(name, excludePrivate); err != nil {
+		return fmt.Errorf("saving peer exclude_private: %w", err)
+	}
+
+	peer.ExcludePrivate = excludePrivate
+	b.cfg.Peers[name] = peer
+
+	b.logger.Info("peer exclude_private changed", "name", name, "exclude_private", excludePrivate)
 	return nil
 }
 
