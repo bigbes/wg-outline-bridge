@@ -244,6 +244,10 @@ func (s *Server) handlePeersRoute(w http.ResponseWriter, r *http.Request) {
 		s.handlePeerConf(w, r)
 		return
 	}
+	if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/qr") {
+		s.handlePeerQR(w, r)
+		return
+	}
 	if r.Method == http.MethodPut {
 		s.handleUpdatePeer(w, r)
 		return

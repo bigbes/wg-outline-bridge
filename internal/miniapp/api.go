@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	qrcode "github.com/skip2/go-qrcode"
+
 	"github.com/bigbes/wireguard-outline-bridge/internal/config"
 	"github.com/bigbes/wireguard-outline-bridge/internal/porttracker"
 	"github.com/bigbes/wireguard-outline-bridge/internal/statsdb"
@@ -513,41 +515,8 @@ func (s *Server) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "ok"})
 }
 
-func (s *Server) handlePeerConf(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Extract peer name from path: /api/peers/<name>/conf
-	path := strings.TrimPrefix(r.URL.Path, "/api/peers/")
-	name := strings.TrimSuffix(path, "/conf")
-	if name == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer name is required"})
-		return
-	}
-
-	// Guests can only view their own peer configs.
-	if !isAdminRequest(r) && s.store != nil {
-		owner, err := s.store.GetPeerOwner(name)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		if owner == nil || *owner != requestUserID(r) {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
-			return
-		}
-	}
-
-	cfg := s.cfgProv.CurrentConfig()
-
-	peer, ok := cfg.Peers[name]
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
-		return
-	}
-
+// buildPeerConfText generates a WireGuard/AmneziaWG client config text for the given peer.
+func buildPeerConfText(cfg *config.Config, peer config.PeerConfig) string {
 	clientIP := strings.Split(peer.AllowedIPs, "/")[0]
 
 	serverIP := cfg.ServerPublicIP()
@@ -641,17 +610,103 @@ func (s *Server) handlePeerConf(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&b, "Endpoint = %s\n", endpoint)
 	fmt.Fprintf(&b, "AllowedIPs = %s\n", allowedIPs)
 	fmt.Fprintf(&b, "PersistentKeepalive = 25\n")
+	return b.String()
+}
+
+func (s *Server) handlePeerConf(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract peer name from path: /api/peers/<name>/conf
+	path := strings.TrimPrefix(r.URL.Path, "/api/peers/")
+	name := strings.TrimSuffix(path, "/conf")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer name is required"})
+		return
+	}
+
+	// Guests can only view their own peer configs.
+	if !isAdminRequest(r) && s.store != nil {
+		owner, err := s.store.GetPeerOwner(name)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if owner == nil || *owner != requestUserID(r) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
+			return
+		}
+	}
+
+	cfg := s.cfgProv.CurrentConfig()
+
+	peer, ok := cfg.Peers[name]
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
+		return
+	}
+
+	confText := buildPeerConfText(cfg, peer)
 
 	// Return raw file download when ?download=1 is set (for tg.downloadFile).
 	if r.URL.Query().Get("download") == "1" {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.conf", name))
 		w.Header().Set("Access-Control-Allow-Origin", "https://web.telegram.org")
-		w.Write([]byte(b.String()))
+		w.Write([]byte(confText))
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"config": b.String()})
+	writeJSON(w, http.StatusOK, map[string]string{"config": confText})
+}
+
+func (s *Server) handlePeerQR(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract peer name from path: /api/peers/<name>/qr
+	path := strings.TrimPrefix(r.URL.Path, "/api/peers/")
+	name := strings.TrimSuffix(path, "/qr")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer name is required"})
+		return
+	}
+
+	// Guests can only view their own peer configs.
+	if !isAdminRequest(r) && s.store != nil {
+		owner, err := s.store.GetPeerOwner(name)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if owner == nil || *owner != requestUserID(r) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
+			return
+		}
+	}
+
+	cfg := s.cfgProv.CurrentConfig()
+
+	peer, ok := cfg.Peers[name]
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
+		return
+	}
+
+	confText := buildPeerConfText(cfg, peer)
+
+	png, err := qrcode.Encode(confText, qrcode.Medium, 512)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate QR code"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "image/png")
+	w.Write(png)
 }
 
 func (s *Server) handleAddSecret(w http.ResponseWriter, r *http.Request) {

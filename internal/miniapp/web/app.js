@@ -1170,43 +1170,15 @@ if (!tg || !tg.initData) {
     };
 
     window.showPeerQR = function (name) {
-        api("GET", "/api/peers/" + encodeURIComponent(name) + "/conf").then(
-            (d) => {
-                if (d.error) {
-                    showToast(d.error, true);
-                    return;
-                }
-                currentConfigText = d.config;
-                document.getElementById("config-modal-title").textContent =
-                    name + " QR";
-                document.getElementById("config-action-btns").style.display =
-                    "none";
-                const container = document.getElementById(
-                    "config-modal-content",
-                );
-                container.innerHTML =
-                    '<div class="qr-container"><div id="qr-code"></div></div>';
-                try {
-                    const padding = 32;
-                    const contentEl = document.getElementById("config-modal-content");
-                    const maxW = Math.floor(contentEl.clientWidth * 0.9) - padding;
-                    const maxH = Math.floor(window.innerHeight * 0.75) - padding;
-                    const qrSize = Math.min(maxW, maxH);
-                    const qrText = d.config.split("\n").map(l => l.trimEnd()).join("\n").trim();
-                    new QRCode(document.getElementById("qr-code"), {
-                        text: qrText,
-                        width: qrSize,
-                        height: qrSize,
-                        colorDark: "#000000",
-                        colorLight: "#ffffff",
-                    });
-                } catch (e) {
-                    container.innerHTML =
-                        '<div class="empty-state">QR generation failed</div>';
-                }
-                openModal("config-modal");
-            },
-        );
+        document.getElementById("config-modal-title").textContent =
+            name + " QR";
+        document.getElementById("config-action-btns").style.display =
+            "none";
+        const container = document.getElementById("config-modal-content");
+        var qrUrl = "/api/peers/" + encodeURIComponent(name) + "/qr?_auth=" + encodeURIComponent(initData);
+        container.innerHTML =
+            '<div class="qr-container"><img src="' + qrUrl + '" alt="QR Code" style="max-width:90%;max-height:75vh;image-rendering:pixelated;" onerror="this.parentElement.innerHTML=\'<div class=\\\'empty-state\\\'>QR generation failed</div>\'"></div>';
+        openModal("config-modal");
     };
 
     window.closeConfigModal = function () {

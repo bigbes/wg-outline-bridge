@@ -1162,9 +1162,6 @@ select.tg-input {
     padding: 8px 0;
 }
 #qr-code {
-    background: #ffffff;
-    padding: 16px;
-    border-radius: 12px;
 }
 .qr-container canvas,
 .qr-container img {
