@@ -46,12 +46,12 @@ func sortByCreationOrder[T any](items []T, nameFunc func(T) string, order []stri
 }
 
 type statusResponse struct {
-	Daemon    daemonInfo              `json:"daemon"`
-	Peers     []peerInfo              `json:"peers"`
-	Upstreams []upstreamInfo          `json:"upstreams"`
-	MTProxy   mtproxyInfo             `json:"mtproxy"`
-	Proxies   []proxyInfo             `json:"proxies"`
-	UsedPorts []porttracker.PortInfo  `json:"used_ports"`
+	Daemon    daemonInfo             `json:"daemon"`
+	Peers     []peerInfo             `json:"peers"`
+	Upstreams []upstreamInfo         `json:"upstreams"`
+	MTProxy   mtproxyInfo            `json:"mtproxy"`
+	Proxies   []proxyInfo            `json:"proxies"`
+	UsedPorts []porttracker.PortInfo `json:"used_ports"`
 }
 
 type daemonInfo struct {
@@ -123,6 +123,8 @@ type proxyInfo struct {
 	Listen        string `json:"listen"`
 	UpstreamGroup string `json:"upstream_group,omitempty"`
 	HasAuth       bool   `json:"has_auth"`
+	Username      string `json:"username,omitempty"`
+	Password      string `json:"password,omitempty"`
 	Link          string `json:"link"`
 }
 
@@ -261,6 +263,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			Listen:        p.Listen,
 			UpstreamGroup: p.UpstreamGroup,
 			HasAuth:       p.Username != "",
+			Username:      p.Username,
+			Password:      p.Password,
 			Link:          buildProxyLink(p, serverIP),
 		}
 		resp.Proxies = append(resp.Proxies, pi)
@@ -373,6 +377,11 @@ func (s *Server) handleAddPeer(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+
+	// Enable exclude_server by default.
+	if err := s.manager.SetPeerExcludeServer(req.Name, true); err != nil {
+		s.logger.Error("miniapp: failed to set exclude_server", "peer", req.Name, "err", err)
 	}
 
 	// Set ownership.
@@ -2108,12 +2117,12 @@ type routingResponse struct {
 }
 
 type ipRuleInfo struct {
-	Name          string           `json:"name"`
-	Action        string           `json:"action"`
-	UpstreamGroup string           `json:"upstream_group,omitempty"`
-	CIDRs         []string         `json:"cidrs"`
-	ASNs          []int            `json:"asns"`
-	Lists         []ipListInfo     `json:"lists"`
+	Name          string       `json:"name"`
+	Action        string       `json:"action"`
+	UpstreamGroup string       `json:"upstream_group,omitempty"`
+	CIDRs         []string     `json:"cidrs"`
+	ASNs          []int        `json:"asns"`
+	Lists         []ipListInfo `json:"lists"`
 }
 
 type ipListInfo struct {
@@ -2271,8 +2280,8 @@ func (s *Server) handleUpdateIPRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Action        string `json:"action"`
-		UpstreamGroup string `json:"upstream_group"`
+		Action        string   `json:"action"`
+		UpstreamGroup string   `json:"upstream_group"`
 		CIDRs         []string `json:"cidrs"`
 		ASNs          []int    `json:"asns"`
 		Lists         []struct {
@@ -2373,9 +2382,9 @@ func (s *Server) handleAddIPRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name          string `json:"name"`
-		Action        string `json:"action"`
-		UpstreamGroup string `json:"upstream_group"`
+		Name          string   `json:"name"`
+		Action        string   `json:"action"`
+		UpstreamGroup string   `json:"upstream_group"`
 		CIDRs         []string `json:"cidrs"`
 		ASNs          []int    `json:"asns"`
 		Lists         []struct {

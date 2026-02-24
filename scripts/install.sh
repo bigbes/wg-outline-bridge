@@ -25,7 +25,7 @@ BIN_DIR="$PREFIX/bin"
 ETC_DIR="$PREFIX/etc"
 LOG_DIR="$PREFIX/var/log"
 LIB_DIR="$PREFIX/var/lib/bridge"
-CONFIG="$ETC_DIR/bridge.conf"
+CONFIG="$ETC_DIR/bridge.yaml"
 PEERS_DIR="$ETC_DIR/peers"
 SRCDIR="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -37,7 +37,8 @@ echo ""
 
 # Build
 echo "Building binary..."
-(cd "$SRCDIR" && go build -o bridge ./cmd/bridge/main.go)
+VERSION="$(cd "$SRCDIR" && git describe --tags --long --always 2>/dev/null || echo "dev")"
+(cd "$SRCDIR" && go build -ldflags "-X main.Version=$VERSION" -o bridge ./cmd/bridge/main.go)
 
 # Create directories
 echo "Creating directories..."
@@ -61,7 +62,7 @@ fi
 echo "Installing systemd unit..."
 sed \
     -e "s|/data/bin/bridge|$BIN_DIR/bridge|g" \
-    -e "s|/data/etc/bridge.conf|$CONFIG|g" \
+    -e "s|/data/etc/bridge.yaml|$CONFIG|g" \
     -e "s|/data/var/log/bridge.log|$LOG_DIR/bridge.log|g" \
     -e "s|ReadWritePaths=/data|ReadWritePaths=$PREFIX|g" \
     "$SRCDIR/configs/bridge.service" > /etc/systemd/system/bridge.service

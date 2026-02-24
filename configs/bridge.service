@@ -5,11 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/data/bin/bridge run -config /data/etc/bridge.conf
+ExecStart=/data/bin/bridge run -config /data/etc/bridge.yaml
 ExecReload=/bin/kill -HUP $MAINPID
 StandardOutput=append:/data/var/log/bridge.log
 StandardError=append:/data/var/log/bridge.log
-Restart=no
+Restart=always
+RestartSec=5s
 
 # Hardening
 NoNewPrivileges=yes

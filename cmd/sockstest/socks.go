@@ -303,7 +303,7 @@ func socks5Greet(conn net.Conn, useAuth bool) error {
 
 func socks5Authenticate(conn net.Conn, username, password string) error {
 	buf := make([]byte, 0, 3+len(username)+len(password))
-	buf = append(buf, 0x01)                // sub-negotiation version
+	buf = append(buf, 0x01) // sub-negotiation version
 	buf = append(buf, byte(len(username)))
 	buf = append(buf, []byte(username)...)
 	buf = append(buf, byte(len(password)))

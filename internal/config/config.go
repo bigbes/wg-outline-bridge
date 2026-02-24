@@ -437,6 +437,7 @@ func (c *Config) Save(path string) error {
 	}
 	return os.WriteFile(path, data, 0644)
 }
+
 // DefaultUpstream returns the default upstream config, or nil if none.
 func (c *Config) DefaultUpstream() *UpstreamConfig {
 	for i := range c.Upstreams {

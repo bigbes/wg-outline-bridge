@@ -103,8 +103,8 @@ type Server struct {
 	config         ServerConfig
 	dialerResolver DialerResolver
 	endpoints      *telegram.EndpointManager
-	logger    *slog.Logger
-	configMu  sync.RWMutex
+	logger         *slog.Logger
+	configMu       sync.RWMutex
 
 	listeners []net.Listener
 	wg        sync.WaitGroup
@@ -131,10 +131,10 @@ func NewServer(config ServerConfig, dialerResolver DialerResolver, endpoints *te
 		config:         config,
 		dialerResolver: dialerResolver,
 		endpoints:      endpoints,
-		logger:      logger.With("component", "mtproxy"),
-		secretStats: make(map[int]*secretCounters),
-		uniqueIPs:   make(map[string]struct{}),
-		replayCache: make(map[[32]byte]time.Time),
+		logger:         logger.With("component", "mtproxy"),
+		secretStats:    make(map[int]*secretCounters),
+		uniqueIPs:      make(map[string]struct{}),
+		replayCache:    make(map[[32]byte]time.Time),
 	}
 }
 

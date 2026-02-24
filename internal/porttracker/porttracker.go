@@ -11,9 +11,9 @@ import (
 
 // PortInfo describes a single used port.
 type PortInfo struct {
-	Port    int    `json:"port"`
-	Owner   string `json:"owner"`   // e.g. "proxy:my-socks5", "wireguard", "dns"
-	Proto   string `json:"proto"`   // "tcp", "udp", or "tcp+udp"
+	Port  int    `json:"port"`
+	Owner string `json:"owner"` // e.g. "proxy:my-socks5", "wireguard", "dns"
+	Proto string `json:"proto"` // "tcp", "udp", or "tcp+udp"
 }
 
 // UsedPorts returns all ports occupied by the current configuration.

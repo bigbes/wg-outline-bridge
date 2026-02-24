@@ -363,7 +363,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 		if b.statsStore != nil {
 			inviteRedeemer = b.statsStore
 		}
-		obs := observer.New(bot, b, b, b, roleChecker, inviteRedeemer, time.Duration(b.cfg.Telegram.Interval)*time.Second, b.cfg.Telegram.ChatID, b.logger)
+		obs := observer.New(bot, b, b, roleChecker, inviteRedeemer, time.Duration(b.cfg.Telegram.Interval)*time.Second, b.cfg.Telegram.ChatID, b.logger)
 		go obs.Run(ctx)
 		b.logger.Info("telegram observer started", "interval", b.cfg.Telegram.Interval)
 

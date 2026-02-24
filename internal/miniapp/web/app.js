@@ -1586,8 +1586,8 @@ if (!tg || !tg.initData) {
         document.getElementById("proxy-edit-name").textContent = name;
         document.getElementById("proxy-edit-type").textContent = proxy.type.toUpperCase();
         document.getElementById("proxy-edit-listen").textContent = proxy.listen;
-        document.getElementById("inp-proxy-edit-username").value = "";
-        document.getElementById("inp-proxy-edit-password").value = "";
+        document.getElementById("inp-proxy-edit-username").value = proxy.username || "";
+        document.getElementById("inp-proxy-edit-password").value = proxy.password || "";
 
         // Populate upstream group dropdown
         const sel = document.getElementById("inp-proxy-edit-upstream-group");
