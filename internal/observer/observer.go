@@ -30,6 +30,8 @@ type PeerStatus struct {
 // DaemonStatus holds daemon-level information.
 type DaemonStatus struct {
 	StartTime time.Time
+	Version   string
+	Dirty     bool
 }
 
 // MTProxyStatus holds MTProxy server stats.

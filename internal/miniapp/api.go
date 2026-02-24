@@ -55,7 +55,9 @@ type statusResponse struct {
 }
 
 type daemonInfo struct {
-	UptimeSeconds int64 `json:"uptime_seconds"`
+	UptimeSeconds int64  `json:"uptime_seconds"`
+	Version       string `json:"version"`
+	Dirty         bool   `json:"dirty"`
 }
 
 type peerInfo struct {
@@ -168,6 +170,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	resp := statusResponse{
 		Daemon: daemonInfo{
 			UptimeSeconds: uptimeSec,
+			Version:       daemon.Version,
+			Dirty:         daemon.Dirty,
 		},
 	}
 
@@ -637,6 +641,15 @@ func (s *Server) handlePeerConf(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&b, "Endpoint = %s\n", endpoint)
 	fmt.Fprintf(&b, "AllowedIPs = %s\n", allowedIPs)
 	fmt.Fprintf(&b, "PersistentKeepalive = 25\n")
+
+	// Return raw file download when ?download=1 is set (for tg.downloadFile).
+	if r.URL.Query().Get("download") == "1" {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.conf", name))
+		w.Header().Set("Access-Control-Allow-Origin", "https://web.telegram.org")
+		w.Write([]byte(b.String()))
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"config": b.String()})
 }
@@ -2639,6 +2652,7 @@ func (s *Server) handleBackupDB(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=bridge-backup-%s.db", time.Now().Format("20060102-150405")))
+	w.Header().Set("Access-Control-Allow-Origin", "https://web.telegram.org")
 
 	if password == "" {
 		if err := s.store.Backup(w); err != nil {

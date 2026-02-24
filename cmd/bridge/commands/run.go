@@ -25,7 +25,7 @@ const logo = `
    \_/\_/ \___|  \___/ \___/  |_|  
    ~~ wireguard-outline-bridge ~~`
 
-func RunBridge(args []string, logger *slog.Logger, version string) {
+func RunBridge(args []string, logger *slog.Logger, version string, dirty bool) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	configPath := fs.String("config", "configs/bridge.yaml", "path to config file")
 	watch := fs.Bool("watch", false, "watch for binary updates and auto-restart")
@@ -46,7 +46,7 @@ func RunBridge(args []string, logger *slog.Logger, version string) {
 	logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.ParseLogLevel()}))
 
 	fmt.Println(logo)
-	logger.Info("starting wireguard-outline-bridge", "version", version)
+	logger.Info("starting wireguard-outline-bridge", "version", version, "dirty", dirty)
 	if bi, ok := debug.ReadBuildInfo(); ok {
 		var buildAttrs []any
 		for _, s := range bi.Settings {
@@ -77,7 +77,7 @@ func RunBridge(args []string, logger *slog.Logger, version string) {
 		}()
 	}
 
-	b := bridge.New(*configPath, cfg, logger)
+	b := bridge.New(*configPath, cfg, logger, version, dirty)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

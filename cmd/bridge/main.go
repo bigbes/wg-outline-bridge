@@ -8,8 +8,9 @@ import (
 	"github.com/bigbes/wireguard-outline-bridge/cmd/bridge/commands"
 )
 
-// Version is set at build time via -ldflags.
+// Version and Dirty are set at build time via -ldflags.
 var Version = "dev"
+var Dirty = ""
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -21,7 +22,7 @@ func main() {
 
 	switch os.Args[1] {
 	case "run":
-		commands.RunBridge(os.Args[2:], logger, Version)
+		commands.RunBridge(os.Args[2:], logger, Version, Dirty == "true")
 	case "watch":
 		commands.Watch(os.Args[2:], logger)
 	case "genconf":

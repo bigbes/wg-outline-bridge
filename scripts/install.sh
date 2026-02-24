@@ -38,7 +38,8 @@ echo ""
 # Build
 echo "Building binary..."
 VERSION="$(cd "$SRCDIR" && git describe --tags --long --always 2>/dev/null || echo "dev")"
-(cd "$SRCDIR" && go build -ldflags "-X main.Version=$VERSION" -o bridge ./cmd/bridge/main.go)
+DIRTY="$(cd "$SRCDIR" && git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null && echo false || echo true)"
+(cd "$SRCDIR" && go build -ldflags "-X main.Version=$VERSION -X main.Dirty=$DIRTY" -o bridge ./cmd/bridge/main.go)
 
 # Create directories
 echo "Creating directories..."

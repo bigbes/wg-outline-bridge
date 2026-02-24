@@ -37,6 +37,8 @@ import (
 
 type Bridge struct {
 	configPath string
+	version    string
+	dirty      bool
 	logger     *slog.Logger
 	startTime  time.Time
 
@@ -54,9 +56,11 @@ type Bridge struct {
 	proxySrvs    map[string]*proxyserver.Server
 }
 
-func New(configPath string, cfg *config.Config, logger *slog.Logger) *Bridge {
+func New(configPath string, cfg *config.Config, logger *slog.Logger, version string, dirty bool) *Bridge {
 	return &Bridge{
 		configPath: configPath,
+		version:    version,
+		dirty:      dirty,
 		cfg:        cfg,
 		logger:     logger,
 		startTime:  time.Now(),
@@ -841,13 +845,13 @@ func (b *Bridge) UpstreamStatuses() []observer.UpstreamStatus {
 // DaemonStatus implements observer.StatusProvider.
 func (b *Bridge) DaemonStatus() observer.DaemonStatus {
 	if b.statsStore == nil {
-		return observer.DaemonStatus{StartTime: b.startTime}
+		return observer.DaemonStatus{StartTime: b.startTime, Version: b.version, Dirty: b.dirty}
 	}
 	t, err := b.statsStore.GetDaemonStartTime()
 	if err != nil {
-		return observer.DaemonStatus{StartTime: b.startTime}
+		return observer.DaemonStatus{StartTime: b.startTime, Version: b.version, Dirty: b.dirty}
 	}
-	return observer.DaemonStatus{StartTime: t}
+	return observer.DaemonStatus{StartTime: t, Version: b.version, Dirty: b.dirty}
 }
 
 // CurrentConfig returns the current config (thread-safe).

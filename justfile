@@ -17,7 +17,8 @@ local_config := "configs/example.yaml"
 
 # Version from git describe (tag + commits since tag + short hash)
 version := `git describe --tags --long --always 2>/dev/null || echo "dev"`
-ldflags := "-X main.Version=" + version
+dirty := if `git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null && echo clean || echo dirty` == "dirty" { "true" } else { "false" }
+ldflags := "-X main.Version=" + version + " -X main.Dirty=" + dirty
 
 # Build the bridge binary (uses GOOS/GOARCH/CGO_ENABLED from .env)
 build:

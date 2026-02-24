@@ -1159,12 +1159,16 @@ select.tg-input {
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 24px 16px;
+    padding: 8px 0;
+}
+#qr-code {
+    background: #ffffff;
+    padding: 16px;
+    border-radius: 12px;
 }
 .qr-container canvas,
 .qr-container img {
-    border-radius: 12px;
-    margin-bottom: 16px;
+    display: block;
 }
 
 /* --- Drag Handle --- */

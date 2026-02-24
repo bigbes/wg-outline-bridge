@@ -182,6 +182,13 @@ if (!tg || !tg.initData) {
             renderMTProxy();
             document.getElementById("uptime").textContent =
                 "⏱ " + formatDuration(d.daemon.uptime_seconds);
+            var ver = d.daemon.version;
+            if (ver) {
+                var versionEl = document.getElementById("admin-version");
+                var label = ver.startsWith("v") ? ver : "v" + ver;
+                if (d.daemon.dirty) label += " (dirty)";
+                versionEl.textContent = label;
+            }
         });
     }
 
@@ -1180,10 +1187,16 @@ if (!tg || !tg.initData) {
                 container.innerHTML =
                     '<div class="qr-container"><div id="qr-code"></div></div>';
                 try {
+                    const padding = 32;
+                    const contentEl = document.getElementById("config-modal-content");
+                    const maxW = Math.floor(contentEl.clientWidth * 0.9) - padding;
+                    const maxH = Math.floor(window.innerHeight * 0.75) - padding;
+                    const qrSize = Math.min(maxW, maxH);
+                    const qrText = d.config.split("\n").map(l => l.trimEnd()).join("\n").trim();
                     new QRCode(document.getElementById("qr-code"), {
-                        text: d.config,
-                        width: 256,
-                        height: 256,
+                        text: qrText,
+                        width: qrSize,
+                        height: qrSize,
                         colorDark: "#000000",
                         colorLight: "#ffffff",
                     });
@@ -1206,17 +1219,28 @@ if (!tg || !tg.initData) {
         });
     };
     window.downloadConfig = function () {
-        const blob = new Blob([currentConfigText], { type: "text/plain" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = (currentConfigName || "peer") + ".conf";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        haptic("notification", "success");
-        showToast("Download started");
+        var fileName = (currentConfigName || "peer") + ".conf";
+        if (tg && tg.downloadFile) {
+            var downloadUrl = location.origin + "/api/peers/" + encodeURIComponent(currentConfigName) + "/conf?download=1&_auth=" + encodeURIComponent(initData);
+            tg.downloadFile({ url: downloadUrl, file_name: fileName }, function (accepted) {
+                if (accepted) {
+                    haptic("notification", "success");
+                    showToast("Download started");
+                }
+            });
+        } else {
+            var blob = new Blob([currentConfigText], { type: "text/plain" });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement("a");
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            haptic("notification", "success");
+            showToast("Download started");
+        }
     };
 
     // --- Upstreams ---
@@ -2728,7 +2752,23 @@ if (!tg || !tg.initData) {
 
     function downloadBackup(password) {
         var url = "/api/backup";
-        if (password) url += "?password=" + encodeURIComponent(password);
+        var params = [];
+        if (password) params.push("password=" + encodeURIComponent(password));
+
+        if (tg && tg.downloadFile) {
+            params.push("_auth=" + encodeURIComponent(initData));
+            var downloadUrl = location.origin + url + "?" + params.join("&");
+            var fname = "bridge-backup.db";
+            tg.downloadFile({ url: downloadUrl, file_name: fname }, function (accepted) {
+                if (accepted) {
+                    haptic("notification", "success");
+                    showToast("Backup downloaded" + (password ? " (encrypted)" : ""));
+                }
+            });
+            return;
+        }
+
+        if (params.length) url += "?" + params.join("&");
         fetch(url, {
             headers: { "X-Telegram-Init-Data": initData },
         })

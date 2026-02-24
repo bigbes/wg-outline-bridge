@@ -284,6 +284,11 @@ func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 
+		// Also support _auth query parameter (for tg.downloadFile which can't set headers).
+		if initData == "" {
+			initData = r.URL.Query().Get("_auth")
+		}
+
 		if initData == "" {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing init data"})
 			return
