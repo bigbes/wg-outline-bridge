@@ -79,6 +79,8 @@ if (!tg || !tg.initData) {
     let editingCIDR = null;
     let editingIPRuleName = null;
     let editingSNIRuleName = null;
+    let knownBlocklists = null;
+    let selectedBlocklists = {};
     let editingUpstreamName = null;
     let upstreamEditDefaultOn = false;
     let upstreamEditHealthOn = false;
@@ -1683,6 +1685,51 @@ if (!tg || !tg.initData) {
     };
 
     // --- DNS Rules ---
+    function renderBlocklistPicker() {
+        var el = document.getElementById("dns-rule-blocklist-picker");
+        if (!knownBlocklists || knownBlocklists.length === 0) {
+            el.innerHTML = '<div class="empty-state" style="font-size:13px">No known blocklists</div>';
+            return;
+        }
+        var sources = [];
+        var bySource = {};
+        knownBlocklists.forEach(function (bl) {
+            if (!bySource[bl.source]) {
+                bySource[bl.source] = [];
+                sources.push(bl.source);
+            }
+            bySource[bl.source].push(bl);
+        });
+        var html = "";
+        sources.forEach(function (src) {
+            var label = src === "oisd" ? "OISD" : src === "hagezi" ? "Hagezi" : src;
+            html += '<div class="blocklist-source-header">' + escapeHtml(label) + "</div>";
+            bySource[src].forEach(function (bl) {
+                var sel = selectedBlocklists[bl.name] ? " selected" : "";
+                html +=
+                    '<div class="blocklist-item' + sel + '" data-bl-name="' + escapeHtml(bl.name) + '" onclick="toggleBlocklistItem(this)">' +
+                    '<div class="blocklist-item-cb"></div>' +
+                    '<div class="blocklist-item-text">' +
+                    '<div class="blocklist-item-name">' + escapeHtml(bl.name) + "</div>" +
+                    '<div class="blocklist-item-desc">' + escapeHtml(bl.description) + "</div>" +
+                    "</div></div>";
+            });
+        });
+        el.innerHTML = html;
+    }
+
+    window.toggleBlocklistItem = function (el) {
+        var name = el.getAttribute("data-bl-name");
+        if (selectedBlocklists[name]) {
+            delete selectedBlocklists[name];
+            el.classList.remove("selected");
+        } else {
+            selectedBlocklists[name] = true;
+            el.classList.add("selected");
+        }
+        haptic("selection");
+    };
+
     window.openDNSRuleModal = function () {
         openModal("dns-rule-modal");
         document.getElementById("inp-dns-rule-name").value = "";
@@ -1691,6 +1738,19 @@ if (!tg || !tg.initData) {
         document.getElementById("inp-dns-rule-domains").value = "";
         document.getElementById("inp-dns-rule-list-url").value = "";
         document.getElementById("inp-dns-rule-list-format").value = "auto";
+        selectedBlocklists = {};
+        if (!knownBlocklists) {
+            api("GET", "/api/dns/blocklists").then(function (d) {
+                if (Array.isArray(d)) {
+                    knownBlocklists = d;
+                } else {
+                    knownBlocklists = [];
+                }
+                renderBlocklistPicker();
+            });
+        } else {
+            renderBlocklistPicker();
+        }
         toggleDNSRuleAction();
     };
     window.closeDNSRuleModal = function () {
@@ -1733,11 +1793,21 @@ if (!tg || !tg.initData) {
                   .map((d) => d.trim())
                   .filter(Boolean)
             : [];
-        const lists = listUrl ? [{ url: listUrl, format: listFormat }] : [];
+        const lists = [];
+        if (knownBlocklists) {
+            knownBlocklists.forEach(function (bl) {
+                if (selectedBlocklists[bl.name]) {
+                    lists.push({ url: bl.url, format: "adblock" });
+                }
+            });
+        }
+        if (listUrl) {
+            lists.push({ url: listUrl, format: listFormat });
+        }
 
         if (domains.length === 0 && lists.length === 0) {
             haptic("notification", "error");
-            showToast("Add domains or a list URL");
+            showToast("Add domains or a list");
             return;
         }
 

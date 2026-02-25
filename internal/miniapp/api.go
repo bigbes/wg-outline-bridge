@@ -20,6 +20,7 @@ import (
 	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/bigbes/wireguard-outline-bridge/internal/config"
+	"github.com/bigbes/wireguard-outline-bridge/internal/dns"
 	"github.com/bigbes/wireguard-outline-bridge/internal/porttracker"
 	"github.com/bigbes/wireguard-outline-bridge/internal/statsdb"
 )
@@ -2227,6 +2228,32 @@ func (s *Server) handleDeleteDNSRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleKnownBlocklists(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	type blocklistEntry struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		URL         string `json:"url"`
+		Source      string `json:"source"`
+	}
+
+	result := make([]blocklistEntry, len(dns.KnownBlocklists))
+	for i, bl := range dns.KnownBlocklists {
+		result[i] = blocklistEntry{
+			Name:        bl.Name,
+			Description: bl.Description,
+			URL:         bl.URL,
+			Source:      bl.Source,
+		}
+	}
+
+	writeJSON(w, http.StatusOK, result)
 }
 
 // --- Routing API ---

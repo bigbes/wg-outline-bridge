@@ -101,7 +101,7 @@ type DNSRuleConfig struct {
 
 type DNSListConfig struct {
 	URL     string `yaml:"url"`
-	Format  string `yaml:"format"`  // "hosts", "domains", or "auto" (default: "auto")
+	Format  string `yaml:"format"`  // "hosts", "domains", "domains-wildcards", "adblock", or "auto" (default: "auto")
 	Refresh int    `yaml:"refresh"` // seconds, default 86400
 }
 

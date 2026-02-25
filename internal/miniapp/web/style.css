@@ -1293,6 +1293,83 @@ body.is-admin .status-bar.admin-only {
     transform: rotate(45deg);
 }
 
+/* --- Blocklist Picker --- */
+.blocklist-picker {
+    max-height: 240px;
+    overflow-y: auto;
+    border: 1px solid var(--separator);
+    border-radius: 10px;
+    background: var(--bg-color);
+}
+.blocklist-source-header {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+    padding: 8px 12px 4px;
+    position: sticky;
+    top: 0;
+    background: var(--bg-color);
+    z-index: 1;
+}
+.blocklist-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    cursor: pointer;
+    transition: background-color 0.15s;
+    -webkit-tap-highlight-color: transparent;
+}
+.blocklist-item:active {
+    background: var(--separator);
+}
+.blocklist-item-cb {
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    border: 2px solid var(--separator);
+    background: transparent;
+    position: relative;
+    flex-shrink: 0;
+    transition: background-color 0.2s, border-color 0.2s;
+}
+.blocklist-item.selected .blocklist-item-cb {
+    background: var(--dns-cyan);
+    border-color: var(--dns-cyan);
+}
+.blocklist-item.selected .blocklist-item-cb::after {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 2px;
+    width: 6px;
+    height: 10px;
+    border: solid #fff;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+.blocklist-item-text {
+    flex: 1;
+    min-width: 0;
+}
+.blocklist-item-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.blocklist-item-desc {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* --- Scrollbar --- */
 ::-webkit-scrollbar {
     width: 0px;
