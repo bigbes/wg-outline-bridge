@@ -16,6 +16,7 @@
     --routing-teal: #009688;
     --admin-gold: #ffd700;
     --guest-gray: #8e8e93;
+    --wg-green: #88c941;
 }
 
 /* Light Theme (mirrored around 127.5: new = 255 - old) */
@@ -26,6 +27,10 @@
     --text-primary: #000000;
     --text-secondary: #71716c;
     --toggle-off: #c6c6c2;
+    --admin-gold: #b8860b;
+    --active-green: #1e8e3e;
+    --outline-orange: #d45800;
+    --wg-green: #5a8c1e;
 }
 [data-theme="light"] .tab-nav {
     background-color: rgba(222, 222, 222, 0.95);
@@ -71,6 +76,7 @@ body {
 }
 #app {
     display: none;
+    position: relative;
 }
 
 /* --- Status Bar --- */
@@ -202,7 +208,7 @@ body {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 .bot-icon.wg {
-    background: linear-gradient(135deg, #88c941, #5cb85c);
+    background: linear-gradient(135deg, var(--wg-green), #5cb85c);
 }
 .bot-icon.upstream {
     background: linear-gradient(135deg, #ff6b35, #f7931e);
@@ -342,7 +348,7 @@ body {
 }
 .item-icon.wg-peer {
     background-color: rgba(136, 201, 65, 0.15);
-    color: #88c941;
+    color: var(--wg-green);
 }
 .item-icon.outline {
     background-color: rgba(255, 107, 53, 0.15);
@@ -492,7 +498,7 @@ body {
     margin-right: 12px;
 }
 .action-icon-circle.wg {
-    background-color: #88c941;
+    background-color: var(--wg-green);
 }
 .action-icon-circle.upstream {
     background-color: var(--outline-orange);
@@ -518,7 +524,7 @@ body {
     color: var(--accent-blue);
 }
 .action-text.wg {
-    color: #88c941;
+    color: var(--wg-green);
 }
 .action-text.upstream {
     color: var(--outline-orange);
@@ -639,7 +645,7 @@ body {
     font-weight: 600;
 }
 .modal-btn.done.wg {
-    color: #88c941;
+    color: var(--wg-green);
 }
 .modal-btn.done.upstream {
     color: var(--outline-orange);
@@ -1275,7 +1281,9 @@ body.is-admin .status-bar.admin-only {
     background: transparent;
     position: relative;
     flex-shrink: 0;
-    transition: background-color 0.2s, border-color 0.2s;
+    transition:
+        background-color 0.2s,
+        border-color 0.2s;
 }
 .filter-checkbox.checked {
     background: var(--accent-blue, #007aff);
@@ -1333,7 +1341,9 @@ body.is-admin .status-bar.admin-only {
     background: transparent;
     position: relative;
     flex-shrink: 0;
-    transition: background-color 0.2s, border-color 0.2s;
+    transition:
+        background-color 0.2s,
+        border-color 0.2s;
 }
 .blocklist-item.selected .blocklist-item-cb {
     background: var(--dns-cyan);
@@ -1378,8 +1388,8 @@ body.is-admin .status-bar.admin-only {
 
 /* --- Theme Switcher --- */
 .theme-switcher {
-    position: fixed;
-    top: 8px;
+    position: absolute;
+    top: 3px;
     right: 12px;
     z-index: 60;
     width: 32px;
@@ -1413,5 +1423,5 @@ body.is-admin .status-bar.admin-only {
     background: linear-gradient(135deg, #dedede 50%, #212121 50%);
 }
 body.is-admin .theme-switcher {
-    right: 80px;
+    right: 86px;
 }
