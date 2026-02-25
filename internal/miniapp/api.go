@@ -24,6 +24,11 @@ import (
 	"github.com/bigbes/wireguard-outline-bridge/internal/statsdb"
 )
 
+// sanitizeFilename returns a lowercase version of s with spaces replaced by underscores.
+func sanitizeFilename(s string) string {
+	return strings.ToLower(strings.ReplaceAll(s, " ", "_"))
+}
+
 const defaultGuestMaxPeers = 5
 const defaultGuestMaxSecrets = 5
 
@@ -653,7 +658,7 @@ func (s *Server) handlePeerConf(w http.ResponseWriter, r *http.Request) {
 	// Return raw file download when ?download=1 is set (for tg.downloadFile).
 	if r.URL.Query().Get("download") == "1" {
 		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.conf", name))
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.conf", sanitizeFilename(name)))
 		w.Header().Set("Access-Control-Allow-Origin", "https://web.telegram.org")
 		w.Write([]byte(confText))
 		return
@@ -707,6 +712,60 @@ func (s *Server) handlePeerQR(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "image/png")
 	w.Write(png)
+}
+
+func (s *Server) handlePeerSendConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract peer name from path: /api/peers/<name>/send
+	path := strings.TrimPrefix(r.URL.Path, "/api/peers/")
+	name := strings.TrimSuffix(path, "/send")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer name is required"})
+		return
+	}
+
+	userID := requestUserID(r)
+
+	// Guests can only send their own peer configs.
+	if !isAdminRequest(r) && s.store != nil {
+		owner, err := s.store.GetPeerOwner(name)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if owner == nil || *owner != userID {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
+			return
+		}
+	}
+
+	cfg := s.cfgProv.CurrentConfig()
+
+	peer, ok := cfg.Peers[name]
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
+		return
+	}
+
+	if s.bot == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "telegram bot is not configured"})
+		return
+	}
+
+	confText := buildPeerConfText(cfg, peer)
+	filename := sanitizeFilename(name) + ".conf"
+
+	if err := s.bot.SendDocument(r.Context(), userID, filename, []byte(confText), "🔐 WireGuard config: "+name); err != nil {
+		s.logger.Error("miniapp: failed to send config to telegram", "peer", name, "user_id", userID, "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to send config"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleAddSecret(w http.ResponseWriter, r *http.Request) {

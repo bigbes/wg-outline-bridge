@@ -420,6 +420,39 @@ func (b *Bot) SendMessageWithWebApp(ctx context.Context, chatID int64, text, par
 	return nil
 }
 
+// SendDocument sends a document (file) to the specified chat using multipart upload.
+func (b *Bot) SendDocument(ctx context.Context, chatID int64, filename string, data []byte, caption string) error {
+	var buf bytes.Buffer
+	writer := NewMultipartWriter(&buf)
+	writer.WriteField("chat_id", fmt.Sprintf("%d", chatID))
+	if caption != "" {
+		writer.WriteField("caption", caption)
+	}
+	writer.WriteFile("document", filename, data)
+	contentType := writer.FormDataContentType()
+	writer.Close()
+
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendDocument", b.token)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &buf)
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", contentType)
+
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("sending document: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("telegram API error: status %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
 // GetFileURL returns the download URL for a file_id.
 func (b *Bot) GetFileURL(ctx context.Context, fileID string) (string, error) {
 	payload := struct {

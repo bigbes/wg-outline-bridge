@@ -248,6 +248,10 @@ func (s *Server) handlePeersRoute(w http.ResponseWriter, r *http.Request) {
 		s.handlePeerQR(w, r)
 		return
 	}
+	if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/send") {
+		s.handlePeerSendConfig(w, r)
+		return
+	}
 	if r.Method == http.MethodPut {
 		s.handleUpdatePeer(w, r)
 		return
