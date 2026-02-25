@@ -44,8 +44,20 @@ func (bl *BlocklistLoader) IsBlocked(fqdn string) bool {
 	return bl.domains[fqdn]
 }
 
-// Start downloads all lists initially, then starts a refresh goroutine.
+// Start begins fetching all lists asynchronously, then starts a refresh goroutine.
+// The initial download runs in a background goroutine so the caller is never
+// blocked on network I/O.
 func (bl *BlocklistLoader) Start(ctx context.Context) {
+	if len(bl.lists) == 0 {
+		return
+	}
+	go func() {
+		bl.fetchAll(ctx)
+		bl.refreshLoop(ctx)
+	}()
+}
+
+func (bl *BlocklistLoader) fetchAll(ctx context.Context) {
 	allDomains := make(map[string]bool)
 	for i := range bl.lists {
 		entry := &bl.lists[i]
@@ -64,10 +76,6 @@ func (bl *BlocklistLoader) Start(ctx context.Context) {
 	bl.mu.Lock()
 	bl.domains = allDomains
 	bl.mu.Unlock()
-
-	if len(bl.lists) > 0 {
-		go bl.refreshLoop(ctx)
-	}
 }
 
 func (bl *BlocklistLoader) refreshLoop(ctx context.Context) {

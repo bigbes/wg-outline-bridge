@@ -82,22 +82,6 @@ func RunBridge(args []string, logger *slog.Logger, version string, dirty bool) {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	sighup := make(chan os.Signal, 1)
-	signal.Notify(sighup, syscall.SIGHUP)
-	go func() {
-		for {
-			select {
-			case <-sighup:
-				logger.Info("received SIGHUP, reloading config")
-				if err := b.Reload(); err != nil {
-					logger.Error("reload failed", "err", err)
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
 	if err := b.Run(ctx); err != nil {
 		logger.Error("bridge error", "err", err)
 		os.Exit(1)

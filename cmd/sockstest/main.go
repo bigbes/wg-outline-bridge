@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"time"
 )
@@ -53,13 +54,7 @@ func main() {
 		"socks4_bind", "socks5_bind", "socks5_udp",
 		"socks5_auth_connect", "socks5_auth_bind", "socks5_auth_udp",
 	}
-	valid := false
-	for _, c := range validCases {
-		if c == *casename {
-			valid = true
-			break
-		}
-	}
+	valid := slices.Contains(validCases, *casename)
 	if !valid {
 		fmt.Fprintf(os.Stderr, "Invalid casename: %s\nValid cases: %s\n", *casename, strings.Join(validCases, ", "))
 		os.Exit(1)
