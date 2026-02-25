@@ -1959,6 +1959,7 @@ type dnsRuleInfo struct {
 	Upstream string        `json:"upstream,omitempty"`
 	Domains  []string      `json:"domains"`
 	Lists    []dnsListInfo `json:"lists"`
+	Peers    []string      `json:"peers"`
 }
 
 type dnsListInfo struct {
@@ -2016,6 +2017,7 @@ func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
 			Action:   rule.Action,
 			Upstream: rule.Upstream,
 			Domains:  rule.Domains,
+			Peers:    rule.Peers,
 		}
 		for _, l := range rule.Lists {
 			ri.Lists = append(ri.Lists, dnsListInfo{
@@ -2161,6 +2163,7 @@ func (s *Server) handleAddDNSRule(w http.ResponseWriter, r *http.Request) {
 			Format  string `json:"format"`
 			Refresh int    `json:"refresh"`
 		} `json:"lists"`
+		Peers []string `json:"peers"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -2189,6 +2192,7 @@ func (s *Server) handleAddDNSRule(w http.ResponseWriter, r *http.Request) {
 		Action:   req.Action,
 		Upstream: req.Upstream,
 		Domains:  req.Domains,
+		Peers:    req.Peers,
 	}
 	for _, l := range req.Lists {
 		format := l.Format

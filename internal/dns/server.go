@@ -25,6 +25,12 @@ type Rule struct {
 	Upstream  string // for action=upstream
 	Patterns  []DomainPattern
 	Blocklist *BlocklistLoader
+	Peers     []string // if set, rule applies only to these peers; empty = all
+}
+
+// PeerNameResolver maps peer VPN IPs to peer names.
+type PeerNameResolver interface {
+	NameFor(ip netip.Addr) string
 }
 
 type DomainPattern struct {
@@ -54,12 +60,13 @@ func (p DomainPattern) matches(fqdn string) bool {
 }
 
 type Server struct {
-	upstream string
-	records  map[string]Record
-	mu       sync.RWMutex
-	rules    []Rule
-	logger   *slog.Logger
-	server   *dnspkg.Server
+	upstream     string
+	records      map[string]Record
+	mu           sync.RWMutex
+	rules        []Rule
+	logger       *slog.Logger
+	server       *dnspkg.Server
+	peerResolver PeerNameResolver
 }
 
 func New(listenAddr, upstream string, records map[string]Record, rules []Rule, logger *slog.Logger) *Server {
@@ -130,7 +137,31 @@ func (s *Server) UpdateRecords(records map[string]Record) {
 	s.mu.Unlock()
 }
 
+// SetPeerResolver sets the resolver used to map peer IPs to peer names
+// for per-peer DNS rule filtering.
+func (s *Server) SetPeerResolver(r PeerNameResolver) {
+	s.peerResolver = r
+}
+
 func (s *Server) ServeDNS(w dnspkg.ResponseWriter, r *dnspkg.Msg) {
+	s.serveDNSWithPeer(w, r, netip.Addr{})
+}
+
+// HandleQueryForPeer processes a DNS query on behalf of a specific peer,
+// returning the serialized response. Per-peer DNS rules are applied based
+// on the peer IP.
+func (s *Server) HandleQueryForPeer(peerIP netip.Addr, request []byte) ([]byte, error) {
+	msg := new(dnspkg.Msg)
+	if err := msg.Unpack(request); err != nil {
+		return nil, fmt.Errorf("dns: unpacking query: %w", err)
+	}
+
+	w := &bufResponseWriter{}
+	s.serveDNSWithPeer(w, msg, peerIP)
+	return w.msg, nil
+}
+
+func (s *Server) serveDNSWithPeer(w dnspkg.ResponseWriter, r *dnspkg.Msg, peerIP netip.Addr) {
 	if len(r.Question) == 0 {
 		return
 	}
@@ -139,9 +170,18 @@ func (s *Server) ServeDNS(w dnspkg.ResponseWriter, r *dnspkg.Msg) {
 	name := strings.ToLower(q.Name)
 
 	// 1. Static local records
-	if rec, ok := s.records[name]; ok {
+	s.mu.RLock()
+	rec, hasRec := s.records[name]
+	s.mu.RUnlock()
+	if hasRec {
 		s.serveLocalRecord(w, r, q, rec)
 		return
+	}
+
+	// Resolve peer name for per-peer rule filtering.
+	peerName := ""
+	if peerIP.IsValid() && s.peerResolver != nil {
+		peerName = s.peerResolver.NameFor(peerIP)
 	}
 
 	s.mu.RLock()
@@ -151,6 +191,9 @@ func (s *Server) ServeDNS(w dnspkg.ResponseWriter, r *dnspkg.Msg) {
 	// 2. Rules (first match wins)
 	for i := range rules {
 		rule := &rules[i]
+		if !s.ruleAppliesToPeer(rule, peerName) {
+			continue
+		}
 		if !s.ruleMatches(rule, name) {
 			continue
 		}
@@ -166,6 +209,21 @@ func (s *Server) ServeDNS(w dnspkg.ResponseWriter, r *dnspkg.Msg) {
 
 	// 3. Default upstream
 	s.forward(w, r, s.upstream, "")
+}
+
+func (s *Server) ruleAppliesToPeer(rule *Rule, peerName string) bool {
+	if len(rule.Peers) == 0 {
+		return true
+	}
+	if peerName == "" {
+		return false
+	}
+	for _, p := range rule.Peers {
+		if p == peerName {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) ruleMatches(rule *Rule, fqdn string) bool {
@@ -259,3 +317,25 @@ func (s *Server) forward(w dnspkg.ResponseWriter, r *dnspkg.Msg, upstream, ruleN
 		s.logger.Error("dns: failed to write response", "err", err)
 	}
 }
+
+// bufResponseWriter captures a DNS response for programmatic use.
+type bufResponseWriter struct {
+	msg []byte
+}
+
+func (w *bufResponseWriter) LocalAddr() net.Addr  { return nil }
+func (w *bufResponseWriter) RemoteAddr() net.Addr { return nil }
+func (w *bufResponseWriter) WriteMsg(msg *dnspkg.Msg) error {
+	var err error
+	w.msg, err = msg.Pack()
+	return err
+}
+func (w *bufResponseWriter) Write(b []byte) (int, error) {
+	w.msg = make([]byte, len(b))
+	copy(w.msg, b)
+	return len(b), nil
+}
+func (w *bufResponseWriter) Close() error        { return nil }
+func (w *bufResponseWriter) TsigStatus() error   { return nil }
+func (w *bufResponseWriter) TsigTimersOnly(bool) {}
+func (w *bufResponseWriter) Hijack()             {}

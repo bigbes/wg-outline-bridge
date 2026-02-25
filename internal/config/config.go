@@ -97,6 +97,7 @@ type DNSRuleConfig struct {
 	Upstream string          `yaml:"upstream"` // for action=upstream
 	Domains  []string        `yaml:"domains"`  // glob patterns like "*.example.com"
 	Lists    []DNSListConfig `yaml:"lists"`    // URL-based blocklists
+	Peers    []string        `yaml:"peers"`    // if set, rule applies only to these peers; empty = all
 }
 
 type DNSListConfig struct {

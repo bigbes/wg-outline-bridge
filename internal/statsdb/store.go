@@ -316,6 +316,7 @@ func (s *Store) migrateSchema() error {
 		{"routing_cidrs", "mode", `ALTER TABLE routing_cidrs ADD COLUMN mode TEXT NOT NULL DEFAULT 'disallow'`},
 		{"wg_peers", "exclude_private", `ALTER TABLE wg_peers ADD COLUMN exclude_private INTEGER NOT NULL DEFAULT 1`},
 		{"wg_peers", "exclude_server", `ALTER TABLE wg_peers ADD COLUMN exclude_server INTEGER NOT NULL DEFAULT 0`},
+		{"dns_rules", "peers_json", `ALTER TABLE dns_rules ADD COLUMN peers_json TEXT NOT NULL DEFAULT '[]'`},
 	}
 	for _, m := range migrations {
 		var count int
@@ -1655,7 +1656,7 @@ func (s *Store) IsAllowedUser(userID int64) (bool, error) {
 // ListDNSRules returns all DNS rules ordered by priority.
 func (s *Store) ListDNSRules() ([]config.DNSRuleConfig, error) {
 	rows, err := s.db.Query(
-		`SELECT name, action, upstream, domains_json, lists_json
+		`SELECT name, action, upstream, domains_json, lists_json, peers_json
 		 FROM dns_rules ORDER BY priority ASC, created_unix ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: list dns rules: %w", err)
@@ -1665,8 +1666,8 @@ func (s *Store) ListDNSRules() ([]config.DNSRuleConfig, error) {
 	var out []config.DNSRuleConfig
 	for rows.Next() {
 		var r config.DNSRuleConfig
-		var domainsJSON, listsJSON string
-		if err := rows.Scan(&r.Name, &r.Action, &r.Upstream, &domainsJSON, &listsJSON); err != nil {
+		var domainsJSON, listsJSON, peersJSON string
+		if err := rows.Scan(&r.Name, &r.Action, &r.Upstream, &domainsJSON, &listsJSON, &peersJSON); err != nil {
 			return nil, fmt.Errorf("statsdb: scan dns rule: %w", err)
 		}
 		if domainsJSON != "" && domainsJSON != "[]" {
@@ -1677,6 +1678,11 @@ func (s *Store) ListDNSRules() ([]config.DNSRuleConfig, error) {
 		if listsJSON != "" && listsJSON != "[]" {
 			if err := json.Unmarshal([]byte(listsJSON), &r.Lists); err != nil {
 				return nil, fmt.Errorf("statsdb: unmarshal lists for %q: %w", r.Name, err)
+			}
+		}
+		if peersJSON != "" && peersJSON != "[]" {
+			if err := json.Unmarshal([]byte(peersJSON), &r.Peers); err != nil {
+				return nil, fmt.Errorf("statsdb: unmarshal peers for %q: %w", r.Name, err)
 			}
 		}
 		out = append(out, r)
@@ -1796,11 +1802,15 @@ func (s *Store) AddDNSRule(r config.DNSRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal lists: %w", err)
 	}
+	peersJSON, err := json.Marshal(r.Peers)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal peers: %w", err)
+	}
 
 	_, err = s.db.Exec(
-		`INSERT INTO dns_rules (name, action, upstream, domains_json, lists_json, priority)
-		 VALUES (?, ?, ?, ?, ?, COALESCE((SELECT MAX(priority) FROM dns_rules), -1) + 1)`,
-		r.Name, r.Action, r.Upstream, string(domainsJSON), string(listsJSON),
+		`INSERT INTO dns_rules (name, action, upstream, domains_json, lists_json, peers_json, priority)
+		 VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT MAX(priority) FROM dns_rules), -1) + 1)`,
+		r.Name, r.Action, r.Upstream, string(domainsJSON), string(listsJSON), string(peersJSON),
 	)
 	if err != nil {
 		return fmt.Errorf("statsdb: add dns rule %q: %w", r.Name, err)
@@ -1835,8 +1845,8 @@ func (s *Store) ImportDNSRules(rules []config.DNSRuleConfig) (int, error) {
 	}
 
 	stmt, err := tx.Prepare(
-		`INSERT OR IGNORE INTO dns_rules (name, action, upstream, domains_json, lists_json, priority)
-		 VALUES (?, ?, ?, ?, ?, ?)`)
+		`INSERT OR IGNORE INTO dns_rules (name, action, upstream, domains_json, lists_json, peers_json, priority)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return 0, fmt.Errorf("statsdb: prepare import dns rules: %w", err)
 	}
@@ -1852,8 +1862,12 @@ func (s *Store) ImportDNSRules(rules []config.DNSRuleConfig) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: marshal lists for %q: %w", r.Name, err)
 		}
+		peersJSON, err := json.Marshal(r.Peers)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: marshal peers for %q: %w", r.Name, err)
+		}
 		maxPriority++
-		res, err := stmt.Exec(r.Name, r.Action, r.Upstream, string(domainsJSON), string(listsJSON), maxPriority)
+		res, err := stmt.Exec(r.Name, r.Action, r.Upstream, string(domainsJSON), string(listsJSON), string(peersJSON), maxPriority)
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: import dns rule %q: %w", r.Name, err)
 		}

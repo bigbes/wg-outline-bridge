@@ -23,12 +23,18 @@ type PacketDialer interface {
 	DialPacket(ctx context.Context, addr string) (net.Conn, error)
 }
 
+// DNSHandler handles DNS queries with peer context.
+type DNSHandler interface {
+	HandleQueryForPeer(peerIP netip.Addr, request []byte) ([]byte, error)
+}
+
 type UDPProxy struct {
 	router       *routing.Router
 	dialers      *DialerSet
 	logger       *slog.Logger
 	tracker      *ConnTracker
 	dnsTarget    string // if set, intercept port-53 and relay to this address
+	dnsServer    DNSHandler
 	peerResolver *PeerUpstreamResolver
 }
 
@@ -38,6 +44,10 @@ func NewUDPProxy(router *routing.Router, dialers *DialerSet, tracker *ConnTracke
 
 func (p *UDPProxy) SetDNSTarget(addr string) {
 	p.dnsTarget = addr
+}
+
+func (p *UDPProxy) SetDNSServer(srv DNSHandler) {
+	p.dnsServer = srv
 }
 
 func (p *UDPProxy) SetupForwarder(s *stack.Stack) {
@@ -175,28 +185,50 @@ func (p *UDPProxy) relayDNS(clientConn *gonet.UDPConn, srcAddr netip.Addr, origD
 			return
 		}
 
-		dnsConn, err := net.DialTimeout("udp", p.dnsTarget, 5*time.Second)
-		if err != nil {
-			p.logger.Error("udp: dns dial failed", "target", p.dnsTarget, "err", err)
-			return
+		var resp []byte
+		if p.dnsServer != nil {
+			resp, err = p.dnsServer.HandleQueryForPeer(srcAddr, buf[:n])
+			if err != nil {
+				p.logger.Error("udp: dns handle failed", "src", srcAddr, "err", err)
+				return
+			}
+		} else {
+			resp, err = p.relayDNSViaUDP(buf[:n])
+			if err != nil {
+				return
+			}
 		}
 
-		dnsConn.SetDeadline(time.Now().Add(10 * time.Second))
-		if _, err := dnsConn.Write(buf[:n]); err != nil {
-			dnsConn.Close()
-			p.logger.Error("udp: dns write failed", "err", err)
-			return
+		if resp == nil {
+			continue
 		}
 
-		respN, err := dnsConn.Read(buf)
-		dnsConn.Close()
-		if err != nil {
-			p.logger.Error("udp: dns read failed", "err", err)
-			return
-		}
-
-		if _, err := clientConn.Write(buf[:respN]); err != nil {
+		if _, err := clientConn.Write(resp); err != nil {
 			return
 		}
 	}
+}
+
+func (p *UDPProxy) relayDNSViaUDP(query []byte) ([]byte, error) {
+	dnsConn, err := net.DialTimeout("udp", p.dnsTarget, 5*time.Second)
+	if err != nil {
+		p.logger.Error("udp: dns dial failed", "target", p.dnsTarget, "err", err)
+		return nil, err
+	}
+	defer dnsConn.Close()
+
+	dnsConn.SetDeadline(time.Now().Add(10 * time.Second))
+	if _, err := dnsConn.Write(query); err != nil {
+		p.logger.Error("udp: dns write failed", "err", err)
+		return nil, err
+	}
+
+	buf := make([]byte, 4096)
+	n, err := dnsConn.Read(buf)
+	if err != nil {
+		p.logger.Error("udp: dns read failed", "err", err)
+		return nil, err
+	}
+
+	return buf[:n], nil
 }

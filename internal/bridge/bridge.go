@@ -42,18 +42,19 @@ type Bridge struct {
 	logger     *slog.Logger
 	startTime  time.Time
 
-	mu           sync.Mutex
-	cfg          *config.Config
-	ctx          context.Context
-	wgDev        wg.Device
-	upstreams    *upstream.Manager
-	tracker      *proxy.ConnTracker
-	peerResolver *proxy.PeerUpstreamResolver
-	peerMon      *peerMonitor
-	mtSrv        *mtproxy2.Server
-	dnsSrv       *dns.Server
-	statsStore   *statsdb.Store
-	proxySrvs    map[string]*proxyserver.Server
+	mu              sync.Mutex
+	cfg             *config.Config
+	ctx             context.Context
+	wgDev           wg.Device
+	upstreams       *upstream.Manager
+	tracker         *proxy.ConnTracker
+	peerResolver    *proxy.PeerUpstreamResolver
+	peerDNSResolver *proxy.PeerDNSNameResolver
+	peerMon         *peerMonitor
+	mtSrv           *mtproxy2.Server
+	dnsSrv          *dns.Server
+	statsStore      *statsdb.Store
+	proxySrvs       map[string]*proxyserver.Server
 }
 
 func New(configPath string, cfg *config.Config, logger *slog.Logger, version string, dirty bool) *Bridge {
@@ -100,6 +101,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 
 	b.tracker = proxy.NewConnTracker()
 	b.peerResolver = proxy.NewPeerUpstreamResolver()
+	b.peerDNSResolver = proxy.NewPeerDNSNameResolver()
 
 	if b.cfg.Database.Path != "" {
 		// Note: peerResolver will be populated after peers are loaded from DB below.
@@ -273,6 +275,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 	}
 
 	b.peerResolver.PopulateFromPeers(b.cfg.Peers)
+	b.peerDNSResolver.PopulateFromPeers(b.cfg.Peers)
 
 	var geoMgr *geoip.Manager
 	if len(b.cfg.GeoIP) > 0 {
@@ -348,10 +351,12 @@ func (b *Bridge) Run(ctx context.Context) error {
 			rules = buildDNSRules(b.cfg.DNS, b.logger)
 		}
 		b.dnsSrv = dns.New(b.cfg.DNS.Listen, b.cfg.DNS.Upstream, records, rules, b.logger)
+		b.dnsSrv.SetPeerResolver(b.peerDNSResolver)
 		if err := b.dnsSrv.Start(ctx); err != nil {
 			return fmt.Errorf("starting dns server: %w", err)
 		}
 		defer b.dnsSrv.Stop()
+		udpProxy.SetDNSServer(b.dnsSrv)
 	}
 
 	b.peerMon = newPeerMonitor(b.wgDev, b.cfg.Peers, b.logger)
@@ -807,6 +812,11 @@ func (b *Bridge) AddPeer(name string) (config.PeerConfig, error) {
 	}
 
 	b.cfg.Peers[name] = peer
+	if b.peerDNSResolver != nil {
+		for _, addr := range peerAllowedIPs(peer) {
+			b.peerDNSResolver.Set(addr, name)
+		}
+	}
 	if b.peerMon != nil {
 		b.peerMon.updatePeers(b.cfg.Peers)
 	}
@@ -854,6 +864,11 @@ func (b *Bridge) DeletePeer(name string) error {
 	if b.peerResolver != nil {
 		for _, addr := range peerIPs {
 			b.peerResolver.Delete(addr)
+		}
+	}
+	if b.peerDNSResolver != nil {
+		for _, addr := range peerIPs {
+			b.peerDNSResolver.Delete(addr)
 		}
 	}
 	if b.peerMon != nil {
@@ -906,12 +921,22 @@ func (b *Bridge) SetPeerDisabled(name string, disabled bool) error {
 	}
 
 	b.cfg.Peers[name] = peer
+	peerIPs := peerAllowedIPs(peer)
 	if b.peerResolver != nil {
-		for _, addr := range peerAllowedIPs(peer) {
+		for _, addr := range peerIPs {
 			if disabled {
 				b.peerResolver.Delete(addr)
 			} else if peer.UpstreamGroup != "" {
 				b.peerResolver.Set(addr, peer.UpstreamGroup)
+			}
+		}
+	}
+	if b.peerDNSResolver != nil {
+		for _, addr := range peerIPs {
+			if disabled {
+				b.peerDNSResolver.Delete(addr)
+			} else {
+				b.peerDNSResolver.Set(addr, name)
 			}
 		}
 	}
@@ -1886,6 +1911,7 @@ func buildDNSRules(cfg config.DNSConfig, logger *slog.Logger) []dns.Rule {
 			Name:     rc.Name,
 			Action:   rc.Action,
 			Upstream: rc.Upstream,
+			Peers:    rc.Peers,
 		}
 		if rule.Action == "upstream" && !strings.Contains(rule.Upstream, ":") {
 			rule.Upstream += ":53"
