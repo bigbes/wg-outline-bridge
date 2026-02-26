@@ -636,6 +636,9 @@ if (!tg || !tg.initData) {
                             listCount + " list" + (listCount > 1 ? "s" : ""),
                         );
                     if (r.upstream) info.push("→ " + r.upstream);
+                    var peerScope = (r.peers && r.peers.length > 0)
+                        ? escapeHtml(r.peers.join(", "))
+                        : "All peers";
                     const escapedName = r.name.replace(/'/g, "\\'");
                     return (
                         '<div class="list-item">' +
@@ -648,6 +651,7 @@ if (!tg || !tg.initData) {
                         actionBadge +
                         " • " +
                         info.join(" • ") +
+                        ' • 👤 ' + peerScope +
                         "</div>" +
                         "</div>" +
                         (isAdmin()
@@ -1730,6 +1734,38 @@ if (!tg || !tg.initData) {
         haptic("selection");
     };
 
+    var selectedDNSRulePeers = {};
+
+    function renderDNSRulePeerPicker() {
+        var el = document.getElementById("dns-rule-peer-picker");
+        var peers = (statusData && statusData.peers) || [];
+        if (peers.length === 0) {
+            el.innerHTML = '<div class="empty-state" style="font-size:13px">No peers available</div>';
+            return;
+        }
+        el.innerHTML = peers.map(function (p) {
+            var name = p.name || p.public_key.slice(0, 8) + "...";
+            var sel = selectedDNSRulePeers[name] ? " selected" : "";
+            return '<div class="blocklist-item' + sel + '" data-peer-name="' + escapeHtml(name) + '" onclick="toggleDNSRulePeer(this)">' +
+                '<div class="blocklist-item-cb"></div>' +
+                '<div class="blocklist-item-text">' +
+                '<div class="blocklist-item-name">' + escapeHtml(name) + '</div>' +
+                '</div></div>';
+        }).join("");
+    }
+
+    window.toggleDNSRulePeer = function (el) {
+        var name = el.getAttribute("data-peer-name");
+        if (selectedDNSRulePeers[name]) {
+            delete selectedDNSRulePeers[name];
+            el.classList.remove("selected");
+        } else {
+            selectedDNSRulePeers[name] = true;
+            el.classList.add("selected");
+        }
+        haptic("selection");
+    };
+
     window.openDNSRuleModal = function () {
         openModal("dns-rule-modal");
         document.getElementById("inp-dns-rule-name").value = "";
@@ -1739,6 +1775,8 @@ if (!tg || !tg.initData) {
         document.getElementById("inp-dns-rule-list-url").value = "";
         document.getElementById("inp-dns-rule-list-format").value = "auto";
         selectedBlocklists = {};
+        selectedDNSRulePeers = {};
+        renderDNSRulePeerPicker();
         if (!knownBlocklists) {
             api("GET", "/api/dns/blocklists").then(function (d) {
                 if (Array.isArray(d)) {
@@ -1811,12 +1849,15 @@ if (!tg || !tg.initData) {
             return;
         }
 
+        var peers = Object.keys(selectedDNSRulePeers);
+
         api("POST", "/api/dns", {
             name,
             action,
             upstream: action === "upstream" ? upstream : "",
             domains,
             lists,
+            peers,
         }).then((d) => {
             if (d.error) {
                 haptic("notification", "error");
