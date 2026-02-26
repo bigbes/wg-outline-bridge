@@ -1,0 +1,9 @@
+.git
+.gitignore
+.goreleaser.yml
+README.md
+LICENSE
+configs/
+*.md
+bridge
+main

@@ -40,15 +40,16 @@ wireguard:
 #   records:                   # static local records (highest priority)
 #     myhost.internal:
 #       a: ["10.100.0.10"]
+#       aaaa: ["fd00::1"]      # optional IPv6 addresses
 #       ttl: 60
 #   rules:                     # evaluated in order, first match wins
 #     - name: "ads"
 #       action: block
 #       lists:
 #         - url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
-#           format: hosts
+#           format: hosts      # hosts, domains, domains-wildcards, adblock, or auto (default: auto)
 #           refresh: 86400
-#         - url: "https://big.oisd.nl/domainswild2"
+#         - url: "https://abp.oisd.nl/big/"
 #           format: domains
 #     - name: "ru-direct-dns"
 #       action: upstream
@@ -149,6 +150,7 @@ upstreams:
 #     refresh: 604800
 
 # routing:
+#   enabled: true               # enable routing rules (default: true when routing section present)
 #   cidrs:                    # CIDR rules for client WireGuard AllowedIPs
 #     - "d:{{ $server_ip }}/32" # exclude server's own public IP (template variable)
 #     - "d:192.168.0.0/16"    # disallow local network (traffic goes direct)
