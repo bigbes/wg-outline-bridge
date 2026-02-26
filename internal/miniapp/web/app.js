@@ -3034,6 +3034,36 @@ if (!tg || !tg.initData) {
     };
 
     // --- Routing: Protocol Rule Modal (create + edit) ---
+    var KNOWN_PROTOCOLS = [
+        { id: "bittorrent", name: "BitTorrent", desc: "Peer-to-peer file sharing" },
+    ];
+    var selectedProtocols = {};
+
+    function renderProtocolPicker() {
+        var el = document.getElementById("protocol-rule-picker");
+        el.innerHTML = KNOWN_PROTOCOLS.map(function (p) {
+            var sel = selectedProtocols[p.id] ? " selected" : "";
+            return '<div class="blocklist-item routing' + sel + '" data-proto="' + escapeHtml(p.id) + '" onclick="toggleProtocolItem(this)">' +
+                '<div class="blocklist-item-cb"></div>' +
+                '<div class="blocklist-item-text">' +
+                '<div class="blocklist-item-name">' + escapeHtml(p.name) + '</div>' +
+                '<div class="blocklist-item-desc">' + escapeHtml(p.desc) + '</div>' +
+                '</div></div>';
+        }).join('');
+    }
+
+    window.toggleProtocolItem = function (el) {
+        var id = el.getAttribute("data-proto");
+        if (selectedProtocols[id]) {
+            delete selectedProtocols[id];
+            el.classList.remove("selected");
+        } else {
+            selectedProtocols[id] = true;
+            el.classList.add("selected");
+        }
+        haptic("selection");
+    };
+
     function populateProtocolRuleGroupSelect(selected) {
         const sel = document.getElementById('inp-protocol-rule-upstream-group');
         const allGroups = [...new Set((statusData && statusData.upstreams || []).flatMap(u => u.groups || []))];
@@ -3049,7 +3079,8 @@ if (!tg || !tg.initData) {
         document.getElementById("inp-protocol-rule-name").disabled = false;
         document.getElementById("inp-protocol-rule-action").value = "block";
         populateProtocolRuleGroupSelect("");
-        document.getElementById("inp-protocol-rule-protocols").value = "";
+        selectedProtocols = {};
+        renderProtocolPicker();
         toggleProtocolRuleAction();
         openModal("protocol-rule-modal");
     };
@@ -3063,7 +3094,9 @@ if (!tg || !tg.initData) {
         document.getElementById("inp-protocol-rule-name").disabled = true;
         document.getElementById("inp-protocol-rule-action").value = rule.action;
         populateProtocolRuleGroupSelect(rule.upstream_group || "");
-        document.getElementById("inp-protocol-rule-protocols").value = (rule.protocols || []).join(", ");
+        selectedProtocols = {};
+        (rule.protocols || []).forEach(function (p) { selectedProtocols[p] = true; });
+        renderProtocolPicker();
         toggleProtocolRuleAction();
         openModal("protocol-rule-modal");
     };
@@ -3080,8 +3113,6 @@ if (!tg || !tg.initData) {
         const name = document.getElementById("inp-protocol-rule-name").value.trim();
         const action = document.getElementById("inp-protocol-rule-action").value;
         const upstreamGroup = document.getElementById("inp-protocol-rule-upstream-group").value.trim();
-        const protocolsRaw = document.getElementById("inp-protocol-rule-protocols").value.trim();
-
         if (!name) {
             haptic("notification", "error");
             return;
@@ -3092,7 +3123,7 @@ if (!tg || !tg.initData) {
             return;
         }
 
-        const protocols = protocolsRaw ? protocolsRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
+        const protocols = Object.keys(selectedProtocols);
         if (protocols.length === 0) {
             haptic("notification", "error");
             showToast("Add at least one protocol");

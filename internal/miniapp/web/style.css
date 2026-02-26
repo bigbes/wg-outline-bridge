@@ -1349,6 +1349,10 @@ body.is-admin .status-bar.admin-only {
     background: var(--dns-cyan);
     border-color: var(--dns-cyan);
 }
+.blocklist-item.routing.selected .blocklist-item-cb {
+    background: var(--routing-teal);
+    border-color: var(--routing-teal);
+}
 .blocklist-item.selected .blocklist-item-cb::after {
     content: "";
     position: absolute;
