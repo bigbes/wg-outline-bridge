@@ -1828,6 +1828,36 @@ func (s *Store) DeleteDNSRule(name string) (bool, error) {
 	return n > 0, nil
 }
 
+// UpdateDNSRule updates an existing DNS rule by name.
+func (s *Store) UpdateDNSRule(r config.DNSRuleConfig) error {
+	domainsJSON, err := json.Marshal(r.Domains)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal domains: %w", err)
+	}
+	listsJSON, err := json.Marshal(r.Lists)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal lists: %w", err)
+	}
+	peersJSON, err := json.Marshal(r.Peers)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal peers: %w", err)
+	}
+
+	res, err := s.db.Exec(
+		`UPDATE dns_rules SET action = ?, upstream = ?, domains_json = ?, lists_json = ?, peers_json = ?, updated_unix = unixepoch()
+		 WHERE name = ?`,
+		r.Action, r.Upstream, string(domainsJSON), string(listsJSON), string(peersJSON), r.Name,
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: update dns rule %q: %w", r.Name, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("statsdb: dns rule %q not found", r.Name)
+	}
+	return nil
+}
+
 // ImportDNSRules inserts DNS rules from a list, skipping names that already exist.
 // Rules are assigned incrementing priorities starting from the current max.
 func (s *Store) ImportDNSRules(rules []config.DNSRuleConfig) (int, error) {

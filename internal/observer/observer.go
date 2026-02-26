@@ -135,6 +135,7 @@ type Manager interface {
 	SetDNSEnabled(enabled bool) error
 	AddDNSRule(r config.DNSRuleConfig) error
 	DeleteDNSRule(name string) error
+	UpdateDNSRule(r config.DNSRuleConfig) error
 	AddRoutingCIDR(entry config.CIDREntry) error
 	DeleteRoutingCIDR(cidr string) error
 	AddIPRule(r config.IPRuleConfig) error

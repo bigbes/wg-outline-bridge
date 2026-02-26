@@ -1619,6 +1619,31 @@ func (b *Bridge) DeleteDNSRule(name string) error {
 	return nil
 }
 
+// UpdateDNSRule updates an existing DNS rule and hot-reloads the DNS server.
+func (b *Bridge) UpdateDNSRule(r config.DNSRuleConfig) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	if err := b.statsStore.UpdateDNSRule(r); err != nil {
+		return fmt.Errorf("updating dns rule: %w", err)
+	}
+
+	for i, existing := range b.cfg.DNS.Rules {
+		if existing.Name == r.Name {
+			b.cfg.DNS.Rules[i] = r
+			break
+		}
+	}
+	b.reloadDNSRules()
+
+	b.logger.Info("dns rule updated", "name", r.Name)
+	return nil
+}
+
 // SetDNSEnabled toggles DNS resolution rules at runtime.
 // When disabled, the DNS server keeps running but only forwards to the default upstream.
 func (b *Bridge) SetDNSEnabled(enabled bool) error {

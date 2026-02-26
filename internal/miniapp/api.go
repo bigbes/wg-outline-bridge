@@ -2214,12 +2214,18 @@ func (s *Server) handleAddDNSRule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"name": req.Name, "status": "ok"})
 }
 
-func (s *Server) handleDeleteDNSRule(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
+func (s *Server) handleDNSRulesItem(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodDelete:
+		s.handleDeleteDNSRule(w, r)
+	case http.MethodPut:
+		s.handleUpdateDNSRule(w, r)
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
 	}
+}
 
+func (s *Server) handleDeleteDNSRule(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/api/dns/rules/")
 	if name == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule name is required"})
@@ -2227,6 +2233,68 @@ func (s *Server) handleDeleteDNSRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.manager.DeleteDNSRule(name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleUpdateDNSRule(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/dns/rules/")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule name is required"})
+		return
+	}
+
+	var req struct {
+		Action   string   `json:"action"`
+		Upstream string   `json:"upstream"`
+		Domains  []string `json:"domains"`
+		Lists    []struct {
+			URL     string `json:"url"`
+			Format  string `json:"format"`
+			Refresh int    `json:"refresh"`
+		} `json:"lists"`
+		Peers []string `json:"peers"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.Action != "block" && req.Action != "upstream" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action must be 'block' or 'upstream'"})
+		return
+	}
+	if req.Action == "upstream" && req.Upstream == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "upstream is required for upstream action"})
+		return
+	}
+	if len(req.Domains) == 0 && len(req.Lists) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one domain or list is required"})
+		return
+	}
+
+	rule := config.DNSRuleConfig{
+		Name:     name,
+		Action:   req.Action,
+		Upstream: req.Upstream,
+		Domains:  req.Domains,
+		Peers:    req.Peers,
+	}
+	for _, l := range req.Lists {
+		format := l.Format
+		if format == "" {
+			format = "auto"
+		}
+		rule.Lists = append(rule.Lists, config.DNSListConfig{
+			URL:     l.URL,
+			Format:  format,
+			Refresh: l.Refresh,
+		})
+	}
+
+	if err := s.manager.UpdateDNSRule(rule); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

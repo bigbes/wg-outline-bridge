@@ -143,7 +143,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/dns", s.authMiddleware(adminOnly(s.handleDNSRoute)))
 	mux.HandleFunc("/api/dns/records", s.authMiddleware(adminOnly(s.handleDNSRecordsRoute)))
 	mux.HandleFunc("/api/dns/records/", s.authMiddleware(adminOnly(s.handleDNSRecordsRoute)))
-	mux.HandleFunc("/api/dns/rules/", s.authMiddleware(adminOnly(s.handleDeleteDNSRule)))
+	mux.HandleFunc("/api/dns/rules/", s.authMiddleware(adminOnly(s.handleDNSRulesItem)))
 	mux.HandleFunc("/api/dns/blocklists", s.authMiddleware(adminOnly(s.handleKnownBlocklists)))
 	mux.HandleFunc("/api/routing", s.authMiddleware(adminOnly(s.handleRoutingRoute)))
 	mux.HandleFunc("/api/routing/cidrs", s.authMiddleware(adminOnly(s.handleAddRoutingCIDR)))
