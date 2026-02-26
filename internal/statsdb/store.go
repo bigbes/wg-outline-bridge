@@ -273,6 +273,26 @@ CREATE TABLE IF NOT EXISTS routing_sni_rules (
   updated_unix INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
+CREATE TABLE IF NOT EXISTS routing_port_rules (
+  name TEXT PRIMARY KEY,
+  action TEXT NOT NULL,
+  upstream_group TEXT NOT NULL DEFAULT '',
+  ports_json TEXT NOT NULL DEFAULT '[]',
+  priority INTEGER NOT NULL DEFAULT 0,
+  created_unix INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_unix INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE TABLE IF NOT EXISTS routing_protocol_rules (
+  name TEXT PRIMARY KEY,
+  action TEXT NOT NULL,
+  upstream_group TEXT NOT NULL DEFAULT '',
+  protocols_json TEXT NOT NULL DEFAULT '[]',
+  priority INTEGER NOT NULL DEFAULT 0,
+  created_unix INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_unix INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
 CREATE TABLE IF NOT EXISTS db_seeds (
   table_name TEXT PRIMARY KEY,
   seeded_unix INTEGER NOT NULL DEFAULT (unixepoch())
@@ -2343,6 +2363,260 @@ func (s *Store) ImportSNIRules(rules []config.SNIRuleConfig) (int, error) {
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("statsdb: commit import sni rules: %w", err)
+	}
+	return count, nil
+}
+
+// ---------------------------------------------------------------------------
+// Routing Port Rules
+// ---------------------------------------------------------------------------
+
+// ListPortRules returns all port routing rules ordered by priority.
+func (s *Store) ListPortRules() ([]config.PortRuleConfig, error) {
+	rows, err := s.db.Query(
+		`SELECT name, action, upstream_group, ports_json
+		 FROM routing_port_rules ORDER BY priority ASC, created_unix ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list port rules: %w", err)
+	}
+	defer rows.Close()
+
+	var out []config.PortRuleConfig
+	for rows.Next() {
+		var r config.PortRuleConfig
+		var portsJSON string
+		if err := rows.Scan(&r.Name, &r.Action, &r.UpstreamGroup, &portsJSON); err != nil {
+			return nil, fmt.Errorf("statsdb: scan port rule: %w", err)
+		}
+		if portsJSON != "" && portsJSON != "[]" {
+			if err := json.Unmarshal([]byte(portsJSON), &r.Ports); err != nil {
+				return nil, fmt.Errorf("statsdb: unmarshal ports for %q: %w", r.Name, err)
+			}
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("statsdb: iterate port rules: %w", err)
+	}
+	return out, nil
+}
+
+// AddPortRule inserts a new port routing rule with the next available priority.
+func (s *Store) AddPortRule(r config.PortRuleConfig) error {
+	portsJSON, err := json.Marshal(r.Ports)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal ports: %w", err)
+	}
+
+	_, err = s.db.Exec(
+		`INSERT INTO routing_port_rules (name, action, upstream_group, ports_json, priority)
+		 VALUES (?, ?, ?, ?, COALESCE((SELECT MAX(priority) FROM routing_port_rules), -1) + 1)`,
+		r.Name, r.Action, r.UpstreamGroup, string(portsJSON),
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: add port rule %q: %w", r.Name, err)
+	}
+	return nil
+}
+
+// DeletePortRule deletes a port routing rule by name.
+func (s *Store) DeletePortRule(name string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM routing_port_rules WHERE name = ?`, name)
+	if err != nil {
+		return false, fmt.Errorf("statsdb: delete port rule %q: %w", name, err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// UpdatePortRule updates an existing port rule by name.
+func (s *Store) UpdatePortRule(r config.PortRuleConfig) error {
+	portsJSON, err := json.Marshal(r.Ports)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal ports: %w", err)
+	}
+
+	res, err := s.db.Exec(
+		`UPDATE routing_port_rules SET action = ?, upstream_group = ?, ports_json = ?, updated_unix = unixepoch()
+		 WHERE name = ?`,
+		r.Action, r.UpstreamGroup, string(portsJSON), r.Name,
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: update port rule %q: %w", r.Name, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("statsdb: port rule %q not found", r.Name)
+	}
+	return nil
+}
+
+// ImportPortRules inserts port routing rules from a list, skipping names that already exist.
+func (s *Store) ImportPortRules(rules []config.PortRuleConfig) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var maxPriority int
+	err = tx.QueryRow(`SELECT COALESCE(MAX(priority), -1) FROM routing_port_rules`).Scan(&maxPriority)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: get max priority: %w", err)
+	}
+
+	stmt, err := tx.Prepare(
+		`INSERT OR IGNORE INTO routing_port_rules (name, action, upstream_group, ports_json, priority)
+		 VALUES (?, ?, ?, ?, ?)`)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: prepare import port rules: %w", err)
+	}
+	defer stmt.Close()
+
+	var count int
+	for _, r := range rules {
+		portsJSON, err := json.Marshal(r.Ports)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: marshal ports for %q: %w", r.Name, err)
+		}
+		maxPriority++
+		res, err := stmt.Exec(r.Name, r.Action, r.UpstreamGroup, string(portsJSON), maxPriority)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: import port rule %q: %w", r.Name, err)
+		}
+		n, _ := res.RowsAffected()
+		count += int(n)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("statsdb: commit import port rules: %w", err)
+	}
+	return count, nil
+}
+
+// ---------------------------------------------------------------------------
+// Routing Protocol Rules
+// ---------------------------------------------------------------------------
+
+// ListProtocolRules returns all protocol routing rules ordered by priority.
+func (s *Store) ListProtocolRules() ([]config.ProtocolRuleConfig, error) {
+	rows, err := s.db.Query(
+		`SELECT name, action, upstream_group, protocols_json
+		 FROM routing_protocol_rules ORDER BY priority ASC, created_unix ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("statsdb: list protocol rules: %w", err)
+	}
+	defer rows.Close()
+
+	var out []config.ProtocolRuleConfig
+	for rows.Next() {
+		var r config.ProtocolRuleConfig
+		var protocolsJSON string
+		if err := rows.Scan(&r.Name, &r.Action, &r.UpstreamGroup, &protocolsJSON); err != nil {
+			return nil, fmt.Errorf("statsdb: scan protocol rule: %w", err)
+		}
+		if protocolsJSON != "" && protocolsJSON != "[]" {
+			if err := json.Unmarshal([]byte(protocolsJSON), &r.Protocols); err != nil {
+				return nil, fmt.Errorf("statsdb: unmarshal protocols for %q: %w", r.Name, err)
+			}
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("statsdb: iterate protocol rules: %w", err)
+	}
+	return out, nil
+}
+
+// AddProtocolRule inserts a new protocol routing rule with the next available priority.
+func (s *Store) AddProtocolRule(r config.ProtocolRuleConfig) error {
+	protocolsJSON, err := json.Marshal(r.Protocols)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal protocols: %w", err)
+	}
+
+	_, err = s.db.Exec(
+		`INSERT INTO routing_protocol_rules (name, action, upstream_group, protocols_json, priority)
+		 VALUES (?, ?, ?, ?, COALESCE((SELECT MAX(priority) FROM routing_protocol_rules), -1) + 1)`,
+		r.Name, r.Action, r.UpstreamGroup, string(protocolsJSON),
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: add protocol rule %q: %w", r.Name, err)
+	}
+	return nil
+}
+
+// DeleteProtocolRule deletes a protocol routing rule by name.
+func (s *Store) DeleteProtocolRule(name string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM routing_protocol_rules WHERE name = ?`, name)
+	if err != nil {
+		return false, fmt.Errorf("statsdb: delete protocol rule %q: %w", name, err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// UpdateProtocolRule updates an existing protocol rule by name.
+func (s *Store) UpdateProtocolRule(r config.ProtocolRuleConfig) error {
+	protocolsJSON, err := json.Marshal(r.Protocols)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal protocols: %w", err)
+	}
+
+	res, err := s.db.Exec(
+		`UPDATE routing_protocol_rules SET action = ?, upstream_group = ?, protocols_json = ?, updated_unix = unixepoch()
+		 WHERE name = ?`,
+		r.Action, r.UpstreamGroup, string(protocolsJSON), r.Name,
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: update protocol rule %q: %w", r.Name, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("statsdb: protocol rule %q not found", r.Name)
+	}
+	return nil
+}
+
+// ImportProtocolRules inserts protocol routing rules from a list, skipping names that already exist.
+func (s *Store) ImportProtocolRules(rules []config.ProtocolRuleConfig) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var maxPriority int
+	err = tx.QueryRow(`SELECT COALESCE(MAX(priority), -1) FROM routing_protocol_rules`).Scan(&maxPriority)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: get max priority: %w", err)
+	}
+
+	stmt, err := tx.Prepare(
+		`INSERT OR IGNORE INTO routing_protocol_rules (name, action, upstream_group, protocols_json, priority)
+		 VALUES (?, ?, ?, ?, ?)`)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: prepare import protocol rules: %w", err)
+	}
+	defer stmt.Close()
+
+	var count int
+	for _, r := range rules {
+		protocolsJSON, err := json.Marshal(r.Protocols)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: marshal protocols for %q: %w", r.Name, err)
+		}
+		maxPriority++
+		res, err := stmt.Exec(r.Name, r.Action, r.UpstreamGroup, string(protocolsJSON), maxPriority)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: import protocol rule %q: %w", r.Name, err)
+		}
+		n, _ := res.RowsAffected()
+		count += int(n)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("statsdb: commit import protocol rules: %w", err)
 	}
 	return count, nil
 }

@@ -99,6 +99,18 @@ func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest str
 	req := routing.Request{DestIP: destIP, DestPort: destPort}
 	dec, matched := p.router.RouteIP(req)
 
+	if !matched {
+		if portDec, ok := p.router.RoutePort(req); ok {
+			dec = portDec
+			matched = true
+		}
+	}
+
+	if matched && dec.Action == routing.ActionBlock {
+		p.logger.Info("udp: blocked by rule", "src", srcAddr, "dest", dest, "rule", dec.RuleName)
+		return
+	}
+
 	if !matched && p.peerResolver != nil {
 		if group := p.peerResolver.GroupFor(srcAddr); group != "" {
 			dec = routing.Decision{
@@ -125,16 +137,27 @@ func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest str
 	}
 	defer outConn.Close()
 
+	hasProtoRules := p.router.HasProtocolRules()
 	done := make(chan struct{}, 2)
 
 	go func() {
 		buf := make([]byte, 4096)
+		firstPacket := true
 		for {
 			clientConn.SetReadDeadline(time.Now().Add(udpSessionTimeout))
 			n, err := clientConn.Read(buf)
 			if err != nil {
 				p.logger.Debug("udp: client read done", "src", srcAddr, "dest", dest, "err", err)
 				break
+			}
+			if firstPacket && hasProtoRules {
+				firstPacket = false
+				if proto := routing.DetectUDPProtocol(buf[:n]); proto != "" {
+					if protoDec, ok := p.router.RouteProtocol(proto); ok && protoDec.Action == routing.ActionBlock {
+						p.logger.Info("udp: protocol blocked", "src", srcAddr, "dest", dest, "protocol", proto, "rule", protoDec.RuleName)
+						break
+					}
+				}
 			}
 			if _, err := outConn.Write(buf[:n]); err != nil {
 				p.logger.Error("udp: write to outline failed", "src", srcAddr, "dest", dest, "size", n, "err", err)

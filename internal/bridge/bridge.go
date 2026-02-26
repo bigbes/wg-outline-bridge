@@ -268,6 +268,38 @@ func (b *Bridge) Run(ctx context.Context) error {
 		}
 		b.cfg.Routing.SNIRules = dbSNIRules
 
+		// Seed config-file port rules into DB (only on first run), then use DB as source of truth.
+		if !store.IsSeeded("routing_port_rules") && len(b.cfg.Routing.PortRules) > 0 {
+			imported, err := store.ImportPortRules(b.cfg.Routing.PortRules)
+			if err != nil {
+				b.logger.Error("failed to import port rules to database", "err", err)
+			} else if imported > 0 {
+				b.logger.Info("imported file port rules to database", "count", imported)
+			}
+			store.MarkSeeded("routing_port_rules")
+		}
+		dbPortRules, err := store.ListPortRules()
+		if err != nil {
+			b.logger.Error("failed to list db port rules", "err", err)
+		}
+		b.cfg.Routing.PortRules = dbPortRules
+
+		// Seed config-file protocol rules into DB (only on first run), then use DB as source of truth.
+		if !store.IsSeeded("routing_protocol_rules") && len(b.cfg.Routing.ProtocolRules) > 0 {
+			imported, err := store.ImportProtocolRules(b.cfg.Routing.ProtocolRules)
+			if err != nil {
+				b.logger.Error("failed to import protocol rules to database", "err", err)
+			} else if imported > 0 {
+				b.logger.Info("imported file protocol rules to database", "count", imported)
+			}
+			store.MarkSeeded("routing_protocol_rules")
+		}
+		dbProtocolRules, err := store.ListProtocolRules()
+		if err != nil {
+			b.logger.Error("failed to list db protocol rules", "err", err)
+		}
+		b.cfg.Routing.ProtocolRules = dbProtocolRules
+
 		// Load persisted DNS enabled state from DB (overrides config file).
 		if dnsEnabled, ok := store.GetDNSEnabled(); ok {
 			b.cfg.DNS.Enabled = dnsEnabled
@@ -454,6 +486,14 @@ func (b *Bridge) ResetConfig() error {
 		b.statsStore.ImportSNIRules(fileCfg.Routing.SNIRules)
 	}
 	b.statsStore.MarkSeeded("routing_sni_rules")
+	if len(fileCfg.Routing.PortRules) > 0 {
+		b.statsStore.ImportPortRules(fileCfg.Routing.PortRules)
+	}
+	b.statsStore.MarkSeeded("routing_port_rules")
+	if len(fileCfg.Routing.ProtocolRules) > 0 {
+		b.statsStore.ImportProtocolRules(fileCfg.Routing.ProtocolRules)
+	}
+	b.statsStore.MarkSeeded("routing_protocol_rules")
 
 	// Reset means zero peers and zero secrets.
 	fileCfg.Peers = make(map[string]config.PeerConfig)
@@ -2141,6 +2181,154 @@ func (b *Bridge) UpdateSNIRule(r config.SNIRuleConfig) error {
 	}
 
 	b.logger.Info("sni rule updated", "name", r.Name)
+	return nil
+}
+
+func (b *Bridge) AddPortRule(r config.PortRuleConfig) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	for _, existing := range b.cfg.Routing.PortRules {
+		if existing.Name == r.Name {
+			return fmt.Errorf("port rule %q already exists", r.Name)
+		}
+	}
+
+	if err := b.statsStore.AddPortRule(r); err != nil {
+		return fmt.Errorf("saving port rule: %w", err)
+	}
+
+	b.cfg.Routing.PortRules = append(b.cfg.Routing.PortRules, r)
+	b.logger.Info("port rule added", "name", r.Name, "action", r.Action)
+	return nil
+}
+
+func (b *Bridge) DeletePortRule(name string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	found, err := b.statsStore.DeletePortRule(name)
+	if err != nil {
+		return fmt.Errorf("deleting port rule: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("port rule %q not found", name)
+	}
+
+	rules := make([]config.PortRuleConfig, 0, len(b.cfg.Routing.PortRules))
+	for _, r := range b.cfg.Routing.PortRules {
+		if r.Name != name {
+			rules = append(rules, r)
+		}
+	}
+	b.cfg.Routing.PortRules = rules
+
+	b.logger.Info("port rule deleted", "name", name)
+	return nil
+}
+
+func (b *Bridge) UpdatePortRule(r config.PortRuleConfig) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	if err := b.statsStore.UpdatePortRule(r); err != nil {
+		return fmt.Errorf("updating port rule: %w", err)
+	}
+
+	for i, existing := range b.cfg.Routing.PortRules {
+		if existing.Name == r.Name {
+			b.cfg.Routing.PortRules[i] = r
+			break
+		}
+	}
+
+	b.logger.Info("port rule updated", "name", r.Name)
+	return nil
+}
+
+func (b *Bridge) AddProtocolRule(r config.ProtocolRuleConfig) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	for _, existing := range b.cfg.Routing.ProtocolRules {
+		if existing.Name == r.Name {
+			return fmt.Errorf("protocol rule %q already exists", r.Name)
+		}
+	}
+
+	if err := b.statsStore.AddProtocolRule(r); err != nil {
+		return fmt.Errorf("saving protocol rule: %w", err)
+	}
+
+	b.cfg.Routing.ProtocolRules = append(b.cfg.Routing.ProtocolRules, r)
+	b.logger.Info("protocol rule added", "name", r.Name, "action", r.Action)
+	return nil
+}
+
+func (b *Bridge) DeleteProtocolRule(name string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	found, err := b.statsStore.DeleteProtocolRule(name)
+	if err != nil {
+		return fmt.Errorf("deleting protocol rule: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("protocol rule %q not found", name)
+	}
+
+	rules := make([]config.ProtocolRuleConfig, 0, len(b.cfg.Routing.ProtocolRules))
+	for _, r := range b.cfg.Routing.ProtocolRules {
+		if r.Name != name {
+			rules = append(rules, r)
+		}
+	}
+	b.cfg.Routing.ProtocolRules = rules
+
+	b.logger.Info("protocol rule deleted", "name", name)
+	return nil
+}
+
+func (b *Bridge) UpdateProtocolRule(r config.ProtocolRuleConfig) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	if err := b.statsStore.UpdateProtocolRule(r); err != nil {
+		return fmt.Errorf("updating protocol rule: %w", err)
+	}
+
+	for i, existing := range b.cfg.Routing.ProtocolRules {
+		if existing.Name == r.Name {
+			b.cfg.Routing.ProtocolRules[i] = r
+			break
+		}
+	}
+
+	b.logger.Info("protocol rule updated", "name", r.Name)
 	return nil
 }
 

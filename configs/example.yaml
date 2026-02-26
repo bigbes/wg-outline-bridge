@@ -208,3 +208,16 @@ upstreams:
 #       domains:
 #         - "*.ru"
 #         - "*.yandex.com"
+#
+#   port_rules:
+#     - name: "block-torrent-ports"
+#       action: block
+#       ports:
+#         - "6881-6889"          # default BitTorrent ports
+#         - "6969"               # common tracker port
+#
+#   protocol_rules:
+#     - name: "block-bittorrent"
+#       action: block
+#       protocols:
+#         - bittorrent           # detects BT handshake (TCP), DHT & tracker (UDP)

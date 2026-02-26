@@ -2336,10 +2336,12 @@ type geoipDBInfo struct {
 }
 
 type routingResponse struct {
-	CIDRs    []config.CIDREntry `json:"cidrs"`
-	IPRules  []ipRuleInfo       `json:"ip_rules"`
-	SNIRules []sniRuleInfo      `json:"sni_rules"`
-	GeoIPDBs []geoipDBInfo      `json:"geoip_dbs"`
+	CIDRs         []config.CIDREntry `json:"cidrs"`
+	IPRules       []ipRuleInfo       `json:"ip_rules"`
+	SNIRules      []sniRuleInfo      `json:"sni_rules"`
+	PortRules     []portRuleInfo     `json:"port_rules"`
+	ProtocolRules []protocolRuleInfo `json:"protocol_rules"`
+	GeoIPDBs      []geoipDBInfo      `json:"geoip_dbs"`
 }
 
 type ipRuleInfo struct {
@@ -2361,6 +2363,20 @@ type sniRuleInfo struct {
 	Action        string   `json:"action"`
 	UpstreamGroup string   `json:"upstream_group,omitempty"`
 	Domains       []string `json:"domains"`
+}
+
+type portRuleInfo struct {
+	Name          string   `json:"name"`
+	Action        string   `json:"action"`
+	UpstreamGroup string   `json:"upstream_group,omitempty"`
+	Ports         []string `json:"ports"`
+}
+
+type protocolRuleInfo struct {
+	Name          string   `json:"name"`
+	Action        string   `json:"action"`
+	UpstreamGroup string   `json:"upstream_group,omitempty"`
+	Protocols     []string `json:"protocols"`
 }
 
 func (s *Server) handleRoutingRoute(w http.ResponseWriter, r *http.Request) {
@@ -2425,6 +2441,38 @@ func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
 	}
 	if resp.SNIRules == nil {
 		resp.SNIRules = []sniRuleInfo{}
+	}
+
+	for _, rule := range routing.PortRules {
+		ri := portRuleInfo{
+			Name:          rule.Name,
+			Action:        rule.Action,
+			UpstreamGroup: rule.UpstreamGroup,
+			Ports:         rule.Ports,
+		}
+		if ri.Ports == nil {
+			ri.Ports = []string{}
+		}
+		resp.PortRules = append(resp.PortRules, ri)
+	}
+	if resp.PortRules == nil {
+		resp.PortRules = []portRuleInfo{}
+	}
+
+	for _, rule := range routing.ProtocolRules {
+		ri := protocolRuleInfo{
+			Name:          rule.Name,
+			Action:        rule.Action,
+			UpstreamGroup: rule.UpstreamGroup,
+			Protocols:     rule.Protocols,
+		}
+		if ri.Protocols == nil {
+			ri.Protocols = []string{}
+		}
+		resp.ProtocolRules = append(resp.ProtocolRules, ri)
+	}
+	if resp.ProtocolRules == nil {
+		resp.ProtocolRules = []protocolRuleInfo{}
 	}
 
 	for _, g := range cfg.GeoIP {
@@ -2792,6 +2840,242 @@ func (s *Server) handleUpdateSNIRule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.manager.UpdateSNIRule(rule); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleAddPortRule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Name          string   `json:"name"`
+		Action        string   `json:"action"`
+		UpstreamGroup string   `json:"upstream_group"`
+		Ports         []string `json:"ports"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
+	if req.Action != "direct" && req.Action != "upstream" && req.Action != "block" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action must be 'direct', 'upstream', or 'block'"})
+		return
+	}
+	if req.Action == "upstream" && req.UpstreamGroup == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "upstream_group is required for upstream action"})
+		return
+	}
+	if len(req.Ports) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one port or port range is required"})
+		return
+	}
+
+	rule := config.PortRuleConfig{
+		Name:          req.Name,
+		Action:        req.Action,
+		UpstreamGroup: req.UpstreamGroup,
+		Ports:         req.Ports,
+	}
+
+	if err := s.manager.AddPortRule(rule); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"name": req.Name, "status": "ok"})
+}
+
+func (s *Server) handlePortRulesItem(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodDelete:
+		s.handleDeletePortRule(w, r)
+	case http.MethodPut:
+		s.handleUpdatePortRule(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleDeletePortRule(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/routing/port-rules/")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule name is required"})
+		return
+	}
+
+	if err := s.manager.DeletePortRule(name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleUpdatePortRule(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/routing/port-rules/")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule name is required"})
+		return
+	}
+
+	var req struct {
+		Action        string   `json:"action"`
+		UpstreamGroup string   `json:"upstream_group"`
+		Ports         []string `json:"ports"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.Action != "direct" && req.Action != "upstream" && req.Action != "block" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action must be 'direct', 'upstream', or 'block'"})
+		return
+	}
+	if req.Action == "upstream" && req.UpstreamGroup == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "upstream_group is required for upstream action"})
+		return
+	}
+	if len(req.Ports) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one port or port range is required"})
+		return
+	}
+
+	rule := config.PortRuleConfig{
+		Name:          name,
+		Action:        req.Action,
+		UpstreamGroup: req.UpstreamGroup,
+		Ports:         req.Ports,
+	}
+
+	if err := s.manager.UpdatePortRule(rule); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleAddProtocolRule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Name          string   `json:"name"`
+		Action        string   `json:"action"`
+		UpstreamGroup string   `json:"upstream_group"`
+		Protocols     []string `json:"protocols"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
+	if req.Action != "direct" && req.Action != "upstream" && req.Action != "block" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action must be 'direct', 'upstream', or 'block'"})
+		return
+	}
+	if req.Action == "upstream" && req.UpstreamGroup == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "upstream_group is required for upstream action"})
+		return
+	}
+	if len(req.Protocols) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one protocol is required"})
+		return
+	}
+
+	rule := config.ProtocolRuleConfig{
+		Name:          req.Name,
+		Action:        req.Action,
+		UpstreamGroup: req.UpstreamGroup,
+		Protocols:     req.Protocols,
+	}
+
+	if err := s.manager.AddProtocolRule(rule); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"name": req.Name, "status": "ok"})
+}
+
+func (s *Server) handleProtocolRulesItem(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodDelete:
+		s.handleDeleteProtocolRule(w, r)
+	case http.MethodPut:
+		s.handleUpdateProtocolRule(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleDeleteProtocolRule(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/routing/protocol-rules/")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule name is required"})
+		return
+	}
+
+	if err := s.manager.DeleteProtocolRule(name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleUpdateProtocolRule(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/api/routing/protocol-rules/")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rule name is required"})
+		return
+	}
+
+	var req struct {
+		Action        string   `json:"action"`
+		UpstreamGroup string   `json:"upstream_group"`
+		Protocols     []string `json:"protocols"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.Action != "direct" && req.Action != "upstream" && req.Action != "block" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action must be 'direct', 'upstream', or 'block'"})
+		return
+	}
+	if req.Action == "upstream" && req.UpstreamGroup == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "upstream_group is required for upstream action"})
+		return
+	}
+	if len(req.Protocols) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "at least one protocol is required"})
+		return
+	}
+
+	rule := config.ProtocolRuleConfig{
+		Name:          name,
+		Action:        req.Action,
+		UpstreamGroup: req.UpstreamGroup,
+		Protocols:     req.Protocols,
+	}
+
+	if err := s.manager.UpdateProtocolRule(rule); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

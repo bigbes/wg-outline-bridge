@@ -84,9 +84,22 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 
 	dec, matched := p.router.RouteIP(req)
 
+	if !matched {
+		if portDec, ok := p.router.RoutePort(req); ok {
+			dec = portDec
+			matched = true
+		}
+	}
+
+	if matched && dec.Action == routing.ActionBlock {
+		p.logger.Info("tcp: blocked by rule", "src", srcAddr, "dest", dest, "rule", dec.RuleName)
+		return
+	}
+
 	var clientReader io.Reader = clientConn
+	var br *bufio.Reader
 	if !matched && destPort == 443 {
-		br := bufio.NewReaderSize(clientConn, 32*1024)
+		br = bufio.NewReaderSize(clientConn, 32*1024)
 		clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 		sni := PeekSNI(br)
 		clientConn.SetReadDeadline(time.Time{})
@@ -98,6 +111,31 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 			}
 		}
 		clientReader = br
+	}
+
+	if matched && dec.Action == routing.ActionBlock {
+		p.logger.Info("tcp: blocked by rule", "src", srcAddr, "dest", dest, "rule", dec.RuleName)
+		return
+	}
+
+	if p.router.HasProtocolRules() {
+		if br == nil {
+			br = bufio.NewReaderSize(clientConn, 32*1024)
+			clientReader = br
+		}
+		clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		peeked, _ := br.Peek(20)
+		clientConn.SetReadDeadline(time.Time{})
+		if proto := routing.DetectTCPProtocol(peeked); proto != "" {
+			if protoDec, ok := p.router.RouteProtocol(proto); ok {
+				dec = protoDec
+				matched = true
+				if dec.Action == routing.ActionBlock {
+					p.logger.Info("tcp: protocol blocked", "src", srcAddr, "dest", dest, "protocol", proto, "rule", dec.RuleName)
+					return
+				}
+			}
+		}
 	}
 
 	if !matched && p.peerResolver != nil {

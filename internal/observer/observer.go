@@ -143,6 +143,12 @@ type Manager interface {
 	AddSNIRule(r config.SNIRuleConfig) error
 	DeleteSNIRule(name string) error
 	UpdateSNIRule(r config.SNIRuleConfig) error
+	AddPortRule(r config.PortRuleConfig) error
+	DeletePortRule(name string) error
+	UpdatePortRule(r config.PortRuleConfig) error
+	AddProtocolRule(r config.ProtocolRuleConfig) error
+	DeleteProtocolRule(name string) error
+	UpdateProtocolRule(r config.ProtocolRuleConfig) error
 	ReorderRoutingCIDRs(cidrs []string) error
 	ReorderIPRules(names []string) error
 	UpdateRoutingCIDR(oldCIDR string, entry config.CIDREntry) error

@@ -552,12 +552,64 @@
                         />
                     </svg>
                 </div>
+                <div class="action-btn admin-only" onclick="openPortRuleModal()">
+                    <div class="action-icon-circle routing">
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                        >
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                    </div>
+                    <div class="action-text routing">Add Port Rule</div>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
+                    </svg>
+                </div>
+                <div class="action-btn admin-only" onclick="openProtocolRuleModal()">
+                    <div class="action-icon-circle routing">
+                        <svg
+                            width="20"
+                            height="20"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                        >
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                    </div>
+                    <div class="action-text routing">Add Protocol Rule</div>
+                    <svg class="chevron" viewBox="0 0 8 14">
+                        <path
+                            d="M1 1L7 7L1 13"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            fill="none"
+                        />
+                    </svg>
+                </div>
                 <h2 class="section-title">CIDRs</h2>
                 <div class="list-group" id="routing-cidr-list"></div>
                 <h2 class="section-title">IP Rules</h2>
                 <div class="list-group" id="routing-ip-rule-list"></div>
                 <h2 class="section-title">SNI Rules</h2>
                 <div class="list-group" id="routing-sni-rule-list"></div>
+                <h2 class="section-title">Port Rules</h2>
+                <div class="list-group" id="routing-port-rule-list"></div>
+                <h2 class="section-title">Protocol Rules</h2>
+                <div class="list-group" id="routing-protocol-rule-list"></div>
             </div>
 
             <!-- Page: Users -->
@@ -2125,6 +2177,132 @@
                         class="tg-input"
                         id="inp-sni-rule-domains"
                         placeholder="*.example.com, site.org"
+                    />
+                </div>
+            </div>
+        </div>
+
+        <!-- Port Rule Modal -->
+        <div
+            class="modal-backdrop"
+            id="port-rule-modal-backdrop"
+            onclick="closePortRuleModal()"
+        ></div>
+        <div class="modal-sheet" id="port-rule-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closePortRuleModal()">
+                    Cancel
+                </button>
+                <span class="modal-title" id="port-rule-modal-title"
+                    >Add Port Rule</span
+                >
+                <button class="modal-btn done routing" onclick="savePortRule()">
+                    Done
+                </button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">Rule Name</label>
+                    <input
+                        type="text"
+                        class="tg-input"
+                        id="inp-port-rule-name"
+                        placeholder="block-torrent-ports"
+                    />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Action</label>
+                    <select
+                        class="tg-input"
+                        id="inp-port-rule-action"
+                        onchange="togglePortRuleAction()"
+                    >
+                        <option value="block">Block</option>
+                        <option value="direct">Direct (bypass proxy)</option>
+                        <option value="upstream">Use Upstream Group</option>
+                    </select>
+                </div>
+                <div
+                    class="input-group"
+                    id="port-rule-upstream-group"
+                    style="display: none"
+                >
+                    <label class="input-label">Upstream Group</label>
+                    <select
+                        class="tg-input"
+                        id="inp-port-rule-upstream-group"
+                    ></select>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Ports (comma-separated, e.g. 6881, 6881-6889)</label>
+                    <input
+                        type="text"
+                        class="tg-input"
+                        id="inp-port-rule-ports"
+                        placeholder="6881-6889, 6969"
+                    />
+                </div>
+            </div>
+        </div>
+
+        <!-- Protocol Rule Modal -->
+        <div
+            class="modal-backdrop"
+            id="protocol-rule-modal-backdrop"
+            onclick="closeProtocolRuleModal()"
+        ></div>
+        <div class="modal-sheet" id="protocol-rule-modal-sheet">
+            <div class="modal-header">
+                <button class="modal-btn cancel" onclick="closeProtocolRuleModal()">
+                    Cancel
+                </button>
+                <span class="modal-title" id="protocol-rule-modal-title"
+                    >Add Protocol Rule</span
+                >
+                <button class="modal-btn done routing" onclick="saveProtocolRule()">
+                    Done
+                </button>
+            </div>
+            <div class="modal-content">
+                <div class="input-group">
+                    <label class="input-label">Rule Name</label>
+                    <input
+                        type="text"
+                        class="tg-input"
+                        id="inp-protocol-rule-name"
+                        placeholder="block-bittorrent"
+                    />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Action</label>
+                    <select
+                        class="tg-input"
+                        id="inp-protocol-rule-action"
+                        onchange="toggleProtocolRuleAction()"
+                    >
+                        <option value="block">Block</option>
+                        <option value="direct">Direct (bypass proxy)</option>
+                        <option value="upstream">Use Upstream Group</option>
+                    </select>
+                </div>
+                <div
+                    class="input-group"
+                    id="protocol-rule-upstream-group"
+                    style="display: none"
+                >
+                    <label class="input-label">Upstream Group</label>
+                    <select
+                        class="tg-input"
+                        id="inp-protocol-rule-upstream-group"
+                    ></select>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Protocols (comma-separated)</label>
+                    <input
+                        type="text"
+                        class="tg-input"
+                        id="inp-protocol-rule-protocols"
+                        placeholder="bittorrent"
                     />
                 </div>
             </div>

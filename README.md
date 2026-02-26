@@ -152,15 +152,17 @@ All upstream endpoints are defined in the `upstreams` array. Each entry has:
 
 ## Routing
 
-Traffic routing is decided per-connection with three levels:
+Traffic routing is decided per-connection with five levels:
 
 | Level | Scope | Description |
 |-------|-------|-------------|
 | **CIDR rules** | Client-side | Traffic never enters the WireGuard tunnel (handled via `AllowedIPs` in client config) |
-| **IP rules** | Server-side | Match destination IP against CIDR lists → `direct`, `outline`, or `default` |
-| **SNI rules** | Server-side | Match TLS SNI (port 443 only) against domain patterns → `direct`, `outline`, or `default` |
+| **IP rules** | Server-side | Match destination IP against CIDR lists → `direct`, `upstream`, `block`, or `default` |
+| **SNI rules** | Server-side | Match TLS SNI (port 443 only) against domain patterns → `direct`, `upstream`, `block`, or `default` |
+| **Port rules** | Server-side | Match destination port against port numbers/ranges → `direct`, `upstream`, `block`, or `default` |
+| **Protocol rules** | Server-side | Deep packet inspection to detect application protocols → `direct`, `upstream`, `block`, or `default` |
 
-Evaluation order: IP rules → SNI rules (TLS only) → default upstream.
+Evaluation order: IP rules → SNI rules (TLS only) → port rules → protocol rules → default upstream.
 
 ### CIDR Rules (Client AllowedIPs)
 
@@ -241,12 +243,43 @@ routing:
         - "*.example.com"
 ```
 
+### Port Rules
+
+Match destination port against single ports or port ranges. Useful for blocking traffic on known application ports.
+
+```yaml
+routing:
+  port_rules:
+    - name: "block-torrent-ports"
+      action: block
+      ports:
+        - "6881-6889"          # default BitTorrent ports
+        - "6969"               # common tracker port
+```
+
+### Protocol Rules
+
+Deep packet inspection to detect application-layer protocols. Currently supports `bittorrent` detection:
+
+- **TCP**: detects BitTorrent peer wire handshake (`\x13BitTorrent protocol`)
+- **UDP**: detects BitTorrent DHT messages (bencoded dictionaries) and UDP tracker protocol (BEP 15 magic number)
+
+```yaml
+routing:
+  protocol_rules:
+    - name: "block-bittorrent"
+      action: block
+      protocols:
+        - bittorrent
+```
+
 ### Routing Actions
 
 | Action | Description |
 |--------|-------------|
 | `direct` | Connect to destination directly, bypassing all proxies |
 | `upstream` | Route through a named upstream (specify `upstream_group: "group"`) |
+| `block` | Drop/reject the connection before dialing any upstream |
 | `default` | Use the default upstream (same as no rule matching) |
 
 ## Proxy Servers

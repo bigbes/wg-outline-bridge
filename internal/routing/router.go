@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -16,6 +17,7 @@ type ActionType string
 const (
 	ActionDirect   ActionType = "direct"
 	ActionUpstream ActionType = "upstream"
+	ActionBlock    ActionType = "block"
 	ActionDefault  ActionType = "default"
 )
 
@@ -50,11 +52,34 @@ type sniRule struct {
 	patterns []domainPattern
 }
 
+type portRange struct {
+	from uint16
+	to   uint16
+}
+
+func (pr portRange) contains(port uint16) bool {
+	return port >= pr.from && port <= pr.to
+}
+
+type portRule struct {
+	name   string
+	action Decision
+	ranges []portRange
+}
+
+type protocolRule struct {
+	name      string
+	action    Decision
+	protocols []string
+}
+
 type Router struct {
-	ipRules  []ipRule
-	sniRules []sniRule
-	logger   *slog.Logger
-	geoMgr   *geoip.Manager
+	ipRules       []ipRule
+	sniRules      []sniRule
+	portRules     []portRule
+	protocolRules []protocolRule
+	logger        *slog.Logger
+	geoMgr        *geoip.Manager
 
 	mu          sync.RWMutex
 	urlPrefixes map[string][]netip.Prefix
@@ -104,6 +129,31 @@ func NewRouter(cfg config.RoutingConfig, geoMgr *geoip.Manager, logger *slog.Log
 		r.sniRules = append(r.sniRules, sr)
 	}
 
+	for _, rule := range cfg.PortRules {
+		pr := portRule{
+			name:   rule.Name,
+			action: parseAction(portRuleAdapter(rule)),
+		}
+		for _, portSpec := range rule.Ports {
+			parsed, err := parsePortRange(portSpec)
+			if err != nil {
+				logger.Warn("routing: invalid port in rule", "rule", rule.Name, "port", portSpec, "err", err)
+				continue
+			}
+			pr.ranges = append(pr.ranges, parsed)
+		}
+		r.portRules = append(r.portRules, pr)
+	}
+
+	for _, rule := range cfg.ProtocolRules {
+		pr := protocolRule{
+			name:      rule.Name,
+			action:    parseAction(protocolRuleAdapter(rule)),
+			protocols: rule.Protocols,
+		}
+		r.protocolRules = append(r.protocolRules, pr)
+	}
+
 	return r
 }
 
@@ -125,6 +175,18 @@ func (a sniRuleAdapter) actionType() string    { return a.Action }
 func (a sniRuleAdapter) upstreamGroup() string { return a.UpstreamGroup }
 func (a sniRuleAdapter) ruleName() string      { return a.Name }
 
+type portRuleAdapter config.PortRuleConfig
+
+func (a portRuleAdapter) actionType() string    { return a.Action }
+func (a portRuleAdapter) upstreamGroup() string { return a.UpstreamGroup }
+func (a portRuleAdapter) ruleName() string      { return a.Name }
+
+type protocolRuleAdapter config.ProtocolRuleConfig
+
+func (a protocolRuleAdapter) actionType() string    { return a.Action }
+func (a protocolRuleAdapter) upstreamGroup() string { return a.UpstreamGroup }
+func (a protocolRuleAdapter) ruleName() string      { return a.Name }
+
 func parseAction(rule ruleConfig) Decision {
 	d := Decision{
 		RuleName: rule.ruleName(),
@@ -135,6 +197,8 @@ func parseAction(rule ruleConfig) Decision {
 	case ActionUpstream:
 		d.Action = ActionUpstream
 		d.UpstreamGroup = rule.upstreamGroup()
+	case ActionBlock:
+		d.Action = ActionBlock
 	default:
 		d.Action = ActionDefault
 	}
@@ -179,6 +243,57 @@ func (r *Router) RouteSNI(req Request) (Decision, bool) {
 		}
 	}
 	return Decision{}, false
+}
+
+// RoutePort checks port-based rules for the given request.
+func (r *Router) RoutePort(req Request) (Decision, bool) {
+	for i := range r.portRules {
+		rule := &r.portRules[i]
+		for _, pr := range rule.ranges {
+			if pr.contains(req.DestPort) {
+				return rule.action, true
+			}
+		}
+	}
+	return Decision{}, false
+}
+
+// RouteProtocol checks protocol-based rules for the given protocol identifier.
+func (r *Router) RouteProtocol(protocol string) (Decision, bool) {
+	for i := range r.protocolRules {
+		rule := &r.protocolRules[i]
+		for _, p := range rule.protocols {
+			if strings.EqualFold(p, protocol) {
+				return rule.action, true
+			}
+		}
+	}
+	return Decision{}, false
+}
+
+// HasProtocolRules returns true if any protocol rules are configured.
+func (r *Router) HasProtocolRules() bool {
+	return len(r.protocolRules) > 0
+}
+
+// parsePortRange parses a port spec like "6881" or "6881-6889".
+func parsePortRange(s string) (portRange, error) {
+	if from, to, ok := strings.Cut(s, "-"); ok {
+		fromPort, err := strconv.ParseUint(from, 10, 16)
+		if err != nil {
+			return portRange{}, fmt.Errorf("invalid port: %s", from)
+		}
+		toPort, err := strconv.ParseUint(to, 10, 16)
+		if err != nil {
+			return portRange{}, fmt.Errorf("invalid port: %s", to)
+		}
+		return portRange{from: uint16(fromPort), to: uint16(toPort)}, nil
+	}
+	port, err := strconv.ParseUint(s, 10, 16)
+	if err != nil {
+		return portRange{}, fmt.Errorf("invalid port: %s", s)
+	}
+	return portRange{from: uint16(port), to: uint16(port)}, nil
 }
 
 func (r *Router) UpdateIPList(key string, prefixes []netip.Prefix) {

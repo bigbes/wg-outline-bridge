@@ -118,9 +118,11 @@ type PeerConfig struct {
 }
 
 type RoutingConfig struct {
-	CIDRs    []CIDREntry     `yaml:"cidrs"`
-	IPRules  []IPRuleConfig  `yaml:"ip_rules"`
-	SNIRules []SNIRuleConfig `yaml:"sni_rules"`
+	CIDRs         []CIDREntry          `yaml:"cidrs"`
+	IPRules       []IPRuleConfig       `yaml:"ip_rules"`
+	SNIRules      []SNIRuleConfig      `yaml:"sni_rules"`
+	PortRules     []PortRuleConfig     `yaml:"port_rules"`
+	ProtocolRules []ProtocolRuleConfig `yaml:"protocol_rules"`
 }
 
 type IPRuleConfig struct {
@@ -142,6 +144,20 @@ type SNIRuleConfig struct {
 	Action        string   `yaml:"action"`
 	UpstreamGroup string   `yaml:"upstream_group"`
 	Domains       []string `yaml:"domains"`
+}
+
+type PortRuleConfig struct {
+	Name          string   `yaml:"name"`
+	Action        string   `yaml:"action"`
+	UpstreamGroup string   `yaml:"upstream_group"`
+	Ports         []string `yaml:"ports"` // single port "6881" or range "6881-6889"
+}
+
+type ProtocolRuleConfig struct {
+	Name          string   `yaml:"name"`
+	Action        string   `yaml:"action"`
+	UpstreamGroup string   `yaml:"upstream_group"`
+	Protocols     []string `yaml:"protocols"` // "bittorrent"
 }
 
 // UpstreamConfig describes a generic upstream endpoint.

@@ -78,6 +78,8 @@ if (!tg || !tg.initData) {
     let editingCIDR = null;
     let editingIPRuleName = null;
     let editingSNIRuleName = null;
+    let editingPortRuleName = null;
+    let editingProtocolRuleName = null;
     let knownBlocklists = null;
     let selectedBlocklists = {};
     let editingUpstreamName = null;
@@ -882,6 +884,68 @@ if (!tg || !tg.initData) {
                     (isAdmin() ? '<div class="item-action">' +
                         '<button class="action-icon-btn" onclick="openSNIRuleEditModal(\'' + escapedName + '\')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
                         '<button class="delete-btn" onclick="promptDelete(\'' + escapedName + '\',\'sni-rule\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>' +
+                    '</div>' : '') +
+                    '</div>';
+            }).join('');
+        }
+
+        // Port Rules
+        const portEl = document.getElementById("routing-port-rule-list");
+        const portRules = routingData.port_rules || [];
+        if (portRules.length === 0) {
+            portEl.innerHTML = '<div class="empty-state">No port rules</div>';
+        } else {
+            portEl.innerHTML = portRules.map(r => {
+                const actionBadge = r.action === 'block'
+                    ? '<span class="rule-type-badge block">Block</span>'
+                    : r.action === 'direct'
+                    ? '<span class="rule-type-badge block">Direct</span>'
+                    : '<span class="rule-type-badge upstream">Upstream</span>';
+                const portCount = (r.ports || []).length;
+                const info = [];
+                if (portCount > 0) info.push(portCount + ' port' + (portCount > 1 ? 's' : ''));
+                if (r.upstream_group) info.push('→ ' + r.upstream_group);
+                const escapedName = r.name.replace(/'/g, "\\'");
+                return '<div class="list-item">' +
+                    '<div class="item-icon routing-sni-rule"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>' +
+                    '<div class="item-content">' +
+                    '<div class="item-title">' + escapeHtml(r.name) + '</div>' +
+                    '<div class="item-subtitle">' + actionBadge + ' • ' + info.join(' • ') + '</div>' +
+                    '</div>' +
+                    (isAdmin() ? '<div class="item-action">' +
+                        '<button class="action-icon-btn" onclick="openPortRuleEditModal(\'' + escapedName + '\')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
+                        '<button class="delete-btn" onclick="promptDelete(\'' + escapedName + '\',\'port-rule\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>' +
+                    '</div>' : '') +
+                    '</div>';
+            }).join('');
+        }
+
+        // Protocol Rules
+        const protoEl = document.getElementById("routing-protocol-rule-list");
+        const protoRules = routingData.protocol_rules || [];
+        if (protoRules.length === 0) {
+            protoEl.innerHTML = '<div class="empty-state">No protocol rules</div>';
+        } else {
+            protoEl.innerHTML = protoRules.map(r => {
+                const actionBadge = r.action === 'block'
+                    ? '<span class="rule-type-badge block">Block</span>'
+                    : r.action === 'direct'
+                    ? '<span class="rule-type-badge block">Direct</span>'
+                    : '<span class="rule-type-badge upstream">Upstream</span>';
+                const protoCount = (r.protocols || []).length;
+                const info = [];
+                if (protoCount > 0) info.push(protoCount + ' protocol' + (protoCount > 1 ? 's' : ''));
+                if (r.upstream_group) info.push('→ ' + r.upstream_group);
+                const escapedName = r.name.replace(/'/g, "\\'");
+                return '<div class="list-item">' +
+                    '<div class="item-icon routing-sni-rule"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>' +
+                    '<div class="item-content">' +
+                    '<div class="item-title">' + escapeHtml(r.name) + '</div>' +
+                    '<div class="item-subtitle">' + actionBadge + ' • ' + info.join(' • ') + '</div>' +
+                    '</div>' +
+                    (isAdmin() ? '<div class="item-action">' +
+                        '<button class="action-icon-btn" onclick="openProtocolRuleEditModal(\'' + escapedName + '\')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
+                        '<button class="delete-btn" onclick="promptDelete(\'' + escapedName + '\',\'protocol-rule\')"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>' +
                     '</div>' : '') +
                     '</div>';
             }).join('');
@@ -2319,6 +2383,8 @@ if (!tg || !tg.initData) {
             "routing-cidr": "Are you sure you want to remove this CIDR?",
             "ip-rule": "Are you sure you want to remove this IP rule?",
             "sni-rule": "Are you sure you want to remove this SNI rule?",
+            "port-rule": "Are you sure you want to remove this port rule?",
+            "protocol-rule": "Are you sure you want to remove this protocol rule?",
             user: "Are you sure you want to remove this user?",
             secret: "Are you sure you want to remove this secret?",
             invite: "Are you sure you want to delete this invite link?",
@@ -2366,6 +2432,14 @@ if (!tg || !tg.initData) {
                     method: "DELETE",
                     path: "/api/routing/sni-rules/" + encodeURIComponent(id),
                 },
+                "port-rule": {
+                    method: "DELETE",
+                    path: "/api/routing/port-rules/" + encodeURIComponent(id),
+                },
+                "protocol-rule": {
+                    method: "DELETE",
+                    path: "/api/routing/protocol-rules/" + encodeURIComponent(id),
+                },
                 user: { method: "DELETE", path: "/api/users/" + id },
                 invite: { method: "DELETE", path: "/api/invites/" + encodeURIComponent(id) },
                 secret: {
@@ -2392,7 +2466,7 @@ if (!tg || !tg.initData) {
                 )
                     refresh();
                 if (type === "dns-record" || type === "dns-rule") refreshDNS();
-                if (type === "routing-cidr" || type === "ip-rule" || type === "sni-rule") refreshRouting();
+                if (type === "routing-cidr" || type === "ip-rule" || type === "sni-rule" || type === "port-rule" || type === "protocol-rule") refreshRouting();
                 if (type === "user") refreshUsers();
                 if (type === "invite") refreshUsers();
                 if ((type === "upstream" || type === "group") && groupsLoaded)
@@ -2854,6 +2928,206 @@ if (!tg || !tg.initData) {
                 haptic("notification", "success");
                 showToast('SNI rule "' + name + '" added');
                 closeSNIRuleModal();
+                refreshRouting();
+            });
+        }
+    };
+
+    // --- Routing: Port Rule Modal (create + edit) ---
+    function populatePortRuleGroupSelect(selected) {
+        const sel = document.getElementById('inp-port-rule-upstream-group');
+        const allGroups = [...new Set((statusData && statusData.upstreams || []).flatMap(u => u.groups || []))];
+        sel.innerHTML = '<option value="">— Select group —</option>' +
+            allGroups.map(g => '<option value="' + escapeHtml(g) + '"' +
+                (selected === g ? ' selected' : '') + '>' + escapeHtml(g) + '</option>'
+            ).join('');
+    }
+    window.openPortRuleModal = function () {
+        editingPortRuleName = null;
+        document.getElementById("port-rule-modal-title").textContent = "Add Port Rule";
+        document.getElementById("inp-port-rule-name").value = "";
+        document.getElementById("inp-port-rule-name").disabled = false;
+        document.getElementById("inp-port-rule-action").value = "block";
+        populatePortRuleGroupSelect("");
+        document.getElementById("inp-port-rule-ports").value = "";
+        togglePortRuleAction();
+        openModal("port-rule-modal");
+    };
+    window.openPortRuleEditModal = function (name) {
+        if (!routingData) return;
+        const rule = (routingData.port_rules || []).find(r => r.name === name);
+        if (!rule) return;
+        editingPortRuleName = name;
+        document.getElementById("port-rule-modal-title").textContent = "Edit Port Rule";
+        document.getElementById("inp-port-rule-name").value = name;
+        document.getElementById("inp-port-rule-name").disabled = true;
+        document.getElementById("inp-port-rule-action").value = rule.action;
+        populatePortRuleGroupSelect(rule.upstream_group || "");
+        document.getElementById("inp-port-rule-ports").value = (rule.ports || []).join(", ");
+        togglePortRuleAction();
+        openModal("port-rule-modal");
+    };
+    window.closePortRuleModal = function () {
+        closeModal("port-rule-modal");
+        editingPortRuleName = null;
+    };
+    window.togglePortRuleAction = function () {
+        const action = document.getElementById("inp-port-rule-action").value;
+        document.getElementById("port-rule-upstream-group").style.display =
+            action === "upstream" ? "" : "none";
+    };
+    window.savePortRule = function () {
+        const name = document.getElementById("inp-port-rule-name").value.trim();
+        const action = document.getElementById("inp-port-rule-action").value;
+        const upstreamGroup = document.getElementById("inp-port-rule-upstream-group").value.trim();
+        const portsRaw = document.getElementById("inp-port-rule-ports").value.trim();
+
+        if (!name) {
+            haptic("notification", "error");
+            return;
+        }
+        if (action === "upstream" && !upstreamGroup) {
+            haptic("notification", "error");
+            showToast("Upstream group required");
+            return;
+        }
+
+        const ports = portsRaw ? portsRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
+        if (ports.length === 0) {
+            haptic("notification", "error");
+            showToast("Add at least one port or port range");
+            return;
+        }
+
+        const body = {
+            name,
+            action,
+            upstream_group: action === "upstream" ? upstreamGroup : "",
+            ports,
+        };
+
+        if (editingPortRuleName) {
+            api("PUT", "/api/routing/port-rules/" + encodeURIComponent(editingPortRuleName), body).then(d => {
+                if (d.error) {
+                    haptic("notification", "error");
+                    showToast(d.error, true);
+                    return;
+                }
+                haptic("notification", "success");
+                showToast('Port rule "' + name + '" updated');
+                closePortRuleModal();
+                refreshRouting();
+            });
+        } else {
+            api("POST", "/api/routing/port-rules", body).then(d => {
+                if (d.error) {
+                    haptic("notification", "error");
+                    showToast(d.error, true);
+                    return;
+                }
+                haptic("notification", "success");
+                showToast('Port rule "' + name + '" added');
+                closePortRuleModal();
+                refreshRouting();
+            });
+        }
+    };
+
+    // --- Routing: Protocol Rule Modal (create + edit) ---
+    function populateProtocolRuleGroupSelect(selected) {
+        const sel = document.getElementById('inp-protocol-rule-upstream-group');
+        const allGroups = [...new Set((statusData && statusData.upstreams || []).flatMap(u => u.groups || []))];
+        sel.innerHTML = '<option value="">— Select group —</option>' +
+            allGroups.map(g => '<option value="' + escapeHtml(g) + '"' +
+                (selected === g ? ' selected' : '') + '>' + escapeHtml(g) + '</option>'
+            ).join('');
+    }
+    window.openProtocolRuleModal = function () {
+        editingProtocolRuleName = null;
+        document.getElementById("protocol-rule-modal-title").textContent = "Add Protocol Rule";
+        document.getElementById("inp-protocol-rule-name").value = "";
+        document.getElementById("inp-protocol-rule-name").disabled = false;
+        document.getElementById("inp-protocol-rule-action").value = "block";
+        populateProtocolRuleGroupSelect("");
+        document.getElementById("inp-protocol-rule-protocols").value = "";
+        toggleProtocolRuleAction();
+        openModal("protocol-rule-modal");
+    };
+    window.openProtocolRuleEditModal = function (name) {
+        if (!routingData) return;
+        const rule = (routingData.protocol_rules || []).find(r => r.name === name);
+        if (!rule) return;
+        editingProtocolRuleName = name;
+        document.getElementById("protocol-rule-modal-title").textContent = "Edit Protocol Rule";
+        document.getElementById("inp-protocol-rule-name").value = name;
+        document.getElementById("inp-protocol-rule-name").disabled = true;
+        document.getElementById("inp-protocol-rule-action").value = rule.action;
+        populateProtocolRuleGroupSelect(rule.upstream_group || "");
+        document.getElementById("inp-protocol-rule-protocols").value = (rule.protocols || []).join(", ");
+        toggleProtocolRuleAction();
+        openModal("protocol-rule-modal");
+    };
+    window.closeProtocolRuleModal = function () {
+        closeModal("protocol-rule-modal");
+        editingProtocolRuleName = null;
+    };
+    window.toggleProtocolRuleAction = function () {
+        const action = document.getElementById("inp-protocol-rule-action").value;
+        document.getElementById("protocol-rule-upstream-group").style.display =
+            action === "upstream" ? "" : "none";
+    };
+    window.saveProtocolRule = function () {
+        const name = document.getElementById("inp-protocol-rule-name").value.trim();
+        const action = document.getElementById("inp-protocol-rule-action").value;
+        const upstreamGroup = document.getElementById("inp-protocol-rule-upstream-group").value.trim();
+        const protocolsRaw = document.getElementById("inp-protocol-rule-protocols").value.trim();
+
+        if (!name) {
+            haptic("notification", "error");
+            return;
+        }
+        if (action === "upstream" && !upstreamGroup) {
+            haptic("notification", "error");
+            showToast("Upstream group required");
+            return;
+        }
+
+        const protocols = protocolsRaw ? protocolsRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
+        if (protocols.length === 0) {
+            haptic("notification", "error");
+            showToast("Add at least one protocol");
+            return;
+        }
+
+        const body = {
+            name,
+            action,
+            upstream_group: action === "upstream" ? upstreamGroup : "",
+            protocols,
+        };
+
+        if (editingProtocolRuleName) {
+            api("PUT", "/api/routing/protocol-rules/" + encodeURIComponent(editingProtocolRuleName), body).then(d => {
+                if (d.error) {
+                    haptic("notification", "error");
+                    showToast(d.error, true);
+                    return;
+                }
+                haptic("notification", "success");
+                showToast('Protocol rule "' + name + '" updated');
+                closeProtocolRuleModal();
+                refreshRouting();
+            });
+        } else {
+            api("POST", "/api/routing/protocol-rules", body).then(d => {
+                if (d.error) {
+                    haptic("notification", "error");
+                    showToast(d.error, true);
+                    return;
+                }
+                haptic("notification", "success");
+                showToast('Protocol rule "' + name + '" added');
+                closeProtocolRuleModal();
                 refreshRouting();
             });
         }
