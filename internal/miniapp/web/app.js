@@ -9,7 +9,7 @@ if (!tg || !tg.initData) {
 
     // --- Theme ---
     var THEME_KEY = 'theme-preference';
-    var THEMES = ['system', 'dark', 'light'];
+    var THEMES = ['system', 'light', 'dark'];
     var THEME_ICONS = {
         system: '<svg viewBox="0 0 24 24"><defs><clipPath id="ts"><path d="M24 0v24H0z"/></clipPath></defs><circle cx="12" cy="12" r="9" fill="#dedede"/><circle cx="12" cy="12" r="9" fill="#212121" clip-path="url(#ts)"/><circle cx="12" cy="12" r="9" fill="none" stroke="#888" stroke-width="1.5"/></svg>',
         dark: '<svg viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" fill="currentColor"/></svg>',
@@ -37,9 +37,8 @@ if (!tg || !tg.initData) {
     function updateThemeIcon(pref) {
         var btn = document.getElementById('theme-switcher');
         if (!btn) return;
-        var next = THEMES[(THEMES.indexOf(pref) + 1) % THEMES.length];
-        btn.innerHTML = THEME_ICONS[next];
-        btn.setAttribute('data-next', next);
+        btn.innerHTML = THEME_ICONS[pref];
+        btn.setAttribute('data-current', pref);
     }
 
     window.cycleTheme = function () {
