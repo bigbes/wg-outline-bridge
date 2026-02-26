@@ -341,6 +341,7 @@ func (s *Store) migrateSchema() error {
 		{"routing_sni_rules", "peers_json", `ALTER TABLE routing_sni_rules ADD COLUMN peers_json TEXT NOT NULL DEFAULT '[]'`},
 		{"routing_port_rules", "peers_json", `ALTER TABLE routing_port_rules ADD COLUMN peers_json TEXT NOT NULL DEFAULT '[]'`},
 		{"routing_protocol_rules", "peers_json", `ALTER TABLE routing_protocol_rules ADD COLUMN peers_json TEXT NOT NULL DEFAULT '[]'`},
+		{"daemon", "routing_enabled", `ALTER TABLE daemon ADD COLUMN routing_enabled INTEGER`},
 	}
 	for _, m := range migrations {
 		var count int
@@ -613,6 +614,34 @@ func (s *Store) SetDNSEnabled(enabled bool) error {
 func (s *Store) GetDNSEnabled() (bool, bool) {
 	var v sql.NullInt64
 	err := s.db.QueryRow(`SELECT dns_enabled FROM daemon WHERE id = 1`).Scan(&v)
+	if err != nil || !v.Valid {
+		return false, false
+	}
+	return v.Int64 != 0, true
+}
+
+// SetRoutingEnabled persists the routing enabled state (upsert into daemon row).
+func (s *Store) SetRoutingEnabled(enabled bool) error {
+	v := 0
+	if enabled {
+		v = 1
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO daemon (id, start_time_unix, routing_enabled) VALUES (1, 0, ?)
+		 ON CONFLICT(id) DO UPDATE SET routing_enabled = excluded.routing_enabled`,
+		v,
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: set routing_enabled: %w", err)
+	}
+	return nil
+}
+
+// GetRoutingEnabled returns the stored routing enabled state.
+// Returns (value, true) if stored, or (false, false) if not set.
+func (s *Store) GetRoutingEnabled() (bool, bool) {
+	var v sql.NullInt64
+	err := s.db.QueryRow(`SELECT routing_enabled FROM daemon WHERE id = 1`).Scan(&v)
 	if err != nil || !v.Valid {
 		return false, false
 	}

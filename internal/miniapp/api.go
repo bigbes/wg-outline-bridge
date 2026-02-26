@@ -2443,6 +2443,7 @@ type geoipDBInfo struct {
 }
 
 type routingResponse struct {
+	Enabled       bool               `json:"enabled"`
 	CIDRs         []config.CIDREntry `json:"cidrs"`
 	IPRules       []ipRuleInfo       `json:"ip_rules"`
 	SNIRules      []sniRuleInfo      `json:"sni_rules"`
@@ -2491,11 +2492,35 @@ type protocolRuleInfo struct {
 }
 
 func (s *Server) handleRoutingRoute(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleRouting(w, r)
+	case http.MethodPut:
+		s.handleUpdateRouting(w, r)
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleUpdateRouting(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	s.handleRouting(w, r)
+	if req.Enabled == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "enabled is required"})
+		return
+	}
+
+	if err := s.manager.SetRoutingEnabled(*req.Enabled); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
@@ -2503,7 +2528,8 @@ func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
 	routing := cfg.Routing
 
 	resp := routingResponse{
-		CIDRs: routing.CIDRs,
+		Enabled: routing.Enabled,
+		CIDRs:   routing.CIDRs,
 	}
 	if resp.CIDRs == nil {
 		resp.CIDRs = []config.CIDREntry{}

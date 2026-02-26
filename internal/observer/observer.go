@@ -156,6 +156,7 @@ type Manager interface {
 	ReorderIPRules(names []string) error
 	UpdateRoutingCIDR(oldCIDR string, entry config.CIDREntry) error
 	UpdateIPRule(r config.IPRuleConfig) error
+	SetRoutingEnabled(enabled bool) error
 	CreateGroup(name string) error
 	DeleteGroup(name string) error
 	ResetConfig() error

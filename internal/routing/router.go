@@ -88,6 +88,7 @@ type Router struct {
 	geoMgr        *geoip.Manager
 
 	mu          sync.RWMutex
+	enabled     bool
 	urlPrefixes map[string][]netip.Prefix
 }
 
@@ -95,6 +96,7 @@ func NewRouter(cfg config.RoutingConfig, geoMgr *geoip.Manager, logger *slog.Log
 	r := &Router{
 		logger:      logger,
 		geoMgr:      geoMgr,
+		enabled:     true,
 		urlPrefixes: make(map[string][]netip.Prefix),
 	}
 
@@ -232,9 +234,27 @@ func ruleAppliesToPeer(rulePeerIDs []int, peerID int, peerKnown bool) bool {
 	return false
 }
 
+// SetEnabled toggles whether routing rules are evaluated at runtime.
+func (r *Router) SetEnabled(enabled bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.enabled = enabled
+}
+
+// IsEnabled returns whether routing rules are currently active.
+func (r *Router) IsEnabled() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.enabled
+}
+
 func (r *Router) RouteIP(req Request) (Decision, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
+	if !r.enabled {
+		return Decision{}, false
+	}
 
 	for i := range r.ipRules {
 		rule := &r.ipRules[i]
@@ -264,6 +284,9 @@ func (r *Router) RouteIP(req Request) (Decision, bool) {
 }
 
 func (r *Router) RouteSNI(req Request) (Decision, bool) {
+	if !r.IsEnabled() {
+		return Decision{}, false
+	}
 	for i := range r.sniRules {
 		rule := &r.sniRules[i]
 		if !ruleAppliesToPeer(rule.peerIDs, req.PeerID, req.PeerKnown) {
@@ -280,6 +303,9 @@ func (r *Router) RouteSNI(req Request) (Decision, bool) {
 
 // RoutePort checks port-based rules for the given request.
 func (r *Router) RoutePort(req Request) (Decision, bool) {
+	if !r.IsEnabled() {
+		return Decision{}, false
+	}
 	for i := range r.portRules {
 		rule := &r.portRules[i]
 		if !ruleAppliesToPeer(rule.peerIDs, req.PeerID, req.PeerKnown) {
@@ -296,6 +322,9 @@ func (r *Router) RoutePort(req Request) (Decision, bool) {
 
 // RouteProtocol checks protocol-based rules for the given protocol identifier.
 func (r *Router) RouteProtocol(protocol string, peerID int, peerKnown bool) (Decision, bool) {
+	if !r.IsEnabled() {
+		return Decision{}, false
+	}
 	for i := range r.protocolRules {
 		rule := &r.protocolRules[i]
 		if !ruleAppliesToPeer(rule.peerIDs, peerID, peerKnown) {
@@ -310,8 +339,11 @@ func (r *Router) RouteProtocol(protocol string, peerID int, peerKnown bool) (Dec
 	return Decision{}, false
 }
 
-// HasProtocolRules returns true if any protocol rules are configured.
+// HasProtocolRules returns true if any protocol rules are configured and routing is enabled.
 func (r *Router) HasProtocolRules() bool {
+	if !r.IsEnabled() {
+		return false
+	}
 	return len(r.protocolRules) > 0
 }
 

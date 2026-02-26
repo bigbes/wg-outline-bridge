@@ -800,6 +800,19 @@ if (!tg || !tg.initData) {
     function renderRouting() {
         if (!routingData) return;
 
+        // Status
+        const badge = document.getElementById("routing-status-badge");
+        const text = document.getElementById("routing-status-text");
+        if (routingData.enabled) {
+            badge.textContent = "ON";
+            badge.className = "status-badge active";
+            text.textContent = "Routing rules active";
+        } else {
+            badge.textContent = "OFF";
+            badge.className = "status-badge inactive";
+            text.textContent = "Disabled";
+        }
+
         // CIDRs
         const cidrEl = document.getElementById("routing-cidr-list");
         const cidrs = routingData.cidrs || [];
@@ -1106,11 +1119,13 @@ if (!tg || !tg.initData) {
         haptic("impact");
         document.getElementById(id + "-backdrop").classList.add("open");
         document.getElementById(id + "-sheet").classList.add("open");
+        document.body.style.overflow = "hidden";
     }
 
     function closeModal(id) {
         document.getElementById(id + "-backdrop").classList.remove("open");
         document.getElementById(id + "-sheet").classList.remove("open");
+        document.body.style.overflow = "";
     }
 
     // --- Filter: Only Mine ---
@@ -2537,6 +2552,16 @@ if (!tg || !tg.initData) {
 
     document.getElementById("confirm-delete-btn").onclick = function () {
         if (deleteCallback) deleteCallback();
+    };
+
+    // --- Routing: Toggle Enabled ---
+    window.toggleRoutingEnabled = function () {
+        if (!isAdmin()) return;
+        var newState = !(routingData && routingData.enabled);
+        api("PUT", "/api/routing", { enabled: newState }).then(function () {
+            refreshRouting();
+            haptic("impact");
+        });
     };
 
     // --- Routing: CIDR Create Modal ---

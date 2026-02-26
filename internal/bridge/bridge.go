@@ -54,6 +54,7 @@ type Bridge struct {
 	mtSrv           *mtproxy2.Server
 	dnsSrv          *dns.Server
 	statsStore      *statsdb.Store
+	router          *routing.Router
 	proxySrvs       map[string]*proxyserver.Server
 }
 
@@ -307,6 +308,11 @@ func (b *Bridge) Run(ctx context.Context) error {
 		if dnsEnabled, ok := store.GetDNSEnabled(); ok {
 			b.cfg.DNS.Enabled = dnsEnabled
 		}
+
+		// Load persisted routing enabled state from DB (overrides config file).
+		if routingEnabled, ok := store.GetRoutingEnabled(); ok {
+			b.cfg.Routing.Enabled = routingEnabled
+		}
 	}
 
 	b.peerResolver.PopulateFromPeers(b.cfg.Peers)
@@ -329,6 +335,10 @@ func (b *Bridge) Run(ctx context.Context) error {
 	}
 
 	router := routing.NewRouter(b.cfg.Routing, geoMgr, b.logger)
+	if !b.cfg.Routing.Enabled {
+		router.SetEnabled(false)
+	}
+	b.router = router
 
 	downloader := routing.NewDownloader(b.upstreams.DefaultStreamDialer(), router, b.cfg.Routing, b.logger)
 	downloader.Start(ctx)
@@ -1799,6 +1809,26 @@ func (b *Bridge) SetDNSEnabled(enabled bool) error {
 	b.reloadDNSRules()
 
 	b.logger.Info("dns resolution toggled", "enabled", enabled)
+	return nil
+}
+
+// SetRoutingEnabled toggles realtime routing rules (IP, SNI, port, protocol) at runtime.
+func (b *Bridge) SetRoutingEnabled(enabled bool) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore != nil {
+		if err := b.statsStore.SetRoutingEnabled(enabled); err != nil {
+			return fmt.Errorf("persisting routing enabled state: %w", err)
+		}
+	}
+
+	b.cfg.Routing.Enabled = enabled
+	if b.router != nil {
+		b.router.SetEnabled(enabled)
+	}
+
+	b.logger.Info("routing rules toggled", "enabled", enabled)
 	return nil
 }
 
