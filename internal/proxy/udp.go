@@ -29,17 +29,18 @@ type DNSHandler interface {
 }
 
 type UDPProxy struct {
-	router       *routing.Router
-	dialers      *DialerSet
-	logger       *slog.Logger
-	tracker      *ConnTracker
-	dnsTarget    string // if set, intercept port-53 and relay to this address
-	dnsServer    DNSHandler
-	peerResolver *PeerUpstreamResolver
+	router           *routing.Router
+	dialers          *DialerSet
+	logger           *slog.Logger
+	tracker          *ConnTracker
+	dnsTarget        string // if set, intercept port-53 and relay to this address
+	dnsServer        DNSHandler
+	peerResolver     *PeerUpstreamResolver
+	peerNameResolver *PeerDNSNameResolver
 }
 
-func NewUDPProxy(router *routing.Router, dialers *DialerSet, tracker *ConnTracker, peerResolver *PeerUpstreamResolver, logger *slog.Logger) *UDPProxy {
-	return &UDPProxy{router: router, dialers: dialers, tracker: tracker, peerResolver: peerResolver, logger: logger}
+func NewUDPProxy(router *routing.Router, dialers *DialerSet, tracker *ConnTracker, peerResolver *PeerUpstreamResolver, peerNameResolver *PeerDNSNameResolver, logger *slog.Logger) *UDPProxy {
+	return &UDPProxy{router: router, dialers: dialers, tracker: tracker, peerResolver: peerResolver, peerNameResolver: peerNameResolver, logger: logger}
 }
 
 func (p *UDPProxy) SetDNSTarget(addr string) {
@@ -96,7 +97,13 @@ func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest str
 		}
 	}()
 
-	req := routing.Request{DestIP: destIP, DestPort: destPort}
+	// Resolve peer name for per-peer rule filtering.
+	peerName := ""
+	if srcAddr.IsValid() && p.peerNameResolver != nil {
+		peerName = p.peerNameResolver.NameFor(srcAddr)
+	}
+
+	req := routing.Request{DestIP: destIP, DestPort: destPort, PeerName: peerName}
 	dec, matched := p.router.RouteIP(req)
 
 	if !matched {
@@ -153,7 +160,7 @@ func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest str
 			if firstPacket && hasProtoRules {
 				firstPacket = false
 				if proto := routing.DetectUDPProtocol(buf[:n]); proto != "" {
-					if protoDec, ok := p.router.RouteProtocol(proto); ok && protoDec.Action == routing.ActionBlock {
+					if protoDec, ok := p.router.RouteProtocol(proto, peerName); ok && protoDec.Action == routing.ActionBlock {
 						p.logger.Info("udp: protocol blocked", "src", srcAddr, "dest", dest, "protocol", proto, "rule", protoDec.RuleName)
 						break
 					}

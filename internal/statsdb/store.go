@@ -337,6 +337,10 @@ func (s *Store) migrateSchema() error {
 		{"wg_peers", "exclude_private", `ALTER TABLE wg_peers ADD COLUMN exclude_private INTEGER NOT NULL DEFAULT 1`},
 		{"wg_peers", "exclude_server", `ALTER TABLE wg_peers ADD COLUMN exclude_server INTEGER NOT NULL DEFAULT 0`},
 		{"dns_rules", "peers_json", `ALTER TABLE dns_rules ADD COLUMN peers_json TEXT NOT NULL DEFAULT '[]'`},
+		{"routing_ip_rules", "peers_json", `ALTER TABLE routing_ip_rules ADD COLUMN peers_json TEXT NOT NULL DEFAULT '[]'`},
+		{"routing_sni_rules", "peers_json", `ALTER TABLE routing_sni_rules ADD COLUMN peers_json TEXT NOT NULL DEFAULT '[]'`},
+		{"routing_port_rules", "peers_json", `ALTER TABLE routing_port_rules ADD COLUMN peers_json TEXT NOT NULL DEFAULT '[]'`},
+		{"routing_protocol_rules", "peers_json", `ALTER TABLE routing_protocol_rules ADD COLUMN peers_json TEXT NOT NULL DEFAULT '[]'`},
 	}
 	for _, m := range migrations {
 		var count int
@@ -2063,7 +2067,7 @@ func (s *Store) UpdateRoutingCIDR(oldCIDR string, entry config.CIDREntry) error 
 // ListIPRules returns all IP routing rules ordered by priority.
 func (s *Store) ListIPRules() ([]config.IPRuleConfig, error) {
 	rows, err := s.db.Query(
-		`SELECT name, action, upstream_group, cidrs_json, asns_json, lists_json
+		`SELECT name, action, upstream_group, cidrs_json, asns_json, lists_json, peers_json
 		 FROM routing_ip_rules ORDER BY priority ASC, created_unix ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: list ip rules: %w", err)
@@ -2073,8 +2077,8 @@ func (s *Store) ListIPRules() ([]config.IPRuleConfig, error) {
 	var out []config.IPRuleConfig
 	for rows.Next() {
 		var r config.IPRuleConfig
-		var cidrsJSON, asnsJSON, listsJSON string
-		if err := rows.Scan(&r.Name, &r.Action, &r.UpstreamGroup, &cidrsJSON, &asnsJSON, &listsJSON); err != nil {
+		var cidrsJSON, asnsJSON, listsJSON, peersJSON string
+		if err := rows.Scan(&r.Name, &r.Action, &r.UpstreamGroup, &cidrsJSON, &asnsJSON, &listsJSON, &peersJSON); err != nil {
 			return nil, fmt.Errorf("statsdb: scan ip rule: %w", err)
 		}
 		if cidrsJSON != "" && cidrsJSON != "[]" {
@@ -2090,6 +2094,11 @@ func (s *Store) ListIPRules() ([]config.IPRuleConfig, error) {
 		if listsJSON != "" && listsJSON != "[]" {
 			if err := json.Unmarshal([]byte(listsJSON), &r.Lists); err != nil {
 				return nil, fmt.Errorf("statsdb: unmarshal lists for %q: %w", r.Name, err)
+			}
+		}
+		if peersJSON != "" && peersJSON != "[]" {
+			if err := json.Unmarshal([]byte(peersJSON), &r.Peers); err != nil {
+				return nil, fmt.Errorf("statsdb: unmarshal peers for %q: %w", r.Name, err)
 			}
 		}
 		out = append(out, r)
@@ -2114,11 +2123,15 @@ func (s *Store) AddIPRule(r config.IPRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal lists: %w", err)
 	}
+	peersJSON, err := json.Marshal(r.Peers)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal peers: %w", err)
+	}
 
 	_, err = s.db.Exec(
-		`INSERT INTO routing_ip_rules (name, action, upstream_group, cidrs_json, asns_json, lists_json, priority)
-		 VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT MAX(priority) FROM routing_ip_rules), -1) + 1)`,
-		r.Name, r.Action, r.UpstreamGroup, string(cidrsJSON), string(asnsJSON), string(listsJSON),
+		`INSERT INTO routing_ip_rules (name, action, upstream_group, cidrs_json, asns_json, lists_json, peers_json, priority)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT MAX(priority) FROM routing_ip_rules), -1) + 1)`,
+		r.Name, r.Action, r.UpstreamGroup, string(cidrsJSON), string(asnsJSON), string(listsJSON), string(peersJSON),
 	)
 	if err != nil {
 		return fmt.Errorf("statsdb: add ip rule %q: %w", r.Name, err)
@@ -2151,8 +2164,8 @@ func (s *Store) ImportIPRules(rules []config.IPRuleConfig) (int, error) {
 	}
 
 	stmt, err := tx.Prepare(
-		`INSERT OR IGNORE INTO routing_ip_rules (name, action, upstream_group, cidrs_json, asns_json, lists_json, priority)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`)
+		`INSERT OR IGNORE INTO routing_ip_rules (name, action, upstream_group, cidrs_json, asns_json, lists_json, peers_json, priority)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return 0, fmt.Errorf("statsdb: prepare import ip rules: %w", err)
 	}
@@ -2172,8 +2185,12 @@ func (s *Store) ImportIPRules(rules []config.IPRuleConfig) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: marshal lists for %q: %w", r.Name, err)
 		}
+		peersJSON, err := json.Marshal(r.Peers)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: marshal peers for %q: %w", r.Name, err)
+		}
 		maxPriority++
-		res, err := stmt.Exec(r.Name, r.Action, r.UpstreamGroup, string(cidrsJSON), string(asnsJSON), string(listsJSON), maxPriority)
+		res, err := stmt.Exec(r.Name, r.Action, r.UpstreamGroup, string(cidrsJSON), string(asnsJSON), string(listsJSON), string(peersJSON), maxPriority)
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: import ip rule %q: %w", r.Name, err)
 		}
@@ -2224,11 +2241,15 @@ func (s *Store) UpdateIPRule(r config.IPRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal lists: %w", err)
 	}
+	peersJSON, err := json.Marshal(r.Peers)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal peers: %w", err)
+	}
 
 	res, err := s.db.Exec(
-		`UPDATE routing_ip_rules SET action = ?, upstream_group = ?, cidrs_json = ?, asns_json = ?, lists_json = ?, updated_unix = unixepoch()
+		`UPDATE routing_ip_rules SET action = ?, upstream_group = ?, cidrs_json = ?, asns_json = ?, lists_json = ?, peers_json = ?, updated_unix = unixepoch()
 		 WHERE name = ?`,
-		r.Action, r.UpstreamGroup, string(cidrsJSON), string(asnsJSON), string(listsJSON), r.Name,
+		r.Action, r.UpstreamGroup, string(cidrsJSON), string(asnsJSON), string(listsJSON), string(peersJSON), r.Name,
 	)
 	if err != nil {
 		return fmt.Errorf("statsdb: update ip rule %q: %w", r.Name, err)
@@ -2247,7 +2268,7 @@ func (s *Store) UpdateIPRule(r config.IPRuleConfig) error {
 // ListSNIRules returns all SNI routing rules ordered by priority.
 func (s *Store) ListSNIRules() ([]config.SNIRuleConfig, error) {
 	rows, err := s.db.Query(
-		`SELECT name, action, upstream_group, domains_json
+		`SELECT name, action, upstream_group, domains_json, peers_json
 		 FROM routing_sni_rules ORDER BY priority ASC, created_unix ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: list sni rules: %w", err)
@@ -2257,13 +2278,18 @@ func (s *Store) ListSNIRules() ([]config.SNIRuleConfig, error) {
 	var out []config.SNIRuleConfig
 	for rows.Next() {
 		var r config.SNIRuleConfig
-		var domainsJSON string
-		if err := rows.Scan(&r.Name, &r.Action, &r.UpstreamGroup, &domainsJSON); err != nil {
+		var domainsJSON, peersJSON string
+		if err := rows.Scan(&r.Name, &r.Action, &r.UpstreamGroup, &domainsJSON, &peersJSON); err != nil {
 			return nil, fmt.Errorf("statsdb: scan sni rule: %w", err)
 		}
 		if domainsJSON != "" && domainsJSON != "[]" {
 			if err := json.Unmarshal([]byte(domainsJSON), &r.Domains); err != nil {
 				return nil, fmt.Errorf("statsdb: unmarshal domains for %q: %w", r.Name, err)
+			}
+		}
+		if peersJSON != "" && peersJSON != "[]" {
+			if err := json.Unmarshal([]byte(peersJSON), &r.Peers); err != nil {
+				return nil, fmt.Errorf("statsdb: unmarshal peers for %q: %w", r.Name, err)
 			}
 		}
 		out = append(out, r)
@@ -2280,11 +2306,15 @@ func (s *Store) AddSNIRule(r config.SNIRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal domains: %w", err)
 	}
+	peersJSON, err := json.Marshal(r.Peers)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal peers: %w", err)
+	}
 
 	_, err = s.db.Exec(
-		`INSERT INTO routing_sni_rules (name, action, upstream_group, domains_json, priority)
-		 VALUES (?, ?, ?, ?, COALESCE((SELECT MAX(priority) FROM routing_sni_rules), -1) + 1)`,
-		r.Name, r.Action, r.UpstreamGroup, string(domainsJSON),
+		`INSERT INTO routing_sni_rules (name, action, upstream_group, domains_json, peers_json, priority)
+		 VALUES (?, ?, ?, ?, ?, COALESCE((SELECT MAX(priority) FROM routing_sni_rules), -1) + 1)`,
+		r.Name, r.Action, r.UpstreamGroup, string(domainsJSON), string(peersJSON),
 	)
 	if err != nil {
 		return fmt.Errorf("statsdb: add sni rule %q: %w", r.Name, err)
@@ -2308,11 +2338,15 @@ func (s *Store) UpdateSNIRule(r config.SNIRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal domains: %w", err)
 	}
+	peersJSON, err := json.Marshal(r.Peers)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal peers: %w", err)
+	}
 
 	res, err := s.db.Exec(
-		`UPDATE routing_sni_rules SET action = ?, upstream_group = ?, domains_json = ?, updated_unix = unixepoch()
+		`UPDATE routing_sni_rules SET action = ?, upstream_group = ?, domains_json = ?, peers_json = ?, updated_unix = unixepoch()
 		 WHERE name = ?`,
-		r.Action, r.UpstreamGroup, string(domainsJSON), r.Name,
+		r.Action, r.UpstreamGroup, string(domainsJSON), string(peersJSON), r.Name,
 	)
 	if err != nil {
 		return fmt.Errorf("statsdb: update sni rule %q: %w", r.Name, err)
@@ -2339,8 +2373,8 @@ func (s *Store) ImportSNIRules(rules []config.SNIRuleConfig) (int, error) {
 	}
 
 	stmt, err := tx.Prepare(
-		`INSERT OR IGNORE INTO routing_sni_rules (name, action, upstream_group, domains_json, priority)
-		 VALUES (?, ?, ?, ?, ?)`)
+		`INSERT OR IGNORE INTO routing_sni_rules (name, action, upstream_group, domains_json, peers_json, priority)
+		 VALUES (?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return 0, fmt.Errorf("statsdb: prepare import sni rules: %w", err)
 	}
@@ -2352,8 +2386,12 @@ func (s *Store) ImportSNIRules(rules []config.SNIRuleConfig) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: marshal domains for %q: %w", r.Name, err)
 		}
+		peersJSON, err := json.Marshal(r.Peers)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: marshal peers for %q: %w", r.Name, err)
+		}
 		maxPriority++
-		res, err := stmt.Exec(r.Name, r.Action, r.UpstreamGroup, string(domainsJSON), maxPriority)
+		res, err := stmt.Exec(r.Name, r.Action, r.UpstreamGroup, string(domainsJSON), string(peersJSON), maxPriority)
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: import sni rule %q: %w", r.Name, err)
 		}
@@ -2374,7 +2412,7 @@ func (s *Store) ImportSNIRules(rules []config.SNIRuleConfig) (int, error) {
 // ListPortRules returns all port routing rules ordered by priority.
 func (s *Store) ListPortRules() ([]config.PortRuleConfig, error) {
 	rows, err := s.db.Query(
-		`SELECT name, action, upstream_group, ports_json
+		`SELECT name, action, upstream_group, ports_json, peers_json
 		 FROM routing_port_rules ORDER BY priority ASC, created_unix ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: list port rules: %w", err)
@@ -2384,13 +2422,18 @@ func (s *Store) ListPortRules() ([]config.PortRuleConfig, error) {
 	var out []config.PortRuleConfig
 	for rows.Next() {
 		var r config.PortRuleConfig
-		var portsJSON string
-		if err := rows.Scan(&r.Name, &r.Action, &r.UpstreamGroup, &portsJSON); err != nil {
+		var portsJSON, peersJSON string
+		if err := rows.Scan(&r.Name, &r.Action, &r.UpstreamGroup, &portsJSON, &peersJSON); err != nil {
 			return nil, fmt.Errorf("statsdb: scan port rule: %w", err)
 		}
 		if portsJSON != "" && portsJSON != "[]" {
 			if err := json.Unmarshal([]byte(portsJSON), &r.Ports); err != nil {
 				return nil, fmt.Errorf("statsdb: unmarshal ports for %q: %w", r.Name, err)
+			}
+		}
+		if peersJSON != "" && peersJSON != "[]" {
+			if err := json.Unmarshal([]byte(peersJSON), &r.Peers); err != nil {
+				return nil, fmt.Errorf("statsdb: unmarshal peers for %q: %w", r.Name, err)
 			}
 		}
 		out = append(out, r)
@@ -2407,11 +2450,15 @@ func (s *Store) AddPortRule(r config.PortRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal ports: %w", err)
 	}
+	peersJSON, err := json.Marshal(r.Peers)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal peers: %w", err)
+	}
 
 	_, err = s.db.Exec(
-		`INSERT INTO routing_port_rules (name, action, upstream_group, ports_json, priority)
-		 VALUES (?, ?, ?, ?, COALESCE((SELECT MAX(priority) FROM routing_port_rules), -1) + 1)`,
-		r.Name, r.Action, r.UpstreamGroup, string(portsJSON),
+		`INSERT INTO routing_port_rules (name, action, upstream_group, ports_json, peers_json, priority)
+		 VALUES (?, ?, ?, ?, ?, COALESCE((SELECT MAX(priority) FROM routing_port_rules), -1) + 1)`,
+		r.Name, r.Action, r.UpstreamGroup, string(portsJSON), string(peersJSON),
 	)
 	if err != nil {
 		return fmt.Errorf("statsdb: add port rule %q: %w", r.Name, err)
@@ -2435,11 +2482,15 @@ func (s *Store) UpdatePortRule(r config.PortRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal ports: %w", err)
 	}
+	peersJSON, err := json.Marshal(r.Peers)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal peers: %w", err)
+	}
 
 	res, err := s.db.Exec(
-		`UPDATE routing_port_rules SET action = ?, upstream_group = ?, ports_json = ?, updated_unix = unixepoch()
+		`UPDATE routing_port_rules SET action = ?, upstream_group = ?, ports_json = ?, peers_json = ?, updated_unix = unixepoch()
 		 WHERE name = ?`,
-		r.Action, r.UpstreamGroup, string(portsJSON), r.Name,
+		r.Action, r.UpstreamGroup, string(portsJSON), string(peersJSON), r.Name,
 	)
 	if err != nil {
 		return fmt.Errorf("statsdb: update port rule %q: %w", r.Name, err)
@@ -2466,8 +2517,8 @@ func (s *Store) ImportPortRules(rules []config.PortRuleConfig) (int, error) {
 	}
 
 	stmt, err := tx.Prepare(
-		`INSERT OR IGNORE INTO routing_port_rules (name, action, upstream_group, ports_json, priority)
-		 VALUES (?, ?, ?, ?, ?)`)
+		`INSERT OR IGNORE INTO routing_port_rules (name, action, upstream_group, ports_json, peers_json, priority)
+		 VALUES (?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return 0, fmt.Errorf("statsdb: prepare import port rules: %w", err)
 	}
@@ -2479,8 +2530,12 @@ func (s *Store) ImportPortRules(rules []config.PortRuleConfig) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: marshal ports for %q: %w", r.Name, err)
 		}
+		peersJSON, err := json.Marshal(r.Peers)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: marshal peers for %q: %w", r.Name, err)
+		}
 		maxPriority++
-		res, err := stmt.Exec(r.Name, r.Action, r.UpstreamGroup, string(portsJSON), maxPriority)
+		res, err := stmt.Exec(r.Name, r.Action, r.UpstreamGroup, string(portsJSON), string(peersJSON), maxPriority)
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: import port rule %q: %w", r.Name, err)
 		}
@@ -2501,7 +2556,7 @@ func (s *Store) ImportPortRules(rules []config.PortRuleConfig) (int, error) {
 // ListProtocolRules returns all protocol routing rules ordered by priority.
 func (s *Store) ListProtocolRules() ([]config.ProtocolRuleConfig, error) {
 	rows, err := s.db.Query(
-		`SELECT name, action, upstream_group, protocols_json
+		`SELECT name, action, upstream_group, protocols_json, peers_json
 		 FROM routing_protocol_rules ORDER BY priority ASC, created_unix ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: list protocol rules: %w", err)
@@ -2511,13 +2566,18 @@ func (s *Store) ListProtocolRules() ([]config.ProtocolRuleConfig, error) {
 	var out []config.ProtocolRuleConfig
 	for rows.Next() {
 		var r config.ProtocolRuleConfig
-		var protocolsJSON string
-		if err := rows.Scan(&r.Name, &r.Action, &r.UpstreamGroup, &protocolsJSON); err != nil {
+		var protocolsJSON, peersJSON string
+		if err := rows.Scan(&r.Name, &r.Action, &r.UpstreamGroup, &protocolsJSON, &peersJSON); err != nil {
 			return nil, fmt.Errorf("statsdb: scan protocol rule: %w", err)
 		}
 		if protocolsJSON != "" && protocolsJSON != "[]" {
 			if err := json.Unmarshal([]byte(protocolsJSON), &r.Protocols); err != nil {
 				return nil, fmt.Errorf("statsdb: unmarshal protocols for %q: %w", r.Name, err)
+			}
+		}
+		if peersJSON != "" && peersJSON != "[]" {
+			if err := json.Unmarshal([]byte(peersJSON), &r.Peers); err != nil {
+				return nil, fmt.Errorf("statsdb: unmarshal peers for %q: %w", r.Name, err)
 			}
 		}
 		out = append(out, r)
@@ -2534,11 +2594,15 @@ func (s *Store) AddProtocolRule(r config.ProtocolRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal protocols: %w", err)
 	}
+	peersJSON, err := json.Marshal(r.Peers)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal peers: %w", err)
+	}
 
 	_, err = s.db.Exec(
-		`INSERT INTO routing_protocol_rules (name, action, upstream_group, protocols_json, priority)
-		 VALUES (?, ?, ?, ?, COALESCE((SELECT MAX(priority) FROM routing_protocol_rules), -1) + 1)`,
-		r.Name, r.Action, r.UpstreamGroup, string(protocolsJSON),
+		`INSERT INTO routing_protocol_rules (name, action, upstream_group, protocols_json, peers_json, priority)
+		 VALUES (?, ?, ?, ?, ?, COALESCE((SELECT MAX(priority) FROM routing_protocol_rules), -1) + 1)`,
+		r.Name, r.Action, r.UpstreamGroup, string(protocolsJSON), string(peersJSON),
 	)
 	if err != nil {
 		return fmt.Errorf("statsdb: add protocol rule %q: %w", r.Name, err)
@@ -2562,11 +2626,15 @@ func (s *Store) UpdateProtocolRule(r config.ProtocolRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal protocols: %w", err)
 	}
+	peersJSON, err := json.Marshal(r.Peers)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal peers: %w", err)
+	}
 
 	res, err := s.db.Exec(
-		`UPDATE routing_protocol_rules SET action = ?, upstream_group = ?, protocols_json = ?, updated_unix = unixepoch()
+		`UPDATE routing_protocol_rules SET action = ?, upstream_group = ?, protocols_json = ?, peers_json = ?, updated_unix = unixepoch()
 		 WHERE name = ?`,
-		r.Action, r.UpstreamGroup, string(protocolsJSON), r.Name,
+		r.Action, r.UpstreamGroup, string(protocolsJSON), string(peersJSON), r.Name,
 	)
 	if err != nil {
 		return fmt.Errorf("statsdb: update protocol rule %q: %w", r.Name, err)
@@ -2593,8 +2661,8 @@ func (s *Store) ImportProtocolRules(rules []config.ProtocolRuleConfig) (int, err
 	}
 
 	stmt, err := tx.Prepare(
-		`INSERT OR IGNORE INTO routing_protocol_rules (name, action, upstream_group, protocols_json, priority)
-		 VALUES (?, ?, ?, ?, ?)`)
+		`INSERT OR IGNORE INTO routing_protocol_rules (name, action, upstream_group, protocols_json, peers_json, priority)
+		 VALUES (?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return 0, fmt.Errorf("statsdb: prepare import protocol rules: %w", err)
 	}
@@ -2606,8 +2674,12 @@ func (s *Store) ImportProtocolRules(rules []config.ProtocolRuleConfig) (int, err
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: marshal protocols for %q: %w", r.Name, err)
 		}
+		peersJSON, err := json.Marshal(r.Peers)
+		if err != nil {
+			return 0, fmt.Errorf("statsdb: marshal peers for %q: %w", r.Name, err)
+		}
 		maxPriority++
-		res, err := stmt.Exec(r.Name, r.Action, r.UpstreamGroup, string(protocolsJSON), maxPriority)
+		res, err := stmt.Exec(r.Name, r.Action, r.UpstreamGroup, string(protocolsJSON), string(peersJSON), maxPriority)
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: import protocol rule %q: %w", r.Name, err)
 		}

@@ -31,6 +31,7 @@ type Request struct {
 	DestIP   netip.Addr
 	DestPort uint16
 	SNI      string
+	PeerName string // source peer name, for per-peer rule filtering
 }
 
 type geoipMatch struct {
@@ -44,12 +45,14 @@ type ipRule struct {
 	prefixes     []netip.Prefix
 	listKeys     []string // URL keys and "asn:<number>" keys into urlPrefixes
 	geoipMatches []geoipMatch
+	peers        []string // if set, rule applies only to these peers; empty = all
 }
 
 type sniRule struct {
 	name     string
 	action   Decision
 	patterns []domainPattern
+	peers    []string
 }
 
 type portRange struct {
@@ -65,12 +68,14 @@ type portRule struct {
 	name   string
 	action Decision
 	ranges []portRange
+	peers  []string
 }
 
 type protocolRule struct {
 	name      string
 	action    Decision
 	protocols []string
+	peers     []string
 }
 
 type Router struct {
@@ -96,6 +101,7 @@ func NewRouter(cfg config.RoutingConfig, geoMgr *geoip.Manager, logger *slog.Log
 		ir := ipRule{
 			name:   rule.Name,
 			action: parseAction(ipRuleAdapter(rule)),
+			peers:  rule.Peers,
 		}
 		for _, cidr := range rule.CIDRs {
 			if rest, ok := strings.CutPrefix(cidr, "geoip:"); ok {
@@ -122,6 +128,7 @@ func NewRouter(cfg config.RoutingConfig, geoMgr *geoip.Manager, logger *slog.Log
 		sr := sniRule{
 			name:   rule.Name,
 			action: parseAction(sniRuleAdapter(rule)),
+			peers:  rule.Peers,
 		}
 		for _, domain := range rule.Domains {
 			sr.patterns = append(sr.patterns, parseDomainPattern(domain))
@@ -133,6 +140,7 @@ func NewRouter(cfg config.RoutingConfig, geoMgr *geoip.Manager, logger *slog.Log
 		pr := portRule{
 			name:   rule.Name,
 			action: parseAction(portRuleAdapter(rule)),
+			peers:  rule.Peers,
 		}
 		for _, portSpec := range rule.Ports {
 			parsed, err := parsePortRange(portSpec)
@@ -150,6 +158,7 @@ func NewRouter(cfg config.RoutingConfig, geoMgr *geoip.Manager, logger *slog.Log
 			name:      rule.Name,
 			action:    parseAction(protocolRuleAdapter(rule)),
 			protocols: rule.Protocols,
+			peers:     rule.Peers,
 		}
 		r.protocolRules = append(r.protocolRules, pr)
 	}
@@ -205,12 +214,32 @@ func parseAction(rule ruleConfig) Decision {
 	return d
 }
 
+// ruleAppliesToPeer returns true if the rule should be evaluated for the given peer.
+// If the rule has no peer restrictions, it applies to all peers.
+func ruleAppliesToPeer(rulePeers []string, peerName string) bool {
+	if len(rulePeers) == 0 {
+		return true
+	}
+	if peerName == "" {
+		return false
+	}
+	for _, p := range rulePeers {
+		if p == peerName {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Router) RouteIP(req Request) (Decision, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	for i := range r.ipRules {
 		rule := &r.ipRules[i]
+		if !ruleAppliesToPeer(rule.peers, req.PeerName) {
+			continue
+		}
 		for _, prefix := range rule.prefixes {
 			if prefix.Contains(req.DestIP) {
 				return rule.action, true
@@ -236,6 +265,9 @@ func (r *Router) RouteIP(req Request) (Decision, bool) {
 func (r *Router) RouteSNI(req Request) (Decision, bool) {
 	for i := range r.sniRules {
 		rule := &r.sniRules[i]
+		if !ruleAppliesToPeer(rule.peers, req.PeerName) {
+			continue
+		}
 		for _, pattern := range rule.patterns {
 			if pattern.matches(req.SNI) {
 				return rule.action, true
@@ -249,6 +281,9 @@ func (r *Router) RouteSNI(req Request) (Decision, bool) {
 func (r *Router) RoutePort(req Request) (Decision, bool) {
 	for i := range r.portRules {
 		rule := &r.portRules[i]
+		if !ruleAppliesToPeer(rule.peers, req.PeerName) {
+			continue
+		}
 		for _, pr := range rule.ranges {
 			if pr.contains(req.DestPort) {
 				return rule.action, true
@@ -259,9 +294,12 @@ func (r *Router) RoutePort(req Request) (Decision, bool) {
 }
 
 // RouteProtocol checks protocol-based rules for the given protocol identifier.
-func (r *Router) RouteProtocol(protocol string) (Decision, bool) {
+func (r *Router) RouteProtocol(protocol string, peerName string) (Decision, bool) {
 	for i := range r.protocolRules {
 		rule := &r.protocolRules[i]
+		if !ruleAppliesToPeer(rule.peers, peerName) {
+			continue
+		}
 		for _, p := range rule.protocols {
 			if strings.EqualFold(p, protocol) {
 				return rule.action, true

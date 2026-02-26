@@ -2351,6 +2351,7 @@ type ipRuleInfo struct {
 	CIDRs         []string     `json:"cidrs"`
 	ASNs          []int        `json:"asns"`
 	Lists         []ipListInfo `json:"lists"`
+	Peers         []string     `json:"peers"`
 }
 
 type ipListInfo struct {
@@ -2363,6 +2364,7 @@ type sniRuleInfo struct {
 	Action        string   `json:"action"`
 	UpstreamGroup string   `json:"upstream_group,omitempty"`
 	Domains       []string `json:"domains"`
+	Peers         []string `json:"peers"`
 }
 
 type portRuleInfo struct {
@@ -2370,6 +2372,7 @@ type portRuleInfo struct {
 	Action        string   `json:"action"`
 	UpstreamGroup string   `json:"upstream_group,omitempty"`
 	Ports         []string `json:"ports"`
+	Peers         []string `json:"peers"`
 }
 
 type protocolRuleInfo struct {
@@ -2377,6 +2380,7 @@ type protocolRuleInfo struct {
 	Action        string   `json:"action"`
 	UpstreamGroup string   `json:"upstream_group,omitempty"`
 	Protocols     []string `json:"protocols"`
+	Peers         []string `json:"peers"`
 }
 
 func (s *Server) handleRoutingRoute(w http.ResponseWriter, r *http.Request) {
@@ -2405,12 +2409,16 @@ func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
 			UpstreamGroup: rule.UpstreamGroup,
 			CIDRs:         rule.CIDRs,
 			ASNs:          rule.ASNs,
+			Peers:         rule.Peers,
 		}
 		if ri.CIDRs == nil {
 			ri.CIDRs = []string{}
 		}
 		if ri.ASNs == nil {
 			ri.ASNs = []int{}
+		}
+		if ri.Peers == nil {
+			ri.Peers = []string{}
 		}
 		for _, l := range rule.Lists {
 			ri.Lists = append(ri.Lists, ipListInfo{
@@ -2433,9 +2441,13 @@ func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
 			Action:        rule.Action,
 			UpstreamGroup: rule.UpstreamGroup,
 			Domains:       rule.Domains,
+			Peers:         rule.Peers,
 		}
 		if ri.Domains == nil {
 			ri.Domains = []string{}
+		}
+		if ri.Peers == nil {
+			ri.Peers = []string{}
 		}
 		resp.SNIRules = append(resp.SNIRules, ri)
 	}
@@ -2449,9 +2461,13 @@ func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
 			Action:        rule.Action,
 			UpstreamGroup: rule.UpstreamGroup,
 			Ports:         rule.Ports,
+			Peers:         rule.Peers,
 		}
 		if ri.Ports == nil {
 			ri.Ports = []string{}
+		}
+		if ri.Peers == nil {
+			ri.Peers = []string{}
 		}
 		resp.PortRules = append(resp.PortRules, ri)
 	}
@@ -2465,9 +2481,13 @@ func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
 			Action:        rule.Action,
 			UpstreamGroup: rule.UpstreamGroup,
 			Protocols:     rule.Protocols,
+			Peers:         rule.Peers,
 		}
 		if ri.Protocols == nil {
 			ri.Protocols = []string{}
+		}
+		if ri.Peers == nil {
+			ri.Peers = []string{}
 		}
 		resp.ProtocolRules = append(resp.ProtocolRules, ri)
 	}
@@ -2562,6 +2582,7 @@ func (s *Server) handleUpdateIPRule(w http.ResponseWriter, r *http.Request) {
 			URL     string `json:"url"`
 			Refresh int    `json:"refresh"`
 		} `json:"lists"`
+		Peers []string `json:"peers"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -2582,6 +2603,7 @@ func (s *Server) handleUpdateIPRule(w http.ResponseWriter, r *http.Request) {
 		UpstreamGroup: req.UpstreamGroup,
 		CIDRs:         req.CIDRs,
 		ASNs:          req.ASNs,
+		Peers:         req.Peers,
 	}
 	for _, l := range req.Lists {
 		rule.Lists = append(rule.Lists, config.IPListConfig{
@@ -2665,6 +2687,7 @@ func (s *Server) handleAddIPRule(w http.ResponseWriter, r *http.Request) {
 			URL     string `json:"url"`
 			Refresh int    `json:"refresh"`
 		} `json:"lists"`
+		Peers []string `json:"peers"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -2693,6 +2716,7 @@ func (s *Server) handleAddIPRule(w http.ResponseWriter, r *http.Request) {
 		UpstreamGroup: req.UpstreamGroup,
 		CIDRs:         req.CIDRs,
 		ASNs:          req.ASNs,
+		Peers:         req.Peers,
 	}
 	for _, l := range req.Lists {
 		rule.Lists = append(rule.Lists, config.IPListConfig{
@@ -2740,6 +2764,7 @@ func (s *Server) handleAddSNIRule(w http.ResponseWriter, r *http.Request) {
 		Action        string   `json:"action"`
 		UpstreamGroup string   `json:"upstream_group"`
 		Domains       []string `json:"domains"`
+		Peers         []string `json:"peers"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -2767,6 +2792,7 @@ func (s *Server) handleAddSNIRule(w http.ResponseWriter, r *http.Request) {
 		Action:        req.Action,
 		UpstreamGroup: req.UpstreamGroup,
 		Domains:       req.Domains,
+		Peers:         req.Peers,
 	}
 
 	if err := s.manager.AddSNIRule(rule); err != nil {
@@ -2814,6 +2840,7 @@ func (s *Server) handleUpdateSNIRule(w http.ResponseWriter, r *http.Request) {
 		Action        string   `json:"action"`
 		UpstreamGroup string   `json:"upstream_group"`
 		Domains       []string `json:"domains"`
+		Peers         []string `json:"peers"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -2837,6 +2864,7 @@ func (s *Server) handleUpdateSNIRule(w http.ResponseWriter, r *http.Request) {
 		Action:        req.Action,
 		UpstreamGroup: req.UpstreamGroup,
 		Domains:       req.Domains,
+		Peers:         req.Peers,
 	}
 
 	if err := s.manager.UpdateSNIRule(rule); err != nil {
@@ -2858,6 +2886,7 @@ func (s *Server) handleAddPortRule(w http.ResponseWriter, r *http.Request) {
 		Action        string   `json:"action"`
 		UpstreamGroup string   `json:"upstream_group"`
 		Ports         []string `json:"ports"`
+		Peers         []string `json:"peers"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -2885,6 +2914,7 @@ func (s *Server) handleAddPortRule(w http.ResponseWriter, r *http.Request) {
 		Action:        req.Action,
 		UpstreamGroup: req.UpstreamGroup,
 		Ports:         req.Ports,
+		Peers:         req.Peers,
 	}
 
 	if err := s.manager.AddPortRule(rule); err != nil {
@@ -2932,6 +2962,7 @@ func (s *Server) handleUpdatePortRule(w http.ResponseWriter, r *http.Request) {
 		Action        string   `json:"action"`
 		UpstreamGroup string   `json:"upstream_group"`
 		Ports         []string `json:"ports"`
+		Peers         []string `json:"peers"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -2955,6 +2986,7 @@ func (s *Server) handleUpdatePortRule(w http.ResponseWriter, r *http.Request) {
 		Action:        req.Action,
 		UpstreamGroup: req.UpstreamGroup,
 		Ports:         req.Ports,
+		Peers:         req.Peers,
 	}
 
 	if err := s.manager.UpdatePortRule(rule); err != nil {
@@ -2976,6 +3008,7 @@ func (s *Server) handleAddProtocolRule(w http.ResponseWriter, r *http.Request) {
 		Action        string   `json:"action"`
 		UpstreamGroup string   `json:"upstream_group"`
 		Protocols     []string `json:"protocols"`
+		Peers         []string `json:"peers"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -3003,6 +3036,7 @@ func (s *Server) handleAddProtocolRule(w http.ResponseWriter, r *http.Request) {
 		Action:        req.Action,
 		UpstreamGroup: req.UpstreamGroup,
 		Protocols:     req.Protocols,
+		Peers:         req.Peers,
 	}
 
 	if err := s.manager.AddProtocolRule(rule); err != nil {
@@ -3050,6 +3084,7 @@ func (s *Server) handleUpdateProtocolRule(w http.ResponseWriter, r *http.Request
 		Action        string   `json:"action"`
 		UpstreamGroup string   `json:"upstream_group"`
 		Protocols     []string `json:"protocols"`
+		Peers         []string `json:"peers"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -3073,6 +3108,7 @@ func (s *Server) handleUpdateProtocolRule(w http.ResponseWriter, r *http.Request
 		Action:        req.Action,
 		UpstreamGroup: req.UpstreamGroup,
 		Protocols:     req.Protocols,
+		Peers:         req.Peers,
 	}
 
 	if err := s.manager.UpdateProtocolRule(rule); err != nil {

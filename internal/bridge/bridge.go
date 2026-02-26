@@ -330,10 +330,10 @@ func (b *Bridge) Run(ctx context.Context) error {
 	downloader := routing.NewDownloader(b.upstreams.DefaultStreamDialer(), router, b.cfg.Routing, b.logger)
 	downloader.Start(ctx)
 
-	tcpProxy := proxy.NewTCPProxy(router, dialers, b.tracker, b.peerResolver, b.logger)
+	tcpProxy := proxy.NewTCPProxy(router, dialers, b.tracker, b.peerResolver, b.peerDNSResolver, b.logger)
 	tcpProxy.SetupForwarder(netStack)
 
-	udpProxy := proxy.NewUDPProxy(router, dialers, b.tracker, b.peerResolver, b.logger)
+	udpProxy := proxy.NewUDPProxy(router, dialers, b.tracker, b.peerResolver, b.peerDNSResolver, b.logger)
 	if b.cfg.DNS.Listen != "" {
 		udpProxy.SetDNSTarget(b.cfg.DNS.Listen)
 	}

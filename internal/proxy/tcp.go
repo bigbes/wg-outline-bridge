@@ -27,15 +27,16 @@ type StreamDialer interface {
 }
 
 type TCPProxy struct {
-	router       *routing.Router
-	dialers      *DialerSet
-	logger       *slog.Logger
-	tracker      *ConnTracker
-	peerResolver *PeerUpstreamResolver
+	router           *routing.Router
+	dialers          *DialerSet
+	logger           *slog.Logger
+	tracker          *ConnTracker
+	peerResolver     *PeerUpstreamResolver
+	peerNameResolver *PeerDNSNameResolver
 }
 
-func NewTCPProxy(router *routing.Router, dialers *DialerSet, tracker *ConnTracker, peerResolver *PeerUpstreamResolver, logger *slog.Logger) *TCPProxy {
-	return &TCPProxy{router: router, dialers: dialers, tracker: tracker, peerResolver: peerResolver, logger: logger}
+func NewTCPProxy(router *routing.Router, dialers *DialerSet, tracker *ConnTracker, peerResolver *PeerUpstreamResolver, peerNameResolver *PeerDNSNameResolver, logger *slog.Logger) *TCPProxy {
+	return &TCPProxy{router: router, dialers: dialers, tracker: tracker, peerResolver: peerResolver, peerNameResolver: peerNameResolver, logger: logger}
 }
 
 func (p *TCPProxy) SetupForwarder(s *stack.Stack) {
@@ -80,7 +81,13 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 		}
 	}()
 
-	req := routing.Request{DestIP: destIP, DestPort: destPort}
+	// Resolve peer name for per-peer rule filtering.
+	peerName := ""
+	if srcAddr.IsValid() && p.peerNameResolver != nil {
+		peerName = p.peerNameResolver.NameFor(srcAddr)
+	}
+
+	req := routing.Request{DestIP: destIP, DestPort: destPort, PeerName: peerName}
 
 	dec, matched := p.router.RouteIP(req)
 
@@ -127,7 +134,7 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 		peeked, _ := br.Peek(20)
 		clientConn.SetReadDeadline(time.Time{})
 		if proto := routing.DetectTCPProtocol(peeked); proto != "" {
-			if protoDec, ok := p.router.RouteProtocol(proto); ok {
+			if protoDec, ok := p.router.RouteProtocol(proto, peerName); ok {
 				dec = protoDec
 				matched = true
 				if dec.Action == routing.ActionBlock {

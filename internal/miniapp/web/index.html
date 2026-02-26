@@ -2117,6 +2117,12 @@
                         placeholder="https://example.com/iplist.txt"
                     />
                 </div>
+                <div class="input-group">
+                    <label class="input-label">Apply to Peers (empty = all)</label>
+                    <div id="ip-rule-peer-picker" class="blocklist-picker">
+                        <div class="empty-state" style="font-size:13px">Loading…</div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -2178,6 +2184,12 @@
                         id="inp-sni-rule-domains"
                         placeholder="*.example.com, site.org"
                     />
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Apply to Peers (empty = all)</label>
+                    <div id="sni-rule-peer-picker" class="blocklist-picker">
+                        <div class="empty-state" style="font-size:13px">Loading…</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2242,6 +2254,12 @@
                         placeholder="6881-6889, 6969"
                     />
                 </div>
+                <div class="input-group">
+                    <label class="input-label">Apply to Peers (empty = all)</label>
+                    <div id="port-rule-peer-picker" class="blocklist-picker">
+                        <div class="empty-state" style="font-size:13px">Loading…</div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -2299,6 +2317,12 @@
                 <div class="input-group">
                     <label class="input-label">Protocols</label>
                     <div id="protocol-rule-picker"></div>
+                </div>
+                <div class="input-group">
+                    <label class="input-label">Apply to Peers (empty = all)</label>
+                    <div id="protocol-rule-peer-picker" class="blocklist-picker">
+                        <div class="empty-state" style="font-size:13px">Loading…</div>
+                    </div>
                 </div>
             </div>
         </div>

@@ -843,13 +843,16 @@ if (!tg || !tg.initData) {
                 if ((r.asns || []).length > 0) info.push((r.asns || []).length + ' ASN' + ((r.asns || []).length > 1 ? 's' : ''));
                 if ((r.lists || []).length > 0) info.push((r.lists || []).length + ' list' + ((r.lists || []).length > 1 ? 's' : ''));
                 if (r.upstream_group) info.push('→ ' + r.upstream_group);
+                var peerScope = (r.peers && r.peers.length > 0)
+                    ? escapeHtml(r.peers.join(", "))
+                    : "All peers";
                 const escapedName = r.name.replace(/'/g, "\\'");
                 return '<div class="list-item" draggable="' + (isAdmin() ? 'true' : 'false') + '" data-key="' + escapeHtml(r.name) + '">' +
                     (isAdmin() ? '<div class="drag-handle">' + dragHandleSvg + '</div>' : '') +
                     '<div class="item-icon routing-ip-rule"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>' +
                     '<div class="item-content">' +
                     '<div class="item-title">' + escapeHtml(r.name) + '</div>' +
-                    '<div class="item-subtitle">' + actionBadge + ' • ' + info.join(' • ') + '</div>' +
+                    '<div class="item-subtitle">' + actionBadge + ' • ' + info.join(' • ') + ' • 👤 ' + peerScope + '</div>' +
                     '</div>' +
                     (isAdmin() ? '<div class="item-action">' +
                         '<button class="action-icon-btn" onclick="openIPRuleEditModal(\'' + escapedName + '\')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
@@ -874,12 +877,15 @@ if (!tg || !tg.initData) {
                 const info = [];
                 if (domainCount > 0) info.push(domainCount + ' domain' + (domainCount > 1 ? 's' : ''));
                 if (r.upstream_group) info.push('→ ' + r.upstream_group);
+                var sniPeerScope = (r.peers && r.peers.length > 0)
+                    ? escapeHtml(r.peers.join(", "))
+                    : "All peers";
                 const escapedName = r.name.replace(/'/g, "\\'");
                 return '<div class="list-item">' +
                     '<div class="item-icon routing-sni-rule"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>' +
                     '<div class="item-content">' +
                     '<div class="item-title">' + escapeHtml(r.name) + '</div>' +
-                    '<div class="item-subtitle">' + actionBadge + ' • ' + info.join(' • ') + '</div>' +
+                    '<div class="item-subtitle">' + actionBadge + ' • ' + info.join(' • ') + ' • 👤 ' + sniPeerScope + '</div>' +
                     '</div>' +
                     (isAdmin() ? '<div class="item-action">' +
                         '<button class="action-icon-btn" onclick="openSNIRuleEditModal(\'' + escapedName + '\')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
@@ -905,12 +911,15 @@ if (!tg || !tg.initData) {
                 const info = [];
                 if (portCount > 0) info.push(portCount + ' port' + (portCount > 1 ? 's' : ''));
                 if (r.upstream_group) info.push('→ ' + r.upstream_group);
+                var portPeerScope = (r.peers && r.peers.length > 0)
+                    ? escapeHtml(r.peers.join(", "))
+                    : "All peers";
                 const escapedName = r.name.replace(/'/g, "\\'");
                 return '<div class="list-item">' +
                     '<div class="item-icon routing-sni-rule"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>' +
                     '<div class="item-content">' +
                     '<div class="item-title">' + escapeHtml(r.name) + '</div>' +
-                    '<div class="item-subtitle">' + actionBadge + ' • ' + info.join(' • ') + '</div>' +
+                    '<div class="item-subtitle">' + actionBadge + ' • ' + info.join(' • ') + ' • 👤 ' + portPeerScope + '</div>' +
                     '</div>' +
                     (isAdmin() ? '<div class="item-action">' +
                         '<button class="action-icon-btn" onclick="openPortRuleEditModal(\'' + escapedName + '\')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
@@ -936,12 +945,15 @@ if (!tg || !tg.initData) {
                 const info = [];
                 if (protoCount > 0) info.push(protoCount + ' protocol' + (protoCount > 1 ? 's' : ''));
                 if (r.upstream_group) info.push('→ ' + r.upstream_group);
+                var protoPeerScope = (r.peers && r.peers.length > 0)
+                    ? escapeHtml(r.peers.join(", "))
+                    : "All peers";
                 const escapedName = r.name.replace(/'/g, "\\'");
                 return '<div class="list-item">' +
                     '<div class="item-icon routing-sni-rule"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>' +
                     '<div class="item-content">' +
                     '<div class="item-title">' + escapeHtml(r.name) + '</div>' +
-                    '<div class="item-subtitle">' + actionBadge + ' • ' + info.join(' • ') + '</div>' +
+                    '<div class="item-subtitle">' + actionBadge + ' • ' + info.join(' • ') + ' • 👤 ' + protoPeerScope + '</div>' +
                     '</div>' +
                     (isAdmin() ? '<div class="item-action">' +
                         '<button class="action-icon-btn" onclick="openProtocolRuleEditModal(\'' + escapedName + '\')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
@@ -1828,6 +1840,39 @@ if (!tg || !tg.initData) {
             el.classList.remove("selected");
         } else {
             selectedDNSRulePeers[name] = true;
+            el.classList.add("selected");
+        }
+        haptic("selection");
+    };
+
+    // --- Routing: shared peer picker (reused by IP/SNI/Port/Protocol rule modals) ---
+    var selectedRoutingPeers = {};
+
+    function renderRoutingPeerPicker(containerId) {
+        var el = document.getElementById(containerId);
+        var peers = (statusData && statusData.peers) || [];
+        if (peers.length === 0) {
+            el.innerHTML = '<div class="empty-state" style="font-size:13px">No peers available</div>';
+            return;
+        }
+        el.innerHTML = peers.map(function (p) {
+            var name = p.name || p.public_key.slice(0, 8) + "...";
+            var sel = selectedRoutingPeers[name] ? " selected" : "";
+            return '<div class="blocklist-item' + sel + '" data-peer-name="' + escapeHtml(name) + '" onclick="toggleRoutingPeer(this)">' +
+                '<div class="blocklist-item-cb"></div>' +
+                '<div class="blocklist-item-text">' +
+                '<div class="blocklist-item-name">' + escapeHtml(name) + '</div>' +
+                '</div></div>';
+        }).join("");
+    }
+
+    window.toggleRoutingPeer = function (el) {
+        var name = el.getAttribute("data-peer-name");
+        if (selectedRoutingPeers[name]) {
+            delete selectedRoutingPeers[name];
+            el.classList.remove("selected");
+        } else {
+            selectedRoutingPeers[name] = true;
             el.classList.add("selected");
         }
         haptic("selection");
@@ -2734,6 +2779,8 @@ if (!tg || !tg.initData) {
         document.getElementById("inp-ip-rule-list-url").value = "";
         clearIPRuleEntries();
         addIPRuleEntry();
+        selectedRoutingPeers = {};
+        renderRoutingPeerPicker("ip-rule-peer-picker");
         toggleIPRuleAction();
         openModal("ip-rule-modal");
     };
@@ -2760,6 +2807,9 @@ if (!tg || !tg.initData) {
         if (document.getElementById("ip-rule-entries").children.length === 0) {
             addIPRuleEntry();
         }
+        selectedRoutingPeers = {};
+        (rule.peers || []).forEach(function (p) { selectedRoutingPeers[p] = true; });
+        renderRoutingPeerPicker("ip-rule-peer-picker");
         toggleIPRuleAction();
         openModal("ip-rule-modal");
     };
@@ -2804,6 +2854,7 @@ if (!tg || !tg.initData) {
             cidrs: entries.cidrs,
             asns: entries.asns,
             lists,
+            peers: Object.keys(selectedRoutingPeers),
         };
 
         if (editingIPRuleName) {
@@ -2850,6 +2901,8 @@ if (!tg || !tg.initData) {
         document.getElementById("inp-sni-rule-action").value = "direct";
         populateSNIRuleGroupSelect("");
         document.getElementById("inp-sni-rule-domains").value = "";
+        selectedRoutingPeers = {};
+        renderRoutingPeerPicker("sni-rule-peer-picker");
         toggleSNIRuleAction();
         openModal("sni-rule-modal");
     };
@@ -2864,6 +2917,9 @@ if (!tg || !tg.initData) {
         document.getElementById("inp-sni-rule-action").value = rule.action;
         populateSNIRuleGroupSelect(rule.upstream_group || "");
         document.getElementById("inp-sni-rule-domains").value = (rule.domains || []).join(", ");
+        selectedRoutingPeers = {};
+        (rule.peers || []).forEach(function (p) { selectedRoutingPeers[p] = true; });
+        renderRoutingPeerPicker("sni-rule-peer-picker");
         toggleSNIRuleAction();
         openModal("sni-rule-modal");
     };
@@ -2904,6 +2960,7 @@ if (!tg || !tg.initData) {
             action,
             upstream_group: action === "upstream" ? upstreamGroup : "",
             domains,
+            peers: Object.keys(selectedRoutingPeers),
         };
 
         if (editingSNIRuleName) {
@@ -2950,6 +3007,8 @@ if (!tg || !tg.initData) {
         document.getElementById("inp-port-rule-action").value = "block";
         populatePortRuleGroupSelect("");
         document.getElementById("inp-port-rule-ports").value = "";
+        selectedRoutingPeers = {};
+        renderRoutingPeerPicker("port-rule-peer-picker");
         togglePortRuleAction();
         openModal("port-rule-modal");
     };
@@ -2964,6 +3023,9 @@ if (!tg || !tg.initData) {
         document.getElementById("inp-port-rule-action").value = rule.action;
         populatePortRuleGroupSelect(rule.upstream_group || "");
         document.getElementById("inp-port-rule-ports").value = (rule.ports || []).join(", ");
+        selectedRoutingPeers = {};
+        (rule.peers || []).forEach(function (p) { selectedRoutingPeers[p] = true; });
+        renderRoutingPeerPicker("port-rule-peer-picker");
         togglePortRuleAction();
         openModal("port-rule-modal");
     };
@@ -3004,6 +3066,7 @@ if (!tg || !tg.initData) {
             action,
             upstream_group: action === "upstream" ? upstreamGroup : "",
             ports,
+            peers: Object.keys(selectedRoutingPeers),
         };
 
         if (editingPortRuleName) {
@@ -3081,6 +3144,8 @@ if (!tg || !tg.initData) {
         populateProtocolRuleGroupSelect("");
         selectedProtocols = {};
         renderProtocolPicker();
+        selectedRoutingPeers = {};
+        renderRoutingPeerPicker("protocol-rule-peer-picker");
         toggleProtocolRuleAction();
         openModal("protocol-rule-modal");
     };
@@ -3097,6 +3162,9 @@ if (!tg || !tg.initData) {
         selectedProtocols = {};
         (rule.protocols || []).forEach(function (p) { selectedProtocols[p] = true; });
         renderProtocolPicker();
+        selectedRoutingPeers = {};
+        (rule.peers || []).forEach(function (p) { selectedRoutingPeers[p] = true; });
+        renderRoutingPeerPicker("protocol-rule-peer-picker");
         toggleProtocolRuleAction();
         openModal("protocol-rule-modal");
     };
@@ -3135,6 +3203,7 @@ if (!tg || !tg.initData) {
             action,
             upstream_group: action === "upstream" ? upstreamGroup : "",
             protocols,
+            peers: Object.keys(selectedRoutingPeers),
         };
 
         if (editingProtocolRuleName) {

@@ -132,6 +132,7 @@ type IPRuleConfig struct {
 	CIDRs         []string       `yaml:"cidrs"`
 	ASNs          []int          `yaml:"asns"`
 	Lists         []IPListConfig `yaml:"lists"`
+	Peers         []string       `yaml:"peers"` // if set, rule applies only to these peers; empty = all
 }
 
 type IPListConfig struct {
@@ -144,6 +145,7 @@ type SNIRuleConfig struct {
 	Action        string   `yaml:"action"`
 	UpstreamGroup string   `yaml:"upstream_group"`
 	Domains       []string `yaml:"domains"`
+	Peers         []string `yaml:"peers"` // if set, rule applies only to these peers; empty = all
 }
 
 type PortRuleConfig struct {
@@ -151,6 +153,7 @@ type PortRuleConfig struct {
 	Action        string   `yaml:"action"`
 	UpstreamGroup string   `yaml:"upstream_group"`
 	Ports         []string `yaml:"ports"` // single port "6881" or range "6881-6889"
+	Peers         []string `yaml:"peers"` // if set, rule applies only to these peers; empty = all
 }
 
 type ProtocolRuleConfig struct {
@@ -158,6 +161,7 @@ type ProtocolRuleConfig struct {
 	Action        string   `yaml:"action"`
 	UpstreamGroup string   `yaml:"upstream_group"`
 	Protocols     []string `yaml:"protocols"` // "bittorrent"
+	Peers         []string `yaml:"peers"`     // if set, rule applies only to these peers; empty = all
 }
 
 // UpstreamConfig describes a generic upstream endpoint.
