@@ -51,7 +51,6 @@ type Server struct {
 	dialerMu sync.RWMutex
 	logger   *slog.Logger
 	listener net.Listener
-	wg       sync.WaitGroup
 }
 
 // NewServer creates a new proxy server.

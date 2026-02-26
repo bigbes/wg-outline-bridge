@@ -24,11 +24,11 @@ func PeekHTTPHost(br *bufio.Reader) string {
 	}
 
 	// Find end of request line.
-	idx := bytes.IndexByte(peeked, '\n')
-	if idx < 0 {
+	_, after, ok := bytes.Cut(peeked, []byte{'\n'})
+	if !ok {
 		return ""
 	}
-	headers := peeked[idx+1:]
+	headers := after
 
 	// Scan header lines for "Host:".
 	for len(headers) > 0 {
@@ -49,15 +49,15 @@ func PeekHTTPHost(br *bufio.Reader) string {
 			break
 		}
 
-		colon := bytes.IndexByte(line, ':')
-		if colon < 0 {
+		before, after, ok := bytes.Cut(line, []byte{':'})
+		if !ok {
 			continue
 		}
-		name := string(bytes.TrimSpace(line[:colon]))
+		name := string(bytes.TrimSpace(before))
 		if !strings.EqualFold(name, "Host") {
 			continue
 		}
-		host := strings.TrimSpace(string(line[colon+1:]))
+		host := strings.TrimSpace(string(after))
 		// Strip port if present (e.g. "example.com:80" -> "example.com").
 		if h, _, ok := strings.Cut(host, ":"); ok {
 			host = h

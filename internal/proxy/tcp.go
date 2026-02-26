@@ -106,7 +106,8 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 
 	var clientReader io.Reader = clientConn
 	var br *bufio.Reader
-	if !matched && destPort == 443 {
+	switch {
+	case !matched && destPort == 443:
 		br = bufio.NewReaderSize(clientConn, 32*1024)
 		clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 		sni := PeekSNI(br)
@@ -120,7 +121,7 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 			}
 		}
 		clientReader = br
-	} else if !matched && destPort == 80 {
+	case !matched && destPort == 80:
 		br = bufio.NewReaderSize(clientConn, 32*1024)
 		clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 		host := PeekHTTPHost(br)
@@ -134,7 +135,7 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 			}
 		}
 		clientReader = br
-	} else if (destPort == 443 || destPort == 80) && matched {
+	case (destPort == 443 || destPort == 80) && matched:
 		p.logger.Debug("tcp: SNI/Host check skipped (already matched by IP/port rule)",
 			"src", srcAddr, "dest", dest, "rule", dec.RuleName, "action", dec.Action)
 	}

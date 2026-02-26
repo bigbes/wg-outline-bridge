@@ -3,6 +3,7 @@ package statsdb
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -486,6 +487,7 @@ func (s *Store) MigratePeersJSONToIDs(nameToID map[string]int) error {
 		if err != nil {
 			return fmt.Errorf("statsdb: read %s: %w", table, err)
 		}
+		defer rows.Close()
 
 		type update struct {
 			rowid int64
@@ -497,7 +499,6 @@ func (s *Store) MigratePeersJSONToIDs(nameToID map[string]int) error {
 			var rowid int64
 			var peersJSON string
 			if err := rows.Scan(&rowid, &peersJSON); err != nil {
-				rows.Close()
 				return fmt.Errorf("statsdb: scan %s: %w", table, err)
 			}
 
@@ -528,7 +529,9 @@ func (s *Store) MigratePeersJSONToIDs(nameToID map[string]int) error {
 			}
 			updates = append(updates, update{rowid: rowid, json: string(idsJSON)})
 		}
-		rows.Close()
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("statsdb: read %s: %w", table, err)
+		}
 
 		for _, u := range updates {
 			if _, err := tx.Exec(
@@ -550,16 +553,19 @@ func (s *Store) Reset() error {
 	if err != nil {
 		return fmt.Errorf("statsdb: list tables: %w", err)
 	}
+	defer rows.Close()
+
 	var tables []string
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			rows.Close()
 			return fmt.Errorf("statsdb: scan table name: %w", err)
 		}
 		tables = append(tables, name)
 	}
-	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("statsdb: list tables: %w", err)
+	}
 
 	for _, t := range tables {
 		if _, err := s.db.Exec("DROP TABLE IF EXISTS " + t); err != nil {
@@ -1210,7 +1216,7 @@ func (s *Store) AddSecret(secretHex, comment string) (int, error) {
 // SecretNames returns a map of secret_hex → comment for the given secrets.
 func (s *Store) SecretNames(secrets []string) (map[string]string, error) {
 	if len(secrets) == 0 {
-		return nil, nil
+		return make(map[string]string), nil
 	}
 	placeholders := make([]string, len(secrets))
 	args := make([]any, len(secrets))
@@ -1857,7 +1863,7 @@ func (s *Store) GetUserLimits(userID int64) (maxPeers *int, maxSecrets *int, err
 // Display name priority: custom_name > first_name last_name > username > "User {id}".
 func (s *Store) GetUserDisplayNames(userIDs []int64) (map[int64]string, error) {
 	if len(userIDs) == 0 {
-		return nil, nil
+		return make(map[int64]string), nil
 	}
 	placeholders := make([]string, len(userIDs))
 	args := make([]any, len(userIDs))
@@ -3041,14 +3047,14 @@ func (s *Store) SetPeerOwner(id int, ownerID int64) error {
 func (s *Store) GetPeerOwner(id int) (*int64, error) {
 	var ownerID sql.NullInt64
 	err := s.db.QueryRow(`SELECT owner_user_id FROM wg_peers WHERE id = ?`, id).Scan(&ownerID)
-	if err == sql.ErrNoRows {
-		return nil, nil
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil //nolint:nilnil // peer not found
 	}
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: get peer owner %d: %w", id, err)
 	}
 	if !ownerID.Valid {
-		return nil, nil
+		return nil, nil //nolint:nilnil // peer has no owner
 	}
 	return &ownerID.Int64, nil
 }
@@ -3095,14 +3101,14 @@ func (s *Store) SetSecretOwner(id int, ownerID int64) error {
 func (s *Store) GetSecretOwner(id int) (*int64, error) {
 	var ownerID sql.NullInt64
 	err := s.db.QueryRow(`SELECT owner_user_id FROM mtproxy_secrets WHERE id = ?`, id).Scan(&ownerID)
-	if err == sql.ErrNoRows {
-		return nil, nil
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil //nolint:nilnil // secret not found
 	}
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: get secret owner %d: %w", id, err)
 	}
 	if !ownerID.Valid {
-		return nil, nil
+		return nil, nil //nolint:nilnil // secret has no owner
 	}
 	return &ownerID.Int64, nil
 }
@@ -3187,7 +3193,7 @@ func (s *Store) UseInviteLink(token string) (*InviteLink, bool, error) {
 	err = tx.QueryRow(
 		`SELECT token, role, created_by, created_unix FROM invite_links WHERE token = ?`, token,
 	).Scan(&l.Token, &l.Role, &l.CreatedBy, &l.CreatedAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
 	}
 	if err != nil {

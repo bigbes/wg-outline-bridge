@@ -15,8 +15,8 @@ const (
 )
 
 var (
-	UserAuthFailed  = fmt.Errorf("User authentication failed")
-	NoSupportedAuth = fmt.Errorf("No supported authentication mechanism")
+	ErrUserAuthFailed  = fmt.Errorf("user authentication failed")
+	ErrNoSupportedAuth = fmt.Errorf("no supported authentication mechanism")
 )
 
 // AuthContext encapsulates authentication state provided during negotiation.
@@ -68,7 +68,7 @@ func (a UserPassAuthenticator) Authenticate(reader io.Reader, writer io.Writer) 
 	}
 
 	if header[0] != userAuthVersion {
-		return nil, fmt.Errorf("Unsupported auth version: %v", header[0])
+		return nil, fmt.Errorf("unsupported auth version: %v", header[0])
 	}
 
 	userLen := int(header[1])
@@ -95,7 +95,7 @@ func (a UserPassAuthenticator) Authenticate(reader io.Reader, writer io.Writer) 
 		if _, err := writer.Write([]byte{userAuthVersion, authFailure}); err != nil {
 			return nil, err
 		}
-		return nil, UserAuthFailed
+		return nil, ErrUserAuthFailed
 	}
 
 	return &AuthContext{UserPassAuth, map[string]string{"Username": string(user)}}, nil
@@ -105,7 +105,7 @@ func (a UserPassAuthenticator) Authenticate(reader io.Reader, writer io.Writer) 
 func (s *Server) authenticate(conn io.Writer, bufConn io.Reader) (*AuthContext, error) {
 	methods, err := readMethods(bufConn)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to get auth methods: %v", err)
+		return nil, fmt.Errorf("failed to get auth methods: %w", err)
 	}
 
 	for _, method := range methods {
@@ -120,7 +120,7 @@ func (s *Server) authenticate(conn io.Writer, bufConn io.Reader) (*AuthContext, 
 
 func noAcceptableAuth(conn io.Writer) error {
 	conn.Write([]byte{socks5Version, noAcceptable})
-	return NoSupportedAuth
+	return ErrNoSupportedAuth
 }
 
 func readMethods(r io.Reader) ([]byte, error) {

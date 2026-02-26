@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -261,12 +262,7 @@ func ruleAppliesToPeer(peerIDs []int, peerID int, peerKnown bool) bool {
 	if !peerKnown {
 		return false
 	}
-	for _, id := range peerIDs {
-		if id == peerID {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(peerIDs, peerID)
 }
 
 func (s *Server) ruleMatches(rule *Rule, fqdn string) bool {

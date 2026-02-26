@@ -27,13 +27,14 @@ func ShowProxy(args []string, logger *slog.Logger) {
 			logger.Error("failed to open database", "err", err)
 			os.Exit(1)
 		}
-		defer store.Close()
 
 		dbSecrets, err := store.ListSecrets()
 		if err != nil {
 			logger.Error("failed to load secrets from database", "err", err)
+			store.Close()
 			os.Exit(1)
 		}
+		store.Close()
 		if len(dbSecrets) > 0 {
 			cfg.MTProxy.Secrets = dbSecrets
 		}

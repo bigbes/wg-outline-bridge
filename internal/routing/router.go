@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,8 +51,8 @@ type ipRule struct {
 }
 
 type sniRule struct {
-	name    string
-	action  Decision
+	name     string
+	action   Decision
 	patterns []domainPattern
 	peerIDs  []int
 }
@@ -226,12 +227,7 @@ func ruleAppliesToPeer(rulePeerIDs []int, peerID int, peerKnown bool) bool {
 	if !peerKnown {
 		return false
 	}
-	for _, id := range rulePeerIDs {
-		if id == peerID {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(rulePeerIDs, peerID)
 }
 
 // SetEnabled toggles whether routing rules are evaluated at runtime.

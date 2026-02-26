@@ -28,13 +28,14 @@ func ListConf(args []string, logger *slog.Logger) {
 			logger.Error("failed to open database", "err", err)
 			os.Exit(1)
 		}
-		defer store.Close()
 
 		dbPeers, err := store.ListPeers()
 		if err != nil {
 			logger.Error("failed to load peers from database", "err", err)
+			store.Close()
 			os.Exit(1)
 		}
+		store.Close()
 		if len(dbPeers) > 0 {
 			cfg.Peers = dbPeers
 		}

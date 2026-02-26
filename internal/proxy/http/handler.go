@@ -135,7 +135,7 @@ func (h *Handler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	host := r.URL.Host
 	if !strings.Contains(host, ":") {
-		host = host + ":80"
+		host += ":80"
 	}
 
 	h.logger.Debug("http: forward", "method", r.Method, "dest", host)

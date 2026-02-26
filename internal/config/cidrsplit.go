@@ -253,7 +253,7 @@ func ExcludePrefixes(base []netip.Prefix, exclude []netip.Prefix) []netip.Prefix
 	copy(result, base)
 
 	for _, ex := range exclude {
-		var next []netip.Prefix
+		next := make([]netip.Prefix, 0, len(result))
 		for _, p := range result {
 			next = append(next, subtractPrefix(p, ex)...)
 		}
@@ -291,7 +291,7 @@ func subtractPrefix(from, remove netip.Prefix) []netip.Prefix {
 
 	left, right := splitPrefix(from)
 
-	var result []netip.Prefix
+	result := make([]netip.Prefix, 0, 2)
 	result = append(result, subtractPrefix(left, remove)...)
 	result = append(result, subtractPrefix(right, remove)...)
 	return result

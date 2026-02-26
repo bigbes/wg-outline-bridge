@@ -38,7 +38,7 @@ var KnownBlocklists = []KnownBlocklist{
 	//	Description: "OISD NSFW Small — lighter NSFW list (top 1M domains only)",
 	//	URL:         "https://raw.githubusercontent.com/cbuijs/oisd/refs/heads/master/big/domains.adblock",
 	//	Source:      "oisd",
-	//},
+	// },
 
 	// ──────────────────────────────────────────────────────────────────────
 	// Hagezi Multi — all-in-one blocklists at various blocking levels

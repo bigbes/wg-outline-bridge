@@ -1,0 +1,68 @@
+version: "2"
+
+run:
+  timeout: 5m
+  go: "1.26"
+
+linters:
+  default: none
+  enable:
+    # Core bug-finders
+    - govet
+    - staticcheck
+    # - errcheck  # Too noisy - most are defer Close() in cleanup paths
+    - ineffassign
+    - unused
+
+    # Security
+    # - gosec  # Too many false positives (G104 duplicates errcheck, G117 flags config fields)
+
+    # Resource leaks
+    - bodyclose
+    - sqlclosecheck
+    - rowserrcheck
+
+    # Nil/error handling bugs
+    - nilerr
+    - nilnesserr
+    - nilnil
+    - wastedassign
+
+    # Context bugs
+    - fatcontext
+    # - contextcheck  # Too many false positives in nested function calls
+    # - noctx
+
+    # Other bug patterns
+    - durationcheck
+    - errorlint
+
+    # Style/quality
+    - misspell
+    - gocritic
+    - nakedret
+    - prealloc
+    - tparallel
+
+linters-settings:
+  govet:
+    enable-all: true
+  goimports:
+    local-prefixes: github.com/bigbes/wireguard-outline-bridge
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - dupl
+        - goconst
+    - linters:
+        - revive
+      text: "exported:"
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  new: false
+
+formatters:
+  enable:
+    - goimports

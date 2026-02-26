@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,10 +20,11 @@ func readAll(conn net.Conn) ([]byte, error) {
 			result = append(result, buf[:n]...)
 		}
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return result, nil
 			}
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
 				return result, nil
 			}
 			return result, err
@@ -190,7 +192,7 @@ func testSocks4Bind(proxyAddr string, bindCh chan<- bindEvent) {
 	conn.SetReadDeadline(time.Now().Add(tcpTimeout))
 	buf := make([]byte, 2048+len(dataPayload))
 	n, err := conn.Read(buf)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		failTest(name, fmt.Sprintf("read: %v", err))
 		return
 	}
@@ -230,7 +232,7 @@ func testSocks5Bind(proxyAddr string, serverIP net.IP, serverPort int, bindCh ch
 	conn.SetReadDeadline(time.Now().Add(tcpTimeout))
 	buf := make([]byte, 2048+len(dataPayload))
 	n, err := conn.Read(buf)
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		failTest(name, fmt.Sprintf("read: %v", err))
 		return
 	}
@@ -265,7 +267,9 @@ func testSocks5UDP(proxyAddr, serverAddr string) {
 
 	payload := []byte("UDP Data" + dataPayload)
 	header := buildUDPHeader(serverUDPAddr.IP, serverUDPAddr.Port)
-	packet := append(header, payload...)
+	packet := make([]byte, 0, len(header)+len(payload))
+	packet = append(packet, header...)
+	packet = append(packet, payload...)
 
 	debugf("%s: sending %d bytes via relay %s to %s", name, len(payload), relayAddr, serverAddr)
 

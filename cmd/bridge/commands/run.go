@@ -80,10 +80,11 @@ func RunBridge(args []string, logger *slog.Logger, version string, dirty bool) {
 	b := bridge.New(*configPath, cfg, logger, version, dirty)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 
 	if err := b.Run(ctx); err != nil {
+		cancel()
 		logger.Error("bridge error", "err", err)
 		os.Exit(1)
 	}
+	cancel()
 }

@@ -40,10 +40,14 @@ test-verbose:
 test-race:
     go test -race ./...
 
-# Format and vet code
+# Run linter
 lint:
-    go fmt ./...
-    go vet ./...
+    golangci-lint run ./...
+
+# Auto-fix linting issues
+fix:
+    go fix ./...
+    golangci-lint run ./... --fix
 
 # Upload binary and config example to remote host
 upload: build

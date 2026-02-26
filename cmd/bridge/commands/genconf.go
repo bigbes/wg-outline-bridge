@@ -38,11 +38,11 @@ func GenConf(args []string, logger *slog.Logger) {
 		logger.Error("failed to open database", "err", err)
 		os.Exit(1)
 	}
-	defer store.Close()
 
 	dbPeers, err := store.ListPeers()
 	if err != nil {
 		logger.Error("failed to load peers from database", "err", err)
+		store.Close()
 		os.Exit(1)
 	}
 	if len(dbPeers) > 0 {
@@ -77,8 +77,11 @@ func GenConf(args []string, logger *slog.Logger) {
 	peerID, err := store.InsertPeer(*name, peer)
 	if err != nil {
 		logger.Error("failed to save peer to database", "err", err)
+		store.Close()
 		os.Exit(1)
 	}
+
+	store.Close()
 
 	fmt.Println("=== Peer added to config ===")
 	fmt.Printf("ID:          %d\n", peerID)

@@ -667,7 +667,7 @@ func (b *Bridge) PeerStatuses() []observer.PeerStatus {
 		dbStats, _ = b.statsStore.GetWGPeerStats()
 	}
 
-	var result []observer.PeerStatus
+	result := make([]observer.PeerStatus, 0, len(peers))
 	for id, peer := range peers {
 		ps := observer.PeerStatus{
 			ID:        id,
@@ -2117,7 +2117,7 @@ func buildDNSRules(cfg config.DNSConfig, logger *slog.Logger) []dns.Rule {
 			rule.Patterns = append(rule.Patterns, dns.ParseDomainPattern(d))
 		}
 		if len(rc.Lists) > 0 {
-			var lists []dns.ListEntry
+			lists := make([]dns.ListEntry, 0, len(rc.Lists))
 			for _, l := range rc.Lists {
 				refresh := time.Duration(l.Refresh) * time.Second
 				if refresh == 0 {

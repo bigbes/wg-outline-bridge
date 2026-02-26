@@ -153,7 +153,7 @@ func TestExcludePrefixes(t *testing.T) {
 			got := ExcludePrefixes(base, exclude)
 
 			if len(got) != len(tt.want) {
-				var gotStrs []string
+				gotStrs := make([]string, 0, len(got))
 				for _, p := range got {
 					gotStrs = append(gotStrs, p.String())
 				}

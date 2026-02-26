@@ -328,13 +328,13 @@ proxies:
 - **HTTPS** proxy is an HTTP proxy with TLS on the listener (client↔proxy connection is encrypted)
 - **SOCKS5** proxy supports the `CONNECT` command
 
-Proxy servers can also be managed via Telegram bot commands (`/addproxy`, `/delproxy`, `/listproxy`) when the database is enabled. Use `/listproxy` to see connection links in `socks5://` or `http://` format. On first run, proxies from the config file are imported into the database.
+Proxy servers can also be managed via the Telegram Mini App when the database is enabled.
 
 ## Telegram Bot
 
 The bridge can be monitored via a Telegram bot. It supports two modes that can be used independently or together:
 
-- **Interactive commands** — send commands directly to the bot from any chat
+- **Invite redemption** — users can redeem invite links via `/start inv_<token>` to gain access
 - **Push notifications** — periodic status updates sent to a configured chat (requires `chat_id`)
 
 ### Setup
@@ -360,26 +360,11 @@ If `allowed_users` is set, the bot ignores private messages from users not in th
 
 | Command | Description |
 |---------|-------------|
-| `/status` | Show peer status, traffic, and active connections |
-| `/proxy` | Show Telegram proxy links (MTProxy) |
-| `/listconf` | List all configured peers |
-| `/showconf <name>` | Show WireGuard client config for a peer |
-| `/addpeer <name>` | Add a new WireGuard peer (requires database) |
-| `/delpeer <name>` | Delete a WireGuard peer (requires database) |
-| `/addsecret [type] [comment]` | Add a new MTProxy secret (requires database) |
-| `/delsecret <hex>` | Delete an MTProxy secret (requires database) |
-| `/addproxy <type> <listen> [name] [outline] [user:pass]` | Add a proxy server (requires database) |
-| `/delproxy <name>` | Delete a proxy server (requires database) |
-| `/listproxy` | List proxy servers with connection links |
-| `/addupstream <name> <transport> [groups] [default]` | Add an upstream endpoint (requires database) |
-| `/delupstream <name>` | Delete an upstream endpoint (requires database) |
-| `/listupstream` | List upstream endpoints and their status |
-| `/addgroup <name>` | Create an upstream group (requires database) |
-| `/delgroup <name>` | Delete an upstream group (requires database) |
-| `/listgroup` | List upstream groups and their members |
-| `/help` | List available commands |
+| `/help` | Show available commands |
+| `/start` | Show welcome message |
+| `/start inv_<token>` | Redeem an invite link to gain access |
 
-The management commands (`/addpeer`, `/delpeer`, `/addsecret`, `/delsecret`, `/addproxy`, `/delproxy`, `/addupstream`, `/delupstream`, `/addgroup`, `/delgroup`) require `database.path` to be configured. Peer changes are applied immediately to the running WireGuard device. Upstream changes are applied immediately. MTProxy secret and proxy server changes require a restart to take effect.
+Management operations (peers, secrets, proxies, upstreams, etc.) are handled via the [Telegram Mini App](#telegram-mini-app) web interface.
 
 ### Status Output
 
@@ -426,7 +411,8 @@ database:
 ```
 
 When the database is enabled:
-- **Peers and MTProxy secrets** are stored in SQLite, enabling management via Telegram bot commands (`/addpeer`, `/delpeer`, `/addsecret`, `/delsecret`) and CLI commands. On first run, existing file-based peers and secrets are automatically imported into the database.
+- **Peers, MTProxy secrets, proxy servers, upstreams, DNS records/rules, and routing rules** are stored in SQLite, enabling management via the Telegram Mini App and CLI commands. On first run, existing file-based peers and secrets are automatically imported into the database.
+- **User roles and invites** for Mini App access control.
 - **Persistent stats** track cumulative traffic, handshakes, and connections across daemon restarts.
 
 Tracked stats:
@@ -438,7 +424,17 @@ Counters survive daemon restarts via delta-accumulation (UAPI/atomic counters th
 
 ## Telegram Mini App
 
-A web-based admin panel accessible as a [Telegram Mini App](https://core.telegram.org/bots/webapps). It provides the same management capabilities as the bot commands but with a richer UI — peer status dashboard, MTProxy secret management, and proxy server configuration.
+A web-based admin panel accessible as a [Telegram Mini App](https://core.telegram.org/bots/webapps). It provides comprehensive management capabilities with a rich UI:
+
+- **Peers**: View status, add/delete peers, generate client configs
+- **MTProxy**: Manage secrets, view connection stats
+- **Proxies**: Add/remove SOCKS5/HTTP/HTTPS proxy servers
+- **Upstreams**: Manage Outline endpoints and health status
+- **Groups**: Create upstream groups for routing
+- **DNS**: Manage local records and blocklists
+- **Routing**: Configure CIDR, IP, SNI, port, and protocol rules
+- **Users & Invites**: Role-based access control with invite links
+- **Backup/Restore**: Database export and import
 
 ### Setup
 
@@ -557,15 +553,18 @@ internal/
   config/               YAML config loading, validation, CIDR utilities
   dns/                  Built-in DNS proxy server with blocklists
   geoip/                GeoIP database management for country-based routing
-  mtproxy/              MTProxy (Telegram proxy) server implementation
-  proxyserver/          SOCKS5, HTTP, and HTTPS forward proxy servers
+  metrics/              Prometheus metrics for connections and upstream health
   miniapp/              Telegram Mini App web admin panel
+  mtproxy/              MTProxy (Telegram proxy) server implementation
   observer/             Telegram bot observer (status push & command handling)
   outline/              Outline SDK client wrapper
+  porttracker/          Port usage tracking for validation
   proxy/                TCP/UDP proxy with gVisor, SNI parser, routing integration
+  proxyserver/          SOCKS5, HTTP, and HTTPS forward proxy servers
   routing/              IP/SNI routing engine, IP list downloader
   statsdb/              SQLite-backed persistent stats and peer/secret storage
   telegram/             Telegram Bot API client
+  upstream/             Upstream manager, health checks, and group routing
   wireguard/            gVisor netstack TUN device
 configs/                Example configuration files
 ```

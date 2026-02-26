@@ -134,7 +134,7 @@ type IPRuleConfig struct {
 	CIDRs         []string       `yaml:"cidrs"`
 	ASNs          []int          `yaml:"asns"`
 	Lists         []IPListConfig `yaml:"lists"`
-	PeerIDs       []int          `yaml:"-"`      // runtime: peer IDs from DB; empty = applies to all
+	PeerIDs       []int          `yaml:"-"` // runtime: peer IDs from DB; empty = applies to all
 }
 
 type IPListConfig struct {
@@ -147,7 +147,7 @@ type SNIRuleConfig struct {
 	Action        string   `yaml:"action"`
 	UpstreamGroup string   `yaml:"upstream_group"`
 	Domains       []string `yaml:"domains"`
-	PeerIDs       []int    `yaml:"-"`     // runtime: peer IDs from DB; empty = applies to all
+	PeerIDs       []int    `yaml:"-"` // runtime: peer IDs from DB; empty = applies to all
 }
 
 type PortRuleConfig struct {
@@ -286,7 +286,7 @@ func Load(path string) (*Config, error) {
 			cfg.DNS.Upstream = cfg.WireGuard.DNS
 		}
 		if !strings.Contains(cfg.DNS.Upstream, ":") {
-			cfg.DNS.Upstream = cfg.DNS.Upstream + ":53"
+			cfg.DNS.Upstream += ":53"
 		}
 		// Point WireGuard clients at the virtual address for DNS.
 		addr, _, err := cfg.WireGuard.ParseAddress()
@@ -439,9 +439,7 @@ func (c *Config) ToUpstreamSpecs() []upstream.Spec {
 				Target:   u.HealthCheck.Target,
 			},
 		}
-		// Build type-specific config JSON.
-		switch u.Type {
-		case "outline":
+		if u.Type == "outline" {
 			cfgJSON, _ := json.Marshal(map[string]string{"transport": u.Transport})
 			spec.Config = cfgJSON
 		}

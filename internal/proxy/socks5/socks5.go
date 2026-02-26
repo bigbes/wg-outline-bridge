@@ -7,6 +7,7 @@ package socks5
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -127,36 +128,34 @@ func (s *Server) ServeConn(conn net.Conn) error {
 	}
 
 	if version[0] != socks5Version {
-		err := fmt.Errorf("Unsupported SOCKS version: %v", version)
+		err := fmt.Errorf("unsupported SOCKS version: %v", version)
 		s.config.Logger.Printf("[ERR] socks: %v", err)
 		return err
 	}
 
-	// Authenticate the connection
 	authContext, err := s.authenticate(conn, bufConn)
 	if err != nil {
-		err = fmt.Errorf("Failed to authenticate: %v", err)
+		err = fmt.Errorf("failed to authenticate: %w", err)
 		s.config.Logger.Printf("[ERR] socks: %v", err)
 		return err
 	}
 
 	request, err := NewRequest(bufConn)
 	if err != nil {
-		if err == unrecognizedAddrType {
+		if errors.Is(err, errUnrecognizedAddrType) {
 			if err := sendReply(conn, addrTypeNotSupported, nil); err != nil {
-				return fmt.Errorf("Failed to send reply: %v", err)
+				return fmt.Errorf("failed to send reply: %w", err)
 			}
 		}
-		return fmt.Errorf("Failed to read destination address: %v", err)
+		return fmt.Errorf("failed to read destination address: %w", err)
 	}
 	request.AuthContext = authContext
 	if client, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
 		request.RemoteAddr = &AddrSpec{IP: client.IP, Port: client.Port}
 	}
 
-	// Process the client request
 	if err := s.handleRequest(request, conn); err != nil {
-		err = fmt.Errorf("Failed to handle request: %v", err)
+		err = fmt.Errorf("failed to handle request: %w", err)
 		s.config.Logger.Printf("[ERR] socks: %v", err)
 		return err
 	}

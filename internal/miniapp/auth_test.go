@@ -21,7 +21,7 @@ func buildInitData(botToken string, userID int64, extra map[string]string) strin
 	}
 
 	// Build data_check_string.
-	var pairs []string
+	pairs := make([]string, 0, len(params))
 	for key := range params {
 		pairs = append(pairs, key+"="+params.Get(key))
 	}
@@ -74,7 +74,7 @@ func TestValidateInitData_Expired(t *testing.T) {
 	params.Set("auth_date", fmt.Sprintf("%d", time.Now().Add(-25*time.Hour).Unix()))
 	params.Del("hash")
 
-	var pairs []string
+	pairs := make([]string, 0, len(params))
 	for key := range params {
 		pairs = append(pairs, key+"="+params.Get(key))
 	}
