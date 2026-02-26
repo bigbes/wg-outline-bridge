@@ -395,7 +395,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 		if b.cfg.DNS.Enabled {
 			rules = buildDNSRules(b.cfg.DNS, b.logger)
 		}
-		b.dnsSrv = dns.New(b.cfg.DNS.Listen, b.cfg.DNS.Upstream, records, rules, b.logger)
+		b.dnsSrv = dns.New(b.cfg.DNS.Listen, b.cfg.DNS.Upstream, records, rules, b.cfg.DNS.Enabled, b.logger)
 		b.dnsSrv.SetPeerResolver(b.peerDNSResolver)
 		if err := b.dnsSrv.Start(ctx); err != nil {
 			return fmt.Errorf("starting dns server: %w", err)
@@ -1806,6 +1806,9 @@ func (b *Bridge) SetDNSEnabled(enabled bool) error {
 	}
 
 	b.cfg.DNS.Enabled = enabled
+	if b.dnsSrv != nil {
+		b.dnsSrv.SetEnabled(enabled)
+	}
 	b.reloadDNSRules()
 
 	b.logger.Info("dns resolution toggled", "enabled", enabled)

@@ -64,16 +64,18 @@ type Server struct {
 	records      map[string]Record
 	mu           sync.RWMutex
 	rules        []Rule
+	enabled      bool // when false, skip records/rules and only forward
 	logger       *slog.Logger
 	server       *dnspkg.Server
 	peerResolver PeerIDResolver
 }
 
-func New(listenAddr, upstream string, records map[string]Record, rules []Rule, logger *slog.Logger) *Server {
+func New(listenAddr, upstream string, records map[string]Record, rules []Rule, enabled bool, logger *slog.Logger) *Server {
 	s := &Server{
 		upstream: upstream,
 		records:  records,
 		rules:    rules,
+		enabled:  enabled,
 		logger:   logger,
 	}
 
@@ -137,6 +139,14 @@ func (s *Server) UpdateRecords(records map[string]Record) {
 	s.mu.Unlock()
 }
 
+// SetEnabled toggles DNS resolution. When disabled, the server skips
+// records, rules, and blocklists and only forwards to the default upstream.
+func (s *Server) SetEnabled(enabled bool) {
+	s.mu.Lock()
+	s.enabled = enabled
+	s.mu.Unlock()
+}
+
 // SetPeerResolver sets the resolver used to map peer IPs to peer IDs
 // for per-peer DNS rule filtering.
 func (s *Server) SetPeerResolver(r PeerIDResolver) {
@@ -168,6 +178,16 @@ func (s *Server) serveDNSWithPeer(w dnspkg.ResponseWriter, r *dnspkg.Msg, peerIP
 
 	q := r.Question[0]
 	name := strings.ToLower(q.Name)
+
+	s.mu.RLock()
+	enabled := s.enabled
+	s.mu.RUnlock()
+
+	// When DNS resolution is disabled, skip all processing and just forward.
+	if !enabled {
+		s.forward(w, r, s.upstream, "")
+		return
+	}
 
 	// 1. Static local records
 	s.mu.RLock()

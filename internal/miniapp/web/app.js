@@ -2070,6 +2070,15 @@ if (!tg || !tg.initData) {
         }
     };
 
+    window.toggleDNSEnabled = function () {
+        if (!isAdmin()) return;
+        var newState = !(dnsData && dnsData.enabled);
+        api("PUT", "/api/dns", { enabled: newState }).then(function () {
+            refreshDNS();
+            haptic("impact");
+        });
+    };
+
     // --- DNS Records ---
     let editingDNSRecord = null;
 
