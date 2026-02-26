@@ -15,6 +15,13 @@ func parseDomainPattern(s string) domainPattern {
 	return domainPattern{exact: s}
 }
 
+func (p domainPattern) String() string {
+	if p.exact != "" {
+		return p.exact
+	}
+	return "*." + p.suffix
+}
+
 func (p domainPattern) matches(domain string) bool {
 	domain = strings.ToLower(domain)
 	if p.exact != "" {

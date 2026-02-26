@@ -18,27 +18,27 @@ var KnownBlocklists = []KnownBlocklist{
 	{
 		Name:        "oisd-big",
 		Description: "OISD Big — comprehensive ad/tracking/malware blocklist",
-		URL:         "https://big.oisd.nl/",
+		URL:         "https://raw.githubusercontent.com/cbuijs/oisd/refs/heads/master/big/domains.adblock",
 		Source:      "oisd",
 	},
 	{
 		Name:        "oisd-small",
 		Description: "OISD Small — lighter version (top 1M domains only)",
-		URL:         "https://small.oisd.nl/",
+		URL:         "https://raw.githubusercontent.com/cbuijs/oisd/refs/heads/master/small/domains.adblock",
 		Source:      "oisd",
 	},
 	{
 		Name:        "oisd-nsfw",
 		Description: "OISD NSFW — blocks adult/porn/shock sites",
-		URL:         "https://nsfw.oisd.nl/",
+		URL:         "https://raw.githubusercontent.com/cbuijs/oisd/refs/heads/master/nsfw/domains.adblock",
 		Source:      "oisd",
 	},
-	{
-		Name:        "oisd-nsfw-small",
-		Description: "OISD NSFW Small — lighter NSFW list (top 1M domains only)",
-		URL:         "https://nsfw-small.oisd.nl/",
-		Source:      "oisd",
-	},
+	//{
+	//	Name:        "oisd-nsfw-small",
+	//	Description: "OISD NSFW Small — lighter NSFW list (top 1M domains only)",
+	//	URL:         "https://raw.githubusercontent.com/cbuijs/oisd/refs/heads/master/big/domains.adblock",
+	//	Source:      "oisd",
+	//},
 
 	// ──────────────────────────────────────────────────────────────────────
 	// Hagezi Multi — all-in-one blocklists at various blocking levels

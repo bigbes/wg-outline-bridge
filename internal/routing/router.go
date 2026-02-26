@@ -284,20 +284,35 @@ func (r *Router) RouteIP(req Request) (Decision, bool) {
 }
 
 func (r *Router) RouteSNI(req Request) (Decision, bool) {
-	if !r.IsEnabled() {
+	enabled := r.IsEnabled()
+	r.logger.Debug("routing: SNI lookup",
+		"sni", req.SNI, "destIP", req.DestIP, "destPort", req.DestPort,
+		"peerID", req.PeerID, "peerKnown", req.PeerKnown,
+		"enabled", enabled, "ruleCount", len(r.sniRules))
+	if !enabled {
 		return Decision{}, false
 	}
 	for i := range r.sniRules {
 		rule := &r.sniRules[i]
 		if !ruleAppliesToPeer(rule.peerIDs, req.PeerID, req.PeerKnown) {
+			r.logger.Debug("routing: SNI rule skipped (peer mismatch)",
+				"sni", req.SNI, "rule", rule.name,
+				"rulePeerIDs", rule.peerIDs, "peerID", req.PeerID, "peerKnown", req.PeerKnown)
 			continue
 		}
 		for _, pattern := range rule.patterns {
 			if pattern.matches(req.SNI) {
+				r.logger.Debug("routing: SNI rule matched",
+					"sni", req.SNI, "rule", rule.name, "action", rule.action.Action,
+					"pattern", pattern.String())
 				return rule.action, true
 			}
 		}
+		r.logger.Debug("routing: SNI rule skipped (no domain match)",
+			"sni", req.SNI, "rule", rule.name, "action", rule.action.Action,
+			"patternCount", len(rule.patterns))
 	}
+	r.logger.Debug("routing: SNI no rule matched", "sni", req.SNI)
 	return Decision{}, false
 }
 

@@ -183,8 +183,13 @@ func (s *Server) serveDNSWithPeer(w dnspkg.ResponseWriter, r *dnspkg.Msg, peerIP
 	enabled := s.enabled
 	s.mu.RUnlock()
 
+	s.logger.Debug("dns: query received",
+		"name", name, "type", dnspkg.TypeToString[q.Qtype],
+		"peer", peerIP, "enabled", enabled)
+
 	// When DNS resolution is disabled, skip all processing and just forward.
 	if !enabled {
+		s.logger.Debug("dns: disabled, forwarding to default upstream", "name", name)
 		s.forward(w, r, s.upstream, "")
 		return
 	}
@@ -194,6 +199,7 @@ func (s *Server) serveDNSWithPeer(w dnspkg.ResponseWriter, r *dnspkg.Msg, peerIP
 	rec, hasRec := s.records[name]
 	s.mu.RUnlock()
 	if hasRec {
+		s.logger.Debug("dns: matched local record", "name", name)
 		s.serveLocalRecord(w, r, q, rec)
 		return
 	}
@@ -204,21 +210,36 @@ func (s *Server) serveDNSWithPeer(w dnspkg.ResponseWriter, r *dnspkg.Msg, peerIP
 	if peerIP.IsValid() && s.peerResolver != nil {
 		peerID, peerKnown = s.peerResolver.IDFor(peerIP)
 	}
+	s.logger.Debug("dns: peer resolution", "name", name, "peerIP", peerIP,
+		"peerID", peerID, "peerKnown", peerKnown,
+		"hasResolver", s.peerResolver != nil)
 
 	s.mu.RLock()
 	rules := s.rules
 	s.mu.RUnlock()
 
+	s.logger.Debug("dns: evaluating rules", "name", name, "ruleCount", len(rules))
+
 	// 2. Rules (first match wins)
 	for i := range rules {
 		rule := &rules[i]
-		if !ruleAppliesToPeer(rule.PeerIDs, peerID, peerKnown) {
+		peerMatch := ruleAppliesToPeer(rule.PeerIDs, peerID, peerKnown)
+		if !peerMatch {
+			s.logger.Debug("dns: rule skipped (peer mismatch)",
+				"name", name, "rule", rule.Name,
+				"rulePeerIDs", rule.PeerIDs, "peerID", peerID, "peerKnown", peerKnown)
 			continue
 		}
-		if !s.ruleMatches(rule, name) {
+		matched := s.ruleMatches(rule, name)
+		if !matched {
+			s.logger.Debug("dns: rule skipped (no domain match)",
+				"name", name, "rule", rule.Name, "action", rule.Action,
+				"patterns", len(rule.Patterns), "hasBlocklist", rule.Blocklist != nil)
 			continue
 		}
 
+		s.logger.Debug("dns: rule matched",
+			"name", name, "rule", rule.Name, "action", rule.Action)
 		switch rule.Action {
 		case "block":
 			s.serveBlocked(w, r, q, rule.Name)
@@ -229,6 +250,7 @@ func (s *Server) serveDNSWithPeer(w dnspkg.ResponseWriter, r *dnspkg.Msg, peerIP
 	}
 
 	// 3. Default upstream
+	s.logger.Debug("dns: no rule matched, forwarding to default upstream", "name", name)
 	s.forward(w, r, s.upstream, "")
 }
 

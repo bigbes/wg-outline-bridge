@@ -31,7 +31,7 @@ type BlocklistLoader struct {
 
 func NewBlocklistLoader(lists []ListEntry, logger *slog.Logger) *BlocklistLoader {
 	return &BlocklistLoader{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: &http.Client{Timeout: 120 * time.Second},
 		lists:      lists,
 		logger:     logger,
 		domains:    make(map[string]bool),
@@ -43,13 +43,17 @@ func (bl *BlocklistLoader) IsBlocked(fqdn string) bool {
 	bl.mu.RLock()
 	defer bl.mu.RUnlock()
 	if bl.domains[fqdn] {
+		bl.logger.Debug("dns: blocklist exact match", "fqdn", fqdn)
 		return true
 	}
 	for _, suffix := range bl.suffixes {
 		if strings.HasSuffix(fqdn, suffix) {
+			bl.logger.Debug("dns: blocklist suffix match", "fqdn", fqdn, "suffix", suffix)
 			return true
 		}
 	}
+	bl.logger.Debug("dns: blocklist miss", "fqdn", fqdn,
+		"domainCount", len(bl.domains), "suffixCount", len(bl.suffixes))
 	return false
 }
 
@@ -69,6 +73,7 @@ func (bl *BlocklistLoader) Start(ctx context.Context) {
 func (bl *BlocklistLoader) fetchAll(ctx context.Context) {
 	allDomains := make(map[string]bool)
 	var allSuffixes []string
+	anySuccess := false
 	for i := range bl.lists {
 		entry := &bl.lists[i]
 		domains, suffixes, err := bl.fetchList(ctx, entry.URL, entry.Format)
@@ -80,8 +85,14 @@ func (bl *BlocklistLoader) fetchAll(ctx context.Context) {
 			allDomains[d] = true
 		}
 		allSuffixes = append(allSuffixes, suffixes...)
+		anySuccess = true
 		bl.logger.Info("dns: loaded blocklist", "url", entry.URL, "domains", len(domains), "suffixes", len(suffixes))
 		entry.lastFetch = time.Now()
+	}
+
+	if !anySuccess {
+		bl.logger.Warn("dns: all blocklist fetches failed, keeping existing data")
+		return
 	}
 
 	bl.mu.Lock()
@@ -113,6 +124,7 @@ func (bl *BlocklistLoader) refreshLoop(ctx context.Context) {
 
 			allDomains := make(map[string]bool)
 			var allSuffixes []string
+			anySuccess := false
 			for i := range bl.lists {
 				entry := &bl.lists[i]
 				domains, suffixes, err := bl.fetchList(ctx, entry.URL, entry.Format)
@@ -124,8 +136,14 @@ func (bl *BlocklistLoader) refreshLoop(ctx context.Context) {
 					allDomains[d] = true
 				}
 				allSuffixes = append(allSuffixes, suffixes...)
+				anySuccess = true
 				bl.logger.Info("dns: refreshed blocklist", "url", entry.URL, "domains", len(domains), "suffixes", len(suffixes))
 				entry.lastFetch = now
+			}
+
+			if !anySuccess {
+				bl.logger.Warn("dns: all blocklist refreshes failed, keeping existing data")
+				continue
 			}
 
 			bl.mu.Lock()
