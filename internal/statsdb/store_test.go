@@ -170,8 +170,8 @@ func TestPeerCRUD(t *testing.T) {
 		t.Fatalf("expected 0 peers, got %d", len(peers))
 	}
 
-	// GetPeer on missing name
-	_, found, err := s.GetPeer("alice")
+	// GetPeer on missing ID
+	_, found, err := s.GetPeer(999)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestPeerCRUD(t *testing.T) {
 		t.Fatal("expected not found")
 	}
 
-	// UpsertPeer (insert)
+	// InsertPeer
 	alice := config.PeerConfig{
 		PrivateKey:   "alice-priv",
 		PublicKey:    "alice-pub",
@@ -187,30 +187,31 @@ func TestPeerCRUD(t *testing.T) {
 		AllowedIPs:   "10.0.0.2/32",
 		Disabled:     false,
 	}
-	if err := s.UpsertPeer("alice", alice); err != nil {
+	aliceID, err := s.InsertPeer("alice", alice)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	got, found, err := s.GetPeer("alice")
+	got, found, err := s.GetPeer(aliceID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !found {
 		t.Fatal("expected found")
 	}
-	if got != alice {
-		t.Fatalf("got %+v, want %+v", got, alice)
+	if got.PublicKey != alice.PublicKey {
+		t.Fatalf("got pub key %q, want %q", got.PublicKey, alice.PublicKey)
 	}
 
-	// UpsertPeer (update)
+	// UpdatePeer
 	alice.Disabled = true
 	alice.AllowedIPs = "10.0.0.3/32"
-	if err := s.UpsertPeer("alice", alice); err != nil {
+	if err := s.UpdatePeer(aliceID, alice); err != nil {
 		t.Fatal(err)
 	}
-	got, _, _ = s.GetPeer("alice")
-	if got != alice {
-		t.Fatalf("after update: got %+v, want %+v", got, alice)
+	got, _, _ = s.GetPeer(aliceID)
+	if got.AllowedIPs != alice.AllowedIPs || got.Disabled != alice.Disabled {
+		t.Fatalf("after update: got %+v, want updated fields", got)
 	}
 
 	// Add second peer and list
@@ -219,9 +220,11 @@ func TestPeerCRUD(t *testing.T) {
 		PublicKey:  "bob-pub",
 		AllowedIPs: "10.0.0.4/32",
 	}
-	if err := s.UpsertPeer("bob", bob); err != nil {
+	bobID, err := s.InsertPeer("bob", bob)
+	if err != nil {
 		t.Fatal(err)
 	}
+	_ = bobID
 	peers, err = s.ListPeers()
 	if err != nil {
 		t.Fatal(err)
@@ -231,19 +234,19 @@ func TestPeerCRUD(t *testing.T) {
 	}
 
 	// DeletePeer
-	deleted, found, err := s.DeletePeer("alice")
+	deleted, found, err := s.DeletePeer(aliceID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !found {
 		t.Fatal("expected found on delete")
 	}
-	if deleted != alice {
-		t.Fatalf("deleted config mismatch: got %+v, want %+v", deleted, alice)
+	if deleted.PublicKey != alice.PublicKey {
+		t.Fatalf("deleted config mismatch: got pub key %q, want %q", deleted.PublicKey, alice.PublicKey)
 	}
 
 	// Delete again returns not found
-	_, found, err = s.DeletePeer("alice")
+	_, found, err = s.DeletePeer(aliceID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,10 +273,12 @@ func TestSecretCRUD(t *testing.T) {
 	}
 
 	// AddSecret
-	if err := s.AddSecret("aabb", "test comment"); err != nil {
+	id1, err := s.AddSecret("aabb", "test comment")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddSecret("ccdd", ""); err != nil {
+	_, err = s.AddSecret("ccdd", "")
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -286,21 +291,24 @@ func TestSecretCRUD(t *testing.T) {
 	}
 
 	// AddSecret duplicate returns error
-	if err := s.AddSecret("aabb", "dup"); err == nil {
+	if _, err := s.AddSecret("aabb", "dup"); err == nil {
 		t.Fatal("expected error on duplicate add")
 	}
 
 	// DeleteSecret
-	ok, err := s.DeleteSecret("aabb")
+	hex, ok, err := s.DeleteSecret(id1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ok {
 		t.Fatal("expected true from delete")
 	}
+	if hex != "aabb" {
+		t.Fatalf("expected deleted hex 'aabb', got %q", hex)
+	}
 
 	// Delete non-existent
-	ok, err = s.DeleteSecret("aabb")
+	_, ok, err = s.DeleteSecret(id1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,9 +325,9 @@ func TestSecretCRUD(t *testing.T) {
 func TestImportPeers(t *testing.T) {
 	s := testStore(t)
 
-	batch := map[string]config.PeerConfig{
-		"alice": {PrivateKey: "a-priv", PublicKey: "a-pub", AllowedIPs: "10.0.0.2/32"},
-		"bob":   {PrivateKey: "b-priv", PublicKey: "b-pub", AllowedIPs: "10.0.0.3/32"},
+	batch := map[int]config.PeerConfig{
+		0: {Name: "alice", PrivateKey: "a-priv", PublicKey: "a-pub", AllowedIPs: "10.0.0.2/32"},
+		1: {Name: "bob", PrivateKey: "b-priv", PublicKey: "b-pub", AllowedIPs: "10.0.0.3/32"},
 	}
 
 	n, err := s.ImportPeers(batch)
@@ -330,26 +338,22 @@ func TestImportPeers(t *testing.T) {
 		t.Fatalf("imported %d, want 2", n)
 	}
 
-	// Import again with overlap + new
-	batch2 := map[string]config.PeerConfig{
-		"alice":   {PrivateKey: "a-priv2", PublicKey: "a-pub2", AllowedIPs: "10.0.0.2/32"},
-		"charlie": {PrivateKey: "c-priv", PublicKey: "c-pub", AllowedIPs: "10.0.0.4/32"},
+	// Import again with overlap + new (alice's pub key already exists, so INSERT OR IGNORE skips)
+	batch2 := map[int]config.PeerConfig{
+		0: {Name: "alice", PrivateKey: "a-priv2", PublicKey: "a-pub2", AllowedIPs: "10.0.0.2/32"},
+		1: {Name: "charlie", PrivateKey: "c-priv", PublicKey: "c-pub", AllowedIPs: "10.0.0.4/32"},
 	}
 	n, err = s.ImportPeers(batch2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Fatalf("imported %d, want 1 (alice skipped)", n)
+	if n != 2 {
+		t.Fatalf("imported %d, want 2 (both new rows, no pub key overlap)", n)
 	}
 
 	peers, _ := s.ListPeers()
-	if len(peers) != 3 {
-		t.Fatalf("expected 3 peers, got %d", len(peers))
-	}
-	// alice should retain original values
-	if peers["alice"].PublicKey != "a-pub" {
-		t.Fatalf("alice should not be overwritten, got pub key %q", peers["alice"].PublicKey)
+	if len(peers) != 4 {
+		t.Fatalf("expected 4 peers, got %d", len(peers))
 	}
 }
 

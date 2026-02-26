@@ -48,7 +48,7 @@ func (r *PeerUpstreamResolver) GroupFor(ip netip.Addr) string {
 }
 
 // PopulateFromPeers rebuilds the resolver from the current peer config.
-func (r *PeerUpstreamResolver) PopulateFromPeers(peers map[string]config.PeerConfig) {
+func (r *PeerUpstreamResolver) PopulateFromPeers(peers map[int]config.PeerConfig) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.groups = make(map[netip.Addr]string)

@@ -45,13 +45,17 @@ func ListConf(args []string, logger *slog.Logger) {
 		return
 	}
 
-	names := make([]string, 0, len(cfg.Peers))
-	for name := range cfg.Peers {
-		names = append(names, name)
+	type peerEntry struct {
+		ID   int
+		Name string
 	}
-	sort.Strings(names)
+	entries := make([]peerEntry, 0, len(cfg.Peers))
+	for id, peer := range cfg.Peers {
+		entries = append(entries, peerEntry{ID: id, Name: peer.Name})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
 
-	for _, name := range names {
-		fmt.Println(name)
+	for _, e := range entries {
+		fmt.Printf("%d\t%s\n", e.ID, e.Name)
 	}
 }

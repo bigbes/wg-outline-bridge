@@ -55,12 +55,6 @@ upstreams:
 		os.Exit(1)
 	}
 
-	peersDir := filepath.Join(filepath.Dir(*configPath), "peers")
-	if err := os.MkdirAll(peersDir, 0o755); err != nil {
-		logger.Error("failed to create peers directory", "err", err)
-		os.Exit(1)
-	}
-
 	fmt.Println("=== Config initialized ===")
 	fmt.Printf("Config:     %s\n", *configPath)
 	fmt.Printf("Public Key: %s\n", publicKey)

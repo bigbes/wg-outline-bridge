@@ -123,19 +123,11 @@ func (b *Bridge) Run(ctx context.Context) error {
 		}()
 		b.logger.Info("stats db opened", "path", b.cfg.Database.Path, "flush_interval", b.cfg.Database.FlushInterval)
 
-		// Import file-based peers into DB if DB is empty
 		dbPeers, err := store.ListPeers()
 		if err != nil {
 			b.logger.Error("failed to list db peers", "err", err)
 		}
-		if len(dbPeers) == 0 && len(b.cfg.Peers) > 0 {
-			imported, err := store.ImportPeers(b.cfg.Peers)
-			if err != nil {
-				b.logger.Error("failed to import peers to database", "err", err)
-			} else if imported > 0 {
-				b.logger.Info("imported file peers to database", "count", imported)
-			}
-		} else if len(dbPeers) > 0 {
+		if len(dbPeers) > 0 {
 			b.cfg.Peers = dbPeers
 		}
 
@@ -202,6 +194,17 @@ func (b *Bridge) Run(ctx context.Context) error {
 		}
 		if len(dbDNSRecords) > 0 {
 			b.cfg.DNS.Records = dbDNSRecords
+		}
+
+		// Build peer name→ID map for resolving YAML peer names and migrating DB data.
+		peerNameToID := make(map[string]int, len(b.cfg.Peers))
+		for id, p := range b.cfg.Peers {
+			peerNameToID[p.Name] = id
+		}
+
+		// Migrate any existing name-based peers_json to ID-based format.
+		if err := store.MigratePeersJSONToIDs(peerNameToID); err != nil {
+			b.logger.Error("failed to migrate peers_json to IDs", "err", err)
 		}
 
 		// Seed config-file DNS rules into DB (only on first run), then use DB as source of truth.
@@ -360,8 +363,8 @@ func (b *Bridge) Run(ctx context.Context) error {
 	b.wgDev = wgDev
 	defer b.wgDev.Close()
 
-	for name, peer := range b.cfg.Peers {
-		b.logger.Info("configuring peer", "name", name, "public_key", peer.PublicKey, "allowed_ips", peer.AllowedIPs)
+	for _, peer := range b.cfg.Peers {
+		b.logger.Info("configuring peer", "name", peer.Name, "public_key", peer.PublicKey, "allowed_ips", peer.AllowedIPs)
 	}
 
 	uapi, err := b.cfg.WireGuard.ToUAPI(b.cfg.Peers)
@@ -496,13 +499,13 @@ func (b *Bridge) ResetConfig() error {
 	b.statsStore.MarkSeeded("routing_protocol_rules")
 
 	// Reset means zero peers and zero secrets.
-	fileCfg.Peers = make(map[string]config.PeerConfig)
+	fileCfg.Peers = make(map[int]config.PeerConfig)
 	fileCfg.MTProxy.Secrets = nil
 
 	// Reconcile runtime state: remove all peers.
 	diff := config.DiffPeers(b.cfg.Peers, fileCfg.Peers)
-	for name, peer := range diff.Removed {
-		b.logger.Info("reset: removing peer", "name", name, "public_key", peer.PublicKey)
+	for _, peer := range diff.Removed {
+		b.logger.Info("reset: removing peer", "name", peer.Name, "public_key", peer.PublicKey)
 		uapi, err := config.PeerUAPIRemove(peer.PublicKey)
 		if err != nil {
 			b.logger.Error("reset: failed to generate remove UAPI", "err", err)
@@ -655,9 +658,10 @@ func (b *Bridge) PeerStatuses() []observer.PeerStatus {
 	}
 
 	var result []observer.PeerStatus
-	for name, peer := range peers {
+	for id, peer := range peers {
 		ps := observer.PeerStatus{
-			Name:      name,
+			ID:        id,
+			Name:      peer.Name,
 			PublicKey: peer.PublicKey,
 		}
 		if st, ok := statusMap[peer.PublicKey]; ok {
@@ -800,31 +804,27 @@ func (b *Bridge) CurrentConfig() *config.Config {
 }
 
 // AddPeer generates a new WireGuard peer, saves it to the database, and applies it to the running device.
-func (b *Bridge) AddPeer(name string) (config.PeerConfig, error) {
+func (b *Bridge) AddPeer(name string) (int, config.PeerConfig, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	if b.statsStore == nil {
-		return config.PeerConfig{}, fmt.Errorf("database not configured")
-	}
-
-	if _, exists := b.cfg.Peers[name]; exists {
-		return config.PeerConfig{}, fmt.Errorf("peer %q already exists", name)
+		return 0, config.PeerConfig{}, fmt.Errorf("database not configured")
 	}
 
 	privateKey, publicKey, err := config.GenerateKeyPair()
 	if err != nil {
-		return config.PeerConfig{}, fmt.Errorf("generating keys: %w", err)
+		return 0, config.PeerConfig{}, fmt.Errorf("generating keys: %w", err)
 	}
 
 	presharedKey, err := config.GeneratePresharedKey()
 	if err != nil {
-		return config.PeerConfig{}, fmt.Errorf("generating preshared key: %w", err)
+		return 0, config.PeerConfig{}, fmt.Errorf("generating preshared key: %w", err)
 	}
 
 	clientIP, err := config.NextPeerIP(b.cfg)
 	if err != nil {
-		return config.PeerConfig{}, fmt.Errorf("allocating IP: %w", err)
+		return 0, config.PeerConfig{}, fmt.Errorf("allocating IP: %w", err)
 	}
 
 	peer := config.PeerConfig{
@@ -835,26 +835,29 @@ func (b *Bridge) AddPeer(name string) (config.PeerConfig, error) {
 		ExcludePrivate: true,
 	}
 
-	if err := b.statsStore.UpsertPeer(name, peer); err != nil {
-		return config.PeerConfig{}, fmt.Errorf("saving peer: %w", err)
+	id, err := b.statsStore.InsertPeer(name, peer)
+	if err != nil {
+		return 0, config.PeerConfig{}, fmt.Errorf("saving peer: %w", err)
 	}
 
 	if b.wgDev != nil {
 		uapi, err := config.PeerUAPIAdd(peer)
 		if err != nil {
-			b.statsStore.DeletePeer(name)
-			return config.PeerConfig{}, fmt.Errorf("generating UAPI: %w", err)
+			b.statsStore.DeletePeer(id)
+			return 0, config.PeerConfig{}, fmt.Errorf("generating UAPI: %w", err)
 		}
 		if err := b.wgDev.IpcSet(uapi); err != nil {
-			b.statsStore.DeletePeer(name)
-			return config.PeerConfig{}, fmt.Errorf("applying to wireguard: %w", err)
+			b.statsStore.DeletePeer(id)
+			return 0, config.PeerConfig{}, fmt.Errorf("applying to wireguard: %w", err)
 		}
 	}
 
-	b.cfg.Peers[name] = peer
+	peer.ID = id
+	peer.Name = name
+	b.cfg.Peers[id] = peer
 	if b.peerDNSResolver != nil {
 		for _, addr := range peerAllowedIPs(peer) {
-			b.peerDNSResolver.Set(addr, name)
+			b.peerDNSResolver.Set(addr, name, id)
 		}
 	}
 	if b.peerMon != nil {
@@ -862,11 +865,11 @@ func (b *Bridge) AddPeer(name string) (config.PeerConfig, error) {
 	}
 
 	b.logger.Info("peer added", "name", name, "public_key", publicKey, "allowed_ips", peer.AllowedIPs)
-	return peer, nil
+	return id, peer, nil
 }
 
 // DeletePeer removes a peer from the database and the running device.
-func (b *Bridge) DeletePeer(name string) error {
+func (b *Bridge) DeletePeer(id int) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -874,21 +877,27 @@ func (b *Bridge) DeletePeer(name string) error {
 		return fmt.Errorf("database not configured")
 	}
 
-	peer, exists := b.cfg.Peers[name]
+	peer, exists := b.cfg.Peers[id]
 	if !exists {
-		return fmt.Errorf("peer %q not found", name)
+		return fmt.Errorf("peer %d not found", id)
 	}
 
-	if _, _, err := b.statsStore.DeletePeer(name); err != nil {
+	if _, _, err := b.statsStore.DeletePeer(id); err != nil {
 		return fmt.Errorf("deleting from database: %w", err)
+	}
+
+	if err := b.statsStore.RemovePeerFromRules(id); err != nil {
+		b.logger.Error("failed to remove peer from rules", "name", peer.Name, "id", id, "err", err)
+	} else {
+		b.removePeerFromCfgRules(id)
 	}
 
 	if b.wgDev != nil && !peer.Disabled {
 		uapi, err := config.PeerUAPIRemove(peer.PublicKey)
 		if err != nil {
-			b.logger.Error("failed to generate remove UAPI", "name", name, "err", err)
+			b.logger.Error("failed to generate remove UAPI", "name", peer.Name, "id", id, "err", err)
 		} else if err := b.wgDev.IpcSet(uapi); err != nil {
-			b.logger.Error("failed to remove peer from wireguard", "name", name, "err", err)
+			b.logger.Error("failed to remove peer from wireguard", "name", peer.Name, "id", id, "err", err)
 		}
 	}
 
@@ -900,7 +909,7 @@ func (b *Bridge) DeletePeer(name string) error {
 		}
 	}
 
-	delete(b.cfg.Peers, name)
+	delete(b.cfg.Peers, id)
 	if b.peerResolver != nil {
 		for _, addr := range peerIPs {
 			b.peerResolver.Delete(addr)
@@ -915,12 +924,47 @@ func (b *Bridge) DeletePeer(name string) error {
 		b.peerMon.updatePeers(b.cfg.Peers)
 	}
 
-	b.logger.Info("peer deleted", "name", name)
+	b.logger.Info("peer deleted", "name", peer.Name, "id", id)
 	return nil
 }
 
-// SetPeerDisabled enables or disables a peer by name.
-func (b *Bridge) SetPeerDisabled(name string, disabled bool) error {
+// removePeerFromCfgRules removes a peer ID from all in-memory DNS and
+// routing rule PeerIDs lists. Must be called with b.mu held.
+func (b *Bridge) removePeerFromCfgRules(peerID int) {
+	needDNSReload := false
+	for i, r := range b.cfg.DNS.Rules {
+		if idx := slices.Index(r.PeerIDs, peerID); idx >= 0 {
+			b.cfg.DNS.Rules[i].PeerIDs = slices.Delete(r.PeerIDs, idx, idx+1)
+			needDNSReload = true
+		}
+	}
+	for i, r := range b.cfg.Routing.IPRules {
+		if idx := slices.Index(r.PeerIDs, peerID); idx >= 0 {
+			b.cfg.Routing.IPRules[i].PeerIDs = slices.Delete(r.PeerIDs, idx, idx+1)
+		}
+	}
+	for i, r := range b.cfg.Routing.SNIRules {
+		if idx := slices.Index(r.PeerIDs, peerID); idx >= 0 {
+			b.cfg.Routing.SNIRules[i].PeerIDs = slices.Delete(r.PeerIDs, idx, idx+1)
+		}
+	}
+	for i, r := range b.cfg.Routing.PortRules {
+		if idx := slices.Index(r.PeerIDs, peerID); idx >= 0 {
+			b.cfg.Routing.PortRules[i].PeerIDs = slices.Delete(r.PeerIDs, idx, idx+1)
+		}
+	}
+	for i, r := range b.cfg.Routing.ProtocolRules {
+		if idx := slices.Index(r.PeerIDs, peerID); idx >= 0 {
+			b.cfg.Routing.ProtocolRules[i].PeerIDs = slices.Delete(r.PeerIDs, idx, idx+1)
+		}
+	}
+	if needDNSReload {
+		b.reloadDNSRules()
+	}
+}
+
+// SetPeerDisabled enables or disables a peer by ID.
+func (b *Bridge) SetPeerDisabled(id int, disabled bool) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -928,9 +972,9 @@ func (b *Bridge) SetPeerDisabled(name string, disabled bool) error {
 		return fmt.Errorf("database not configured")
 	}
 
-	peer, exists := b.cfg.Peers[name]
+	peer, exists := b.cfg.Peers[id]
 	if !exists {
-		return fmt.Errorf("peer %q not found", name)
+		return fmt.Errorf("peer %d not found", id)
 	}
 
 	if peer.Disabled == disabled {
@@ -938,7 +982,7 @@ func (b *Bridge) SetPeerDisabled(name string, disabled bool) error {
 	}
 
 	peer.Disabled = disabled
-	if err := b.statsStore.UpsertPeer(name, peer); err != nil {
+	if err := b.statsStore.UpdatePeer(id, peer); err != nil {
 		return fmt.Errorf("saving peer: %w", err)
 	}
 
@@ -946,21 +990,21 @@ func (b *Bridge) SetPeerDisabled(name string, disabled bool) error {
 		if disabled {
 			uapi, err := config.PeerUAPIRemove(peer.PublicKey)
 			if err != nil {
-				b.logger.Error("failed to generate remove UAPI", "name", name, "err", err)
+				b.logger.Error("failed to generate remove UAPI", "name", peer.Name, "id", id, "err", err)
 			} else if err := b.wgDev.IpcSet(uapi); err != nil {
-				b.logger.Error("failed to remove peer from wireguard", "name", name, "err", err)
+				b.logger.Error("failed to remove peer from wireguard", "name", peer.Name, "id", id, "err", err)
 			}
 		} else {
 			uapi, err := config.PeerUAPIAdd(peer)
 			if err != nil {
-				b.logger.Error("failed to generate add UAPI", "name", name, "err", err)
+				b.logger.Error("failed to generate add UAPI", "name", peer.Name, "id", id, "err", err)
 			} else if err := b.wgDev.IpcSet(uapi); err != nil {
-				b.logger.Error("failed to add peer to wireguard", "name", name, "err", err)
+				b.logger.Error("failed to add peer to wireguard", "name", peer.Name, "id", id, "err", err)
 			}
 		}
 	}
 
-	b.cfg.Peers[name] = peer
+	b.cfg.Peers[id] = peer
 	peerIPs := peerAllowedIPs(peer)
 	if b.peerResolver != nil {
 		for _, addr := range peerIPs {
@@ -976,7 +1020,7 @@ func (b *Bridge) SetPeerDisabled(name string, disabled bool) error {
 			if disabled {
 				b.peerDNSResolver.Delete(addr)
 			} else {
-				b.peerDNSResolver.Set(addr, name)
+				b.peerDNSResolver.Set(addr, peer.Name, id)
 			}
 		}
 	}
@@ -988,12 +1032,12 @@ func (b *Bridge) SetPeerDisabled(name string, disabled bool) error {
 	if disabled {
 		action = "disabled"
 	}
-	b.logger.Info("peer "+action, "name", name)
+	b.logger.Info("peer "+action, "name", peer.Name, "id", id)
 	return nil
 }
 
 // SetPeerUpstreamGroup changes the upstream group for a peer at runtime.
-func (b *Bridge) SetPeerUpstreamGroup(name, group string) error {
+func (b *Bridge) SetPeerUpstreamGroup(id int, group string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -1001,21 +1045,21 @@ func (b *Bridge) SetPeerUpstreamGroup(name, group string) error {
 		return fmt.Errorf("database not configured")
 	}
 
-	peer, exists := b.cfg.Peers[name]
+	peer, exists := b.cfg.Peers[id]
 	if !exists {
-		return fmt.Errorf("peer %q not found", name)
+		return fmt.Errorf("peer %d not found", id)
 	}
 
 	if peer.UpstreamGroup == group {
 		return nil
 	}
 
-	if err := b.statsStore.SetPeerUpstreamGroup(name, group); err != nil {
+	if err := b.statsStore.SetPeerUpstreamGroup(id, group); err != nil {
 		return fmt.Errorf("saving peer upstream group: %w", err)
 	}
 
 	peer.UpstreamGroup = group
-	b.cfg.Peers[name] = peer
+	b.cfg.Peers[id] = peer
 
 	if b.peerResolver != nil {
 		for _, addr := range peerAllowedIPs(peer) {
@@ -1023,12 +1067,12 @@ func (b *Bridge) SetPeerUpstreamGroup(name, group string) error {
 		}
 	}
 
-	b.logger.Info("peer upstream group changed", "name", name, "upstream_group", group)
+	b.logger.Info("peer upstream group changed", "name", peer.Name, "id", id, "upstream_group", group)
 	return nil
 }
 
 // SetPeerExcludePrivate updates the exclude_private flag for a peer.
-func (b *Bridge) SetPeerExcludePrivate(name string, excludePrivate bool) error {
+func (b *Bridge) SetPeerExcludePrivate(id int, excludePrivate bool) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -1036,28 +1080,28 @@ func (b *Bridge) SetPeerExcludePrivate(name string, excludePrivate bool) error {
 		return fmt.Errorf("database not configured")
 	}
 
-	peer, exists := b.cfg.Peers[name]
+	peer, exists := b.cfg.Peers[id]
 	if !exists {
-		return fmt.Errorf("peer %q not found", name)
+		return fmt.Errorf("peer %d not found", id)
 	}
 
 	if peer.ExcludePrivate == excludePrivate {
 		return nil
 	}
 
-	if err := b.statsStore.SetPeerExcludePrivate(name, excludePrivate); err != nil {
+	if err := b.statsStore.SetPeerExcludePrivate(id, excludePrivate); err != nil {
 		return fmt.Errorf("saving peer exclude_private: %w", err)
 	}
 
 	peer.ExcludePrivate = excludePrivate
-	b.cfg.Peers[name] = peer
+	b.cfg.Peers[id] = peer
 
-	b.logger.Info("peer exclude_private changed", "name", name, "exclude_private", excludePrivate)
+	b.logger.Info("peer exclude_private changed", "name", peer.Name, "id", id, "exclude_private", excludePrivate)
 	return nil
 }
 
 // SetPeerExcludeServer updates the exclude_server flag for a peer.
-func (b *Bridge) SetPeerExcludeServer(name string, excludeServer bool) error {
+func (b *Bridge) SetPeerExcludeServer(id int, excludeServer bool) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -1065,28 +1109,28 @@ func (b *Bridge) SetPeerExcludeServer(name string, excludeServer bool) error {
 		return fmt.Errorf("database not configured")
 	}
 
-	peer, exists := b.cfg.Peers[name]
+	peer, exists := b.cfg.Peers[id]
 	if !exists {
-		return fmt.Errorf("peer %q not found", name)
+		return fmt.Errorf("peer %d not found", id)
 	}
 
 	if peer.ExcludeServer == excludeServer {
 		return nil
 	}
 
-	if err := b.statsStore.SetPeerExcludeServer(name, excludeServer); err != nil {
+	if err := b.statsStore.SetPeerExcludeServer(id, excludeServer); err != nil {
 		return fmt.Errorf("saving peer exclude_server: %w", err)
 	}
 
 	peer.ExcludeServer = excludeServer
-	b.cfg.Peers[name] = peer
+	b.cfg.Peers[id] = peer
 
-	b.logger.Info("peer exclude_server changed", "name", name, "exclude_server", excludeServer)
+	b.logger.Info("peer exclude_server changed", "name", peer.Name, "id", id, "exclude_server", excludeServer)
 	return nil
 }
 
-// RenamePeer renames a peer from oldName to newName.
-func (b *Bridge) RenamePeer(oldName, newName string) error {
+// RenamePeer renames a peer by ID.
+func (b *Bridge) RenamePeer(id int, newName string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -1094,42 +1138,38 @@ func (b *Bridge) RenamePeer(oldName, newName string) error {
 		return fmt.Errorf("database not configured")
 	}
 
-	peer, exists := b.cfg.Peers[oldName]
+	peer, exists := b.cfg.Peers[id]
 	if !exists {
-		return fmt.Errorf("peer %q not found", oldName)
+		return fmt.Errorf("peer %d not found", id)
 	}
 
-	if _, exists := b.cfg.Peers[newName]; exists {
-		return fmt.Errorf("peer %q already exists", newName)
-	}
-
-	if err := b.statsStore.RenamePeer(oldName, newName); err != nil {
+	if err := b.statsStore.RenamePeer(id, newName); err != nil {
 		return fmt.Errorf("renaming peer: %w", err)
 	}
 
-	delete(b.cfg.Peers, oldName)
-	b.cfg.Peers[newName] = peer
+	peer.Name = newName
+	b.cfg.Peers[id] = peer
 	if b.peerMon != nil {
 		b.peerMon.updatePeers(b.cfg.Peers)
 	}
 
-	b.logger.Info("peer renamed", "old_name", oldName, "new_name", newName)
+	b.logger.Info("peer renamed", "id", id, "new_name", newName)
 	return nil
 }
 
 // AddSecret generates a new MTProxy secret, saves it to the database,
 // and live-reloads the MTProxy server to accept the new secret immediately.
-func (b *Bridge) AddSecret(secretType, comment string) (string, error) {
+func (b *Bridge) AddSecret(secretType, comment string) (int, string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	if b.statsStore == nil {
-		return "", fmt.Errorf("database not configured")
+		return 0, "", fmt.Errorf("database not configured")
 	}
 
 	var secret [16]byte
 	if _, err := rand.Read(secret[:]); err != nil {
-		return "", fmt.Errorf("generating random bytes: %w", err)
+		return 0, "", fmt.Errorf("generating random bytes: %w", err)
 	}
 
 	secretHex := hex.EncodeToString(secret[:])
@@ -1141,23 +1181,24 @@ func (b *Bridge) AddSecret(secretType, comment string) (string, error) {
 	case "default":
 		// no prefix
 	default:
-		return "", fmt.Errorf("unknown secret type: %s", secretType)
+		return 0, "", fmt.Errorf("unknown secret type: %s", secretType)
 	}
 
-	if err := b.statsStore.AddSecret(secretHex, comment); err != nil {
-		return "", fmt.Errorf("saving secret: %w", err)
+	id, err := b.statsStore.AddSecret(secretHex, comment)
+	if err != nil {
+		return 0, "", fmt.Errorf("saving secret: %w", err)
 	}
 
 	b.cfg.MTProxy.Secrets = append(b.cfg.MTProxy.Secrets, secretHex)
 	b.reloadMTProxySecrets()
 
 	b.logger.Info("mtproxy secret added", "type", secretType)
-	return secretHex, nil
+	return id, secretHex, nil
 }
 
 // DeleteSecret removes an MTProxy secret from the database
 // and live-reloads the MTProxy server to stop accepting it immediately.
-func (b *Bridge) DeleteSecret(secretHex string) error {
+func (b *Bridge) DeleteSecret(id int) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -1165,7 +1206,7 @@ func (b *Bridge) DeleteSecret(secretHex string) error {
 		return fmt.Errorf("database not configured")
 	}
 
-	ok, err := b.statsStore.DeleteSecret(secretHex)
+	secretHex, ok, err := b.statsStore.DeleteSecret(id)
 	if err != nil {
 		return fmt.Errorf("deleting secret: %w", err)
 	}
@@ -1183,6 +1224,45 @@ func (b *Bridge) DeleteSecret(secretHex string) error {
 	b.reloadMTProxySecrets()
 
 	b.logger.Info("mtproxy secret deleted")
+	return nil
+}
+
+// DeleteUser removes an allowed user and cascade-deletes all their peers and
+// MTProxy secrets.
+func (b *Bridge) DeleteUser(userID int64) error {
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	ownedPeers, err := b.statsStore.ListPeerIDsByOwner(userID)
+	if err != nil {
+		return fmt.Errorf("listing owned peers: %w", err)
+	}
+	ownedSecrets, err := b.statsStore.ListSecretIDsByOwner(userID)
+	if err != nil {
+		return fmt.Errorf("listing owned secrets: %w", err)
+	}
+
+	deleted, err := b.statsStore.DeleteAllowedUser(userID)
+	if err != nil {
+		return fmt.Errorf("deleting user: %w", err)
+	}
+	if !deleted {
+		return fmt.Errorf("user %d not found", userID)
+	}
+
+	for id := range ownedPeers {
+		if err := b.DeletePeer(id); err != nil {
+			b.logger.Error("failed to cascade-delete peer", "peer_id", id, "user_id", userID, "err", err)
+		}
+	}
+	for id := range ownedSecrets {
+		if err := b.DeleteSecret(id); err != nil {
+			b.logger.Error("failed to cascade-delete secret", "secret_id", id, "user_id", userID, "err", err)
+		}
+	}
+
+	b.logger.Info("user deleted", "user_id", userID, "peers", len(ownedPeers), "secrets", len(ownedSecrets))
 	return nil
 }
 
@@ -1234,18 +1314,25 @@ func (b *Bridge) buildMTProxyDialerResolver() mtproxy2.DialerResolver {
 		defaultDialer = b.upstreams.DefaultStreamDialer()
 	}
 
-	var secretGroups map[string]string
+	var secretGroupsByID map[int]string
 	if b.statsStore != nil {
-		secretGroups, _ = b.statsStore.ListSecretUpstreamGroups()
+		secretGroupsByID, _ = b.statsStore.ListSecretUpstreamGroups()
 	}
 
-	if len(secretGroups) == 0 {
+	if len(secretGroupsByID) == 0 {
 		return &mtproxy2.SingleDialerResolver{Dialer: defaultDialer}
 	}
 
 	perSecret := make(map[int]mtproxy2.StreamDialer)
 	for i, hex := range b.cfg.MTProxy.Secrets {
-		sg, ok := secretGroups[hex]
+		if b.statsStore == nil {
+			continue
+		}
+		secretID, found, err := b.statsStore.GetSecretIDByHex(hex)
+		if err != nil || !found {
+			continue
+		}
+		sg, ok := secretGroupsByID[secretID]
 		if !ok || sg == "" {
 			continue
 		}
@@ -1345,7 +1432,7 @@ func (b *Bridge) SetProxyAuth(name, username, password string) error {
 }
 
 // SetSecretUpstreamGroup changes the upstream group for an MTProxy secret.
-func (b *Bridge) SetSecretUpstreamGroup(secretHex, group string) error {
+func (b *Bridge) SetSecretUpstreamGroup(id int, group string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -1353,18 +1440,30 @@ func (b *Bridge) SetSecretUpstreamGroup(secretHex, group string) error {
 		return fmt.Errorf("database not configured")
 	}
 
-	found := slices.Contains(b.cfg.MTProxy.Secrets, secretHex)
-	if !found {
-		return fmt.Errorf("secret %q not found", secretHex)
-	}
-
-	if err := b.statsStore.SetSecretUpstreamGroup(secretHex, group); err != nil {
+	if err := b.statsStore.SetSecretUpstreamGroup(id, group); err != nil {
 		return fmt.Errorf("saving secret upstream group: %w", err)
 	}
 
 	b.reloadMTProxySecrets()
 
-	b.logger.Info("secret upstream group changed", "secret", secretHex, "upstream_group", group)
+	b.logger.Info("secret upstream group changed", "id", id, "upstream_group", group)
+	return nil
+}
+
+// RenameSecret updates the display name of an MTProxy secret.
+func (b *Bridge) RenameSecret(id int, name string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+
+	if err := b.statsStore.RenameSecret(id, name); err != nil {
+		return fmt.Errorf("renaming secret: %w", err)
+	}
+
+	b.logger.Info("secret renamed", "id", id, "name", name)
 	return nil
 }
 
@@ -1859,8 +1958,8 @@ func (b *Bridge) statsFlush() {
 	b.mu.Unlock()
 
 	nameByPub := make(map[string]string, len(peers))
-	for name, peer := range peers {
-		nameByPub[peer.PublicKey] = name
+	for _, peer := range peers {
+		nameByPub[peer.PublicKey] = peer.Name
 	}
 
 	snapshots := make([]statsdb.WGPeerSnapshot, 0, len(statuses))
@@ -1976,7 +2075,7 @@ func buildDNSRules(cfg config.DNSConfig, logger *slog.Logger) []dns.Rule {
 			Name:     rc.Name,
 			Action:   rc.Action,
 			Upstream: rc.Upstream,
-			Peers:    rc.Peers,
+			PeerIDs:  rc.PeerIDs,
 		}
 		if rule.Action == "upstream" && !strings.Contains(rule.Upstream, ":") {
 			rule.Upstream += ":53"

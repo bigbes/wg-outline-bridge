@@ -68,7 +68,9 @@ if (!tg || !tg.initData) {
     let usersLoaded = false;
     let currentConfigText = "";
     let currentConfigName = "";
+    let currentConfigId = null;
     let deleteCallback = null;
+    let editingPeerId = null;
     let editingPeerName = null;
     let peerEditDisabled = false;
     let peerEditExcludePrivate = true;
@@ -307,7 +309,7 @@ if (!tg || !tg.initData) {
                 const name = p.name || p.public_key.slice(0, 8) + "...";
                 const status = peerStatusClass(p.last_handshake_unix);
                 const esc = escapeHtml(name);
-                const escapedName = name.replace(/'/g, "\\'");
+                const pid = p.id;
                 return (
                     '<div class="list-item' + (p.disabled ? ' disabled' : '') + '">' +
                     '<div class="item-icon wg-peer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div>' +
@@ -329,23 +331,23 @@ if (!tg || !tg.initData) {
                     '<div class="item-action">' +
                     '<div class="toggle-switch ' +
                     (p.disabled ? "" : "active") +
-                    '" onclick="togglePeer(\'' +
-                    escapedName +
-                    "'," +
+                    '" onclick="togglePeer(' +
+                    pid +
+                    "," +
                     p.disabled +
                     ',event)"><div class="toggle-knob"></div></div>' +
-                    '<button class="action-icon-btn" onclick="openPeerEditModal(\'' +
-                    escapedName +
-                    '\')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
-                    '<button class="action-icon-btn" onclick="showPeerConf(\'' +
-                    escapedName +
-                    '\')" title="Config"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 21h12a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 0 0-2-2H3"/><path d="M19 17V5a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v2h12v14"/></svg></button>' +
-                    '<button class="action-icon-btn" onclick="showPeerQR(\'' +
-                    escapedName +
-                    '\')" title="QR"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></button>' +
-                    '<button class="delete-btn" onclick="promptDelete(\'' +
-                    escapedName +
-                    '\',\'peer\')" title="Delete"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>' +
+                    '<button class="action-icon-btn" onclick="openPeerEditModal(' +
+                    pid +
+                    ')" title="Edit"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>' +
+                    '<button class="action-icon-btn" onclick="showPeerConf(' +
+                    pid +
+                    ')" title="Config"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 21h12a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 0 0-2-2H3"/><path d="M19 17V5a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v2h12v14"/></svg></button>' +
+                    '<button class="action-icon-btn" onclick="showPeerQR(' +
+                    pid +
+                    ')" title="QR"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></button>' +
+                    '<button class="delete-btn" onclick="promptDelete(' +
+                    pid +
+                    ',\'peer\')" title="Delete"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>' +
                     "</div></div>"
                 );
             })
@@ -638,7 +640,7 @@ if (!tg || !tg.initData) {
                         );
                     if (r.upstream) info.push("→ " + r.upstream);
                     var peerScope = (r.peers && r.peers.length > 0)
-                        ? escapeHtml(r.peers.join(", "))
+                        ? escapeHtml(r.peers.map(function(p) { return p.name; }).join(", "))
                         : "All peers";
                     const escapedName = r.name.replace(/'/g, "\\'");
                     return (
@@ -844,7 +846,7 @@ if (!tg || !tg.initData) {
                 if ((r.lists || []).length > 0) info.push((r.lists || []).length + ' list' + ((r.lists || []).length > 1 ? 's' : ''));
                 if (r.upstream_group) info.push('→ ' + r.upstream_group);
                 var peerScope = (r.peers && r.peers.length > 0)
-                    ? escapeHtml(r.peers.join(", "))
+                    ? escapeHtml(r.peers.map(function(p) { return p.name; }).join(", "))
                     : "All peers";
                 const escapedName = r.name.replace(/'/g, "\\'");
                 return '<div class="list-item" draggable="' + (isAdmin() ? 'true' : 'false') + '" data-key="' + escapeHtml(r.name) + '">' +
@@ -878,7 +880,7 @@ if (!tg || !tg.initData) {
                 if (domainCount > 0) info.push(domainCount + ' domain' + (domainCount > 1 ? 's' : ''));
                 if (r.upstream_group) info.push('→ ' + r.upstream_group);
                 var sniPeerScope = (r.peers && r.peers.length > 0)
-                    ? escapeHtml(r.peers.join(", "))
+                    ? escapeHtml(r.peers.map(function(p) { return p.name; }).join(", "))
                     : "All peers";
                 const escapedName = r.name.replace(/'/g, "\\'");
                 return '<div class="list-item">' +
@@ -912,7 +914,7 @@ if (!tg || !tg.initData) {
                 if (portCount > 0) info.push(portCount + ' port' + (portCount > 1 ? 's' : ''));
                 if (r.upstream_group) info.push('→ ' + r.upstream_group);
                 var portPeerScope = (r.peers && r.peers.length > 0)
-                    ? escapeHtml(r.peers.join(", "))
+                    ? escapeHtml(r.peers.map(function(p) { return p.name; }).join(", "))
                     : "All peers";
                 const escapedName = r.name.replace(/'/g, "\\'");
                 return '<div class="list-item">' +
@@ -946,7 +948,7 @@ if (!tg || !tg.initData) {
                 if (protoCount > 0) info.push(protoCount + ' protocol' + (protoCount > 1 ? 's' : ''));
                 if (r.upstream_group) info.push('→ ' + r.upstream_group);
                 var protoPeerScope = (r.peers && r.peers.length > 0)
-                    ? escapeHtml(r.peers.join(", "))
+                    ? escapeHtml(r.peers.map(function(p) { return p.name; }).join(", "))
                     : "All peers";
                 const escapedName = r.name.replace(/'/g, "\\'");
                 return '<div class="list-item">' +
@@ -1156,11 +1158,13 @@ if (!tg || !tg.initData) {
         });
     };
 
-    window.openPeerEditModal = function (name) {
+    window.openPeerEditModal = function (id) {
         if (!statusData) return;
-        const peer = (statusData.peers || []).find((p) => p.name === name);
+        const peer = (statusData.peers || []).find((p) => p.id === id);
         if (!peer) return;
-        editingPeerName = name;
+        editingPeerId = id;
+        editingPeerName = peer.name || "";
+        const name = editingPeerName;
         peerEditDisabled = peer.disabled;
         peerEditExcludePrivate = peer.exclude_private !== false;
         peerEditExcludeServer = peer.exclude_server === true;
@@ -1195,6 +1199,7 @@ if (!tg || !tg.initData) {
     };
     window.closePeerEditModal = function () {
         closeModal("peer-edit-modal");
+        editingPeerId = null;
         editingPeerName = null;
     };
     window.togglePeerEditDisabled = function () {
@@ -1246,7 +1251,7 @@ if (!tg || !tg.initData) {
         }
     }
     window.savePeerEdit = function () {
-        if (!editingPeerName) return;
+        if (editingPeerId == null) return;
         const newName = document
             .getElementById("inp-peer-edit-name")
             .value.trim();
@@ -1263,7 +1268,7 @@ if (!tg || !tg.initData) {
         body.upstream_group = upstreamGroup;
         api(
             "PUT",
-            "/api/peers/" + encodeURIComponent(editingPeerName),
+            "/api/peers/" + editingPeerId,
             body,
         ).then((d) => {
             if (d.error) {
@@ -1278,8 +1283,10 @@ if (!tg || !tg.initData) {
         });
     };
 
-    window.showPeerConf = function (name) {
-        api("GET", "/api/peers/" + encodeURIComponent(name) + "/conf").then(
+    window.showPeerConf = function (id) {
+        const peer = (statusData && statusData.peers || []).find((p) => p.id === id);
+        const name = peer ? (peer.name || "peer") : "peer";
+        api("GET", "/api/peers/" + id + "/conf").then(
             (d) => {
                 if (d.error) {
                     showToast(d.error, true);
@@ -1287,6 +1294,7 @@ if (!tg || !tg.initData) {
                 }
                 currentConfigText = d.config;
                 currentConfigName = name;
+                currentConfigId = id;
                 document.getElementById("config-modal-title").textContent =
                     name;
                 document.getElementById("config-action-btns").style.display = "";
@@ -1299,13 +1307,15 @@ if (!tg || !tg.initData) {
         );
     };
 
-    window.showPeerQR = function (name) {
+    window.showPeerQR = function (id) {
+        const peer = (statusData && statusData.peers || []).find((p) => p.id === id);
+        const name = peer ? (peer.name || "peer") : "peer";
         document.getElementById("config-modal-title").textContent =
             name + " QR";
         document.getElementById("config-action-btns").style.display =
             "none";
         const container = document.getElementById("config-modal-content");
-        var qrUrl = "/api/peers/" + encodeURIComponent(name) + "/qr?_auth=" + encodeURIComponent(initData);
+        var qrUrl = "/api/peers/" + id + "/qr?_auth=" + encodeURIComponent(initData);
         container.innerHTML =
             '<div class="qr-container"><img src="' + qrUrl + '" alt="QR Code" style="max-width:90%;max-height:75vh;image-rendering:pixelated;" onerror="this.parentElement.innerHTML=\'<div class=\\\'empty-state\\\'>QR generation failed</div>\'"></div>';
         openModal("config-modal");
@@ -1323,7 +1333,7 @@ if (!tg || !tg.initData) {
     window.downloadConfig = function () {
         var fileName = (currentConfigName || "peer").toLowerCase().replace(/\s+/g, "_") + ".conf";
         if (tg && tg.downloadFile) {
-            var downloadUrl = location.origin + "/api/peers/" + encodeURIComponent(currentConfigName) + "/conf?download=1&_auth=" + encodeURIComponent(initData);
+            var downloadUrl = location.origin + "/api/peers/" + currentConfigId + "/conf?download=1&_auth=" + encodeURIComponent(initData);
             tg.downloadFile({ url: downloadUrl, file_name: fileName }, function (accepted) {
                 if (accepted) {
                     haptic("notification", "success");
@@ -1346,8 +1356,8 @@ if (!tg || !tg.initData) {
     };
 
     window.sendConfigToTelegram = function () {
-        if (!currentConfigName) return;
-        api("POST", "/api/peers/" + encodeURIComponent(currentConfigName) + "/send").then((d) => {
+        if (currentConfigId == null) return;
+        api("POST", "/api/peers/" + currentConfigId + "/send").then((d) => {
             if (d.error) {
                 haptic("notification", "error");
                 showToast(d.error, true);
@@ -1624,10 +1634,10 @@ if (!tg || !tg.initData) {
         });
     };
 
-    window.togglePeer = function (name, currentlyDisabled, e) {
+    window.togglePeer = function (id, currentlyDisabled, e) {
         if (e) e.stopPropagation();
         haptic("selection");
-        api("PUT", "/api/peers/" + encodeURIComponent(name), {
+        api("PUT", "/api/peers/" + id, {
             disabled: !currentlyDisabled,
         }).then((d) => {
             if (d.error) {
@@ -2443,7 +2453,7 @@ if (!tg || !tg.initData) {
             const endpoints = {
                 peer: {
                     method: "DELETE",
-                    path: "/api/peers/" + encodeURIComponent(id),
+                    path: "/api/peers/" + id,
                 },
                 upstream: {
                     method: "DELETE",

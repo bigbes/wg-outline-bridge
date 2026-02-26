@@ -56,11 +56,13 @@ func GenSecret(args []string, logger *slog.Logger) {
 	}
 	defer store.Close()
 
-	if err := store.AddSecret(secretHex, *comment); err != nil {
+	id, err := store.AddSecret(secretHex, *comment)
+	if err != nil {
 		logger.Error("failed to save secret to database", "err", err)
 		os.Exit(1)
 	}
 
+	fmt.Printf("ID:      %d\n", id)
 	fmt.Printf("Secret:  %s\n", secretHex)
 	fmt.Println("Saved to: database")
 }

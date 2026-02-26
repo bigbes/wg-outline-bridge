@@ -14,6 +14,7 @@ import (
 
 // PeerStatus holds the current status of a WireGuard peer.
 type PeerStatus struct {
+	ID                int
 	Name              string
 	PublicKey         string
 	LastHandshake     time.Time
@@ -112,23 +113,25 @@ type InviteRedeemer interface {
 
 // Manager provides runtime peer and secret management operations.
 type Manager interface {
-	AddPeer(name string) (config.PeerConfig, error)
-	DeletePeer(name string) error
-	AddSecret(secretType, comment string) (string, error)
-	DeleteSecret(secretHex string) error
+	AddPeer(name string) (int, config.PeerConfig, error)
+	DeletePeer(id int) error
+	AddSecret(secretType, comment string) (int, string, error)
+	DeleteSecret(id int) error
+	DeleteUser(userID int64) error
 	AddProxy(p config.ProxyServerConfig) error
 	DeleteProxy(name string) error
 	AddUpstream(u config.UpstreamConfig) error
 	UpdateUpstream(u config.UpstreamConfig) error
 	DeleteUpstream(name string) error
-	SetPeerDisabled(name string, disabled bool) error
-	SetPeerExcludePrivate(name string, excludePrivate bool) error
-	SetPeerExcludeServer(name string, excludeServer bool) error
-	SetPeerUpstreamGroup(name, group string) error
+	SetPeerDisabled(id int, disabled bool) error
+	SetPeerExcludePrivate(id int, excludePrivate bool) error
+	SetPeerExcludeServer(id int, excludeServer bool) error
+	SetPeerUpstreamGroup(id int, group string) error
 	SetProxyUpstreamGroup(name, group string) error
 	SetProxyAuth(name, username, password string) error
-	SetSecretUpstreamGroup(secretHex, group string) error
-	RenamePeer(oldName, newName string) error
+	SetSecretUpstreamGroup(id int, group string) error
+	RenamePeer(id int, newName string) error
+	RenameSecret(id int, name string) error
 	AddDNSRecord(name string, rec config.DNSRecordConfig) error
 	UpdateDNSRecord(name string, rec config.DNSRecordConfig) error
 	DeleteDNSRecord(name string) error

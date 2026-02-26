@@ -28,10 +28,11 @@ type Decision struct {
 }
 
 type Request struct {
-	DestIP   netip.Addr
-	DestPort uint16
-	SNI      string
-	PeerName string // source peer name, for per-peer rule filtering
+	DestIP    netip.Addr
+	DestPort  uint16
+	SNI       string
+	PeerID    int  // source peer ID, for per-peer rule filtering
+	PeerKnown bool // true when PeerID was resolved from a known peer
 }
 
 type geoipMatch struct {
@@ -45,14 +46,14 @@ type ipRule struct {
 	prefixes     []netip.Prefix
 	listKeys     []string // URL keys and "asn:<number>" keys into urlPrefixes
 	geoipMatches []geoipMatch
-	peers        []string // if set, rule applies only to these peers; empty = all
+	peerIDs      []int // if set, rule applies only to these peer IDs; empty = all
 }
 
 type sniRule struct {
-	name     string
-	action   Decision
+	name    string
+	action  Decision
 	patterns []domainPattern
-	peers    []string
+	peerIDs  []int
 }
 
 type portRange struct {
@@ -65,17 +66,17 @@ func (pr portRange) contains(port uint16) bool {
 }
 
 type portRule struct {
-	name   string
-	action Decision
-	ranges []portRange
-	peers  []string
+	name    string
+	action  Decision
+	ranges  []portRange
+	peerIDs []int
 }
 
 type protocolRule struct {
 	name      string
 	action    Decision
 	protocols []string
-	peers     []string
+	peerIDs   []int
 }
 
 type Router struct {
@@ -99,9 +100,9 @@ func NewRouter(cfg config.RoutingConfig, geoMgr *geoip.Manager, logger *slog.Log
 
 	for _, rule := range cfg.IPRules {
 		ir := ipRule{
-			name:   rule.Name,
-			action: parseAction(ipRuleAdapter(rule)),
-			peers:  rule.Peers,
+			name:    rule.Name,
+			action:  parseAction(ipRuleAdapter(rule)),
+			peerIDs: rule.PeerIDs,
 		}
 		for _, cidr := range rule.CIDRs {
 			if rest, ok := strings.CutPrefix(cidr, "geoip:"); ok {
@@ -126,9 +127,9 @@ func NewRouter(cfg config.RoutingConfig, geoMgr *geoip.Manager, logger *slog.Log
 
 	for _, rule := range cfg.SNIRules {
 		sr := sniRule{
-			name:   rule.Name,
-			action: parseAction(sniRuleAdapter(rule)),
-			peers:  rule.Peers,
+			name:    rule.Name,
+			action:  parseAction(sniRuleAdapter(rule)),
+			peerIDs: rule.PeerIDs,
 		}
 		for _, domain := range rule.Domains {
 			sr.patterns = append(sr.patterns, parseDomainPattern(domain))
@@ -138,9 +139,9 @@ func NewRouter(cfg config.RoutingConfig, geoMgr *geoip.Manager, logger *slog.Log
 
 	for _, rule := range cfg.PortRules {
 		pr := portRule{
-			name:   rule.Name,
-			action: parseAction(portRuleAdapter(rule)),
-			peers:  rule.Peers,
+			name:    rule.Name,
+			action:  parseAction(portRuleAdapter(rule)),
+			peerIDs: rule.PeerIDs,
 		}
 		for _, portSpec := range rule.Ports {
 			parsed, err := parsePortRange(portSpec)
@@ -158,7 +159,7 @@ func NewRouter(cfg config.RoutingConfig, geoMgr *geoip.Manager, logger *slog.Log
 			name:      rule.Name,
 			action:    parseAction(protocolRuleAdapter(rule)),
 			protocols: rule.Protocols,
-			peers:     rule.Peers,
+			peerIDs:   rule.PeerIDs,
 		}
 		r.protocolRules = append(r.protocolRules, pr)
 	}
@@ -216,15 +217,15 @@ func parseAction(rule ruleConfig) Decision {
 
 // ruleAppliesToPeer returns true if the rule should be evaluated for the given peer.
 // If the rule has no peer restrictions, it applies to all peers.
-func ruleAppliesToPeer(rulePeers []string, peerName string) bool {
-	if len(rulePeers) == 0 {
+func ruleAppliesToPeer(rulePeerIDs []int, peerID int, peerKnown bool) bool {
+	if len(rulePeerIDs) == 0 {
 		return true
 	}
-	if peerName == "" {
+	if !peerKnown {
 		return false
 	}
-	for _, p := range rulePeers {
-		if p == peerName {
+	for _, id := range rulePeerIDs {
+		if id == peerID {
 			return true
 		}
 	}
@@ -237,7 +238,7 @@ func (r *Router) RouteIP(req Request) (Decision, bool) {
 
 	for i := range r.ipRules {
 		rule := &r.ipRules[i]
-		if !ruleAppliesToPeer(rule.peers, req.PeerName) {
+		if !ruleAppliesToPeer(rule.peerIDs, req.PeerID, req.PeerKnown) {
 			continue
 		}
 		for _, prefix := range rule.prefixes {
@@ -265,7 +266,7 @@ func (r *Router) RouteIP(req Request) (Decision, bool) {
 func (r *Router) RouteSNI(req Request) (Decision, bool) {
 	for i := range r.sniRules {
 		rule := &r.sniRules[i]
-		if !ruleAppliesToPeer(rule.peers, req.PeerName) {
+		if !ruleAppliesToPeer(rule.peerIDs, req.PeerID, req.PeerKnown) {
 			continue
 		}
 		for _, pattern := range rule.patterns {
@@ -281,7 +282,7 @@ func (r *Router) RouteSNI(req Request) (Decision, bool) {
 func (r *Router) RoutePort(req Request) (Decision, bool) {
 	for i := range r.portRules {
 		rule := &r.portRules[i]
-		if !ruleAppliesToPeer(rule.peers, req.PeerName) {
+		if !ruleAppliesToPeer(rule.peerIDs, req.PeerID, req.PeerKnown) {
 			continue
 		}
 		for _, pr := range rule.ranges {
@@ -294,10 +295,10 @@ func (r *Router) RoutePort(req Request) (Decision, bool) {
 }
 
 // RouteProtocol checks protocol-based rules for the given protocol identifier.
-func (r *Router) RouteProtocol(protocol string, peerName string) (Decision, bool) {
+func (r *Router) RouteProtocol(protocol string, peerID int, peerKnown bool) (Decision, bool) {
 	for i := range r.protocolRules {
 		rule := &r.protocolRules[i]
-		if !ruleAppliesToPeer(rule.peers, peerName) {
+		if !ruleAppliesToPeer(rule.peerIDs, peerID, peerKnown) {
 			continue
 		}
 		for _, p := range rule.protocols {

@@ -358,7 +358,188 @@ func (s *Store) migrateSchema() error {
 		}
 	}
 
+	// Migrate wg_peers: switch PK from name to auto-increment id.
+	if err := s.migratePeersToID(); err != nil {
+		return fmt.Errorf("migrate wg_peers to id: %w", err)
+	}
+
+	// Migrate mtproxy_secrets: switch PK from secret_hex to auto-increment id.
+	if err := s.migrateSecretsToID(); err != nil {
+		return fmt.Errorf("migrate mtproxy_secrets to id: %w", err)
+	}
+
 	return nil
+}
+
+// migratePeersToID recreates wg_peers with id INTEGER PRIMARY KEY if still using name as PK.
+func (s *Store) migratePeersToID() error {
+	// Check if 'id' column already exists.
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('wg_peers') WHERE name = 'id'`).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check wg_peers.id: %w", err)
+	}
+	if count > 0 {
+		return nil // already migrated
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmts := []string{
+		`CREATE TABLE wg_peers_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL DEFAULT '',
+			private_key TEXT NOT NULL,
+			public_key TEXT NOT NULL UNIQUE,
+			preshared_key TEXT NOT NULL DEFAULT '',
+			allowed_ips TEXT NOT NULL,
+			disabled INTEGER NOT NULL DEFAULT 0,
+			created_unix INTEGER NOT NULL DEFAULT (unixepoch()),
+			updated_unix INTEGER NOT NULL DEFAULT (unixepoch()),
+			owner_user_id INTEGER,
+			upstream_group TEXT NOT NULL DEFAULT '',
+			exclude_private INTEGER NOT NULL DEFAULT 1,
+			exclude_server INTEGER NOT NULL DEFAULT 0
+		)`,
+		`INSERT INTO wg_peers_new (name, private_key, public_key, preshared_key, allowed_ips, disabled, created_unix, updated_unix, owner_user_id, upstream_group, exclude_private, exclude_server)
+		 SELECT name, private_key, public_key, preshared_key, allowed_ips, disabled, created_unix, updated_unix, owner_user_id, upstream_group, exclude_private, exclude_server
+		 FROM wg_peers ORDER BY created_unix ASC`,
+		`DROP TABLE wg_peers`,
+		`ALTER TABLE wg_peers_new RENAME TO wg_peers`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("executing %q: %w", stmt[:40], err)
+		}
+	}
+	return tx.Commit()
+}
+
+// migrateSecretsToID recreates mtproxy_secrets with id INTEGER PRIMARY KEY if still using secret_hex as PK.
+func (s *Store) migrateSecretsToID() error {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('mtproxy_secrets') WHERE name = 'id'`).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check mtproxy_secrets.id: %w", err)
+	}
+	if count > 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmts := []string{
+		`CREATE TABLE mtproxy_secrets_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			secret_hex TEXT NOT NULL UNIQUE,
+			disabled INTEGER NOT NULL DEFAULT 0,
+			comment TEXT NOT NULL DEFAULT '',
+			created_unix INTEGER NOT NULL DEFAULT (unixepoch()),
+			owner_user_id INTEGER,
+			upstream_group TEXT NOT NULL DEFAULT ''
+		)`,
+		`INSERT INTO mtproxy_secrets_new (secret_hex, disabled, comment, created_unix, owner_user_id, upstream_group)
+		 SELECT secret_hex, disabled, comment, created_unix, owner_user_id, upstream_group
+		 FROM mtproxy_secrets ORDER BY created_unix ASC`,
+		`DROP TABLE mtproxy_secrets`,
+		`ALTER TABLE mtproxy_secrets_new RENAME TO mtproxy_secrets`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("executing %q: %w", stmt[:40], err)
+		}
+	}
+	return tx.Commit()
+}
+
+// MigratePeersJSONToIDs converts peers_json from name-based ["name1","name2"]
+// to ID-based [1,2] format using the given peer name→ID mapping.
+// This is idempotent: integer entries are kept as-is, string entries are resolved.
+func (s *Store) MigratePeersJSONToIDs(nameToID map[string]int) error {
+	tables := []string{
+		"dns_rules",
+		"routing_ip_rules",
+		"routing_sni_rules",
+		"routing_port_rules",
+		"routing_protocol_rules",
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("statsdb: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	for _, table := range tables {
+		rows, err := tx.Query(
+			fmt.Sprintf(`SELECT rowid, peers_json FROM %s WHERE peers_json IS NOT NULL AND peers_json != '' AND peers_json != '[]'`, table),
+		)
+		if err != nil {
+			return fmt.Errorf("statsdb: read %s: %w", table, err)
+		}
+
+		type update struct {
+			rowid int64
+			json  string
+		}
+		var updates []update
+
+		for rows.Next() {
+			var rowid int64
+			var peersJSON string
+			if err := rows.Scan(&rowid, &peersJSON); err != nil {
+				rows.Close()
+				return fmt.Errorf("statsdb: scan %s: %w", table, err)
+			}
+
+			// Try parsing as []int first (already migrated).
+			var intIDs []int
+			if err := json.Unmarshal([]byte(peersJSON), &intIDs); err == nil {
+				continue // already int-based
+			}
+
+			// Parse as []string and resolve to IDs.
+			var names []string
+			if err := json.Unmarshal([]byte(peersJSON), &names); err != nil {
+				continue // skip unparseable
+			}
+
+			var ids []int
+			for _, name := range names {
+				if id, ok := nameToID[name]; ok {
+					ids = append(ids, id)
+				}
+			}
+			if ids == nil {
+				ids = []int{}
+			}
+			idsJSON, err := json.Marshal(ids)
+			if err != nil {
+				continue
+			}
+			updates = append(updates, update{rowid: rowid, json: string(idsJSON)})
+		}
+		rows.Close()
+
+		for _, u := range updates {
+			if _, err := tx.Exec(
+				fmt.Sprintf(`UPDATE %s SET peers_json = ? WHERE rowid = ?`, table),
+				u.json, u.rowid,
+			); err != nil {
+				return fmt.Errorf("statsdb: update %s rowid %d: %w", table, u.rowid, err)
+			}
+		}
+	}
+
+	return tx.Commit()
 }
 
 // Reset drops all tables and re-initialises the schema, effectively
@@ -697,28 +878,27 @@ func (s *Store) GetMTSecretStats() (map[string]MTSecretRecord, error) {
 // Peer CRUD
 // ---------------------------------------------------------------------------
 
-// ListPeers returns all peers from the database keyed by name.
-func (s *Store) ListPeers() (map[string]config.PeerConfig, error) {
+// ListPeers returns all peers from the database keyed by ID.
+func (s *Store) ListPeers() (map[int]config.PeerConfig, error) {
 	rows, err := s.db.Query(
-		`SELECT name, private_key, public_key, preshared_key, allowed_ips, disabled, upstream_group, exclude_private, exclude_server
+		`SELECT id, name, private_key, public_key, preshared_key, allowed_ips, disabled, upstream_group, exclude_private, exclude_server
 		 FROM wg_peers`)
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: list peers: %w", err)
 	}
 	defer rows.Close()
 
-	out := make(map[string]config.PeerConfig)
+	out := make(map[int]config.PeerConfig)
 	for rows.Next() {
-		var name string
 		var p config.PeerConfig
 		var disabled, excludePrivate, excludeServer int
-		if err := rows.Scan(&name, &p.PrivateKey, &p.PublicKey, &p.PresharedKey, &p.AllowedIPs, &disabled, &p.UpstreamGroup, &excludePrivate, &excludeServer); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.PrivateKey, &p.PublicKey, &p.PresharedKey, &p.AllowedIPs, &disabled, &p.UpstreamGroup, &excludePrivate, &excludeServer); err != nil {
 			return nil, fmt.Errorf("statsdb: scan peer: %w", err)
 		}
 		p.Disabled = disabled != 0
 		p.ExcludePrivate = excludePrivate != 0
 		p.ExcludeServer = excludeServer != 0
-		out[name] = p
+		out[p.ID] = p
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("statsdb: iterate peers: %w", err)
@@ -726,26 +906,55 @@ func (s *Store) ListPeers() (map[string]config.PeerConfig, error) {
 	return out, nil
 }
 
-// GetPeer returns a single peer by name.
-func (s *Store) GetPeer(name string) (config.PeerConfig, bool, error) {
+// GetPeer returns a single peer by ID.
+func (s *Store) GetPeer(id int) (config.PeerConfig, bool, error) {
 	var p config.PeerConfig
 	var disabled int
 	err := s.db.QueryRow(
-		`SELECT private_key, public_key, preshared_key, allowed_ips, disabled
-		 FROM wg_peers WHERE name = ?`, name,
-	).Scan(&p.PrivateKey, &p.PublicKey, &p.PresharedKey, &p.AllowedIPs, &disabled)
+		`SELECT id, name, private_key, public_key, preshared_key, allowed_ips, disabled
+		 FROM wg_peers WHERE id = ?`, id,
+	).Scan(&p.ID, &p.Name, &p.PrivateKey, &p.PublicKey, &p.PresharedKey, &p.AllowedIPs, &disabled)
 	if err == sql.ErrNoRows {
 		return config.PeerConfig{}, false, nil
 	}
 	if err != nil {
-		return config.PeerConfig{}, false, fmt.Errorf("statsdb: get peer %q: %w", name, err)
+		return config.PeerConfig{}, false, fmt.Errorf("statsdb: get peer %d: %w", id, err)
 	}
 	p.Disabled = disabled != 0
 	return p, true, nil
 }
 
-// UpsertPeer inserts or updates a peer.
-func (s *Store) UpsertPeer(name string, peer config.PeerConfig) error {
+// InsertPeer inserts a new peer, returning the assigned ID.
+func (s *Store) InsertPeer(name string, peer config.PeerConfig) (int, error) {
+	disabled := 0
+	if peer.Disabled {
+		disabled = 1
+	}
+	excludePrivate := 0
+	if peer.ExcludePrivate {
+		excludePrivate = 1
+	}
+	excludeServer := 0
+	if peer.ExcludeServer {
+		excludeServer = 1
+	}
+	res, err := s.db.Exec(
+		`INSERT INTO wg_peers (name, private_key, public_key, preshared_key, allowed_ips, disabled, upstream_group, exclude_private, exclude_server)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		name, peer.PrivateKey, peer.PublicKey, peer.PresharedKey, peer.AllowedIPs, disabled, peer.UpstreamGroup, excludePrivate, excludeServer,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: insert peer %q: %w", name, err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: last insert id: %w", err)
+	}
+	return int(id), nil
+}
+
+// UpdatePeer updates an existing peer by ID.
+func (s *Store) UpdatePeer(id int, peer config.PeerConfig) error {
 	disabled := 0
 	if peer.Disabled {
 		disabled = 1
@@ -759,71 +968,93 @@ func (s *Store) UpsertPeer(name string, peer config.PeerConfig) error {
 		excludeServer = 1
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO wg_peers (name, private_key, public_key, preshared_key, allowed_ips, disabled, upstream_group, exclude_private, exclude_server)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(name) DO UPDATE SET
-		   private_key = excluded.private_key,
-		   public_key = excluded.public_key,
-		   preshared_key = excluded.preshared_key,
-		   allowed_ips = excluded.allowed_ips,
-		   disabled = excluded.disabled,
-		   upstream_group = excluded.upstream_group,
-		   exclude_private = excluded.exclude_private,
-		   exclude_server = excluded.exclude_server,
-		   updated_unix = unixepoch()`,
-		name, peer.PrivateKey, peer.PublicKey, peer.PresharedKey, peer.AllowedIPs, disabled, peer.UpstreamGroup, excludePrivate, excludeServer,
+		`UPDATE wg_peers SET
+		   name = ?,
+		   private_key = ?,
+		   public_key = ?,
+		   preshared_key = ?,
+		   allowed_ips = ?,
+		   disabled = ?,
+		   upstream_group = ?,
+		   exclude_private = ?,
+		   exclude_server = ?,
+		   updated_unix = unixepoch()
+		 WHERE id = ?`,
+		peer.Name, peer.PrivateKey, peer.PublicKey, peer.PresharedKey, peer.AllowedIPs, disabled, peer.UpstreamGroup, excludePrivate, excludeServer, id,
 	)
 	if err != nil {
-		return fmt.Errorf("statsdb: upsert peer %q: %w", name, err)
+		return fmt.Errorf("statsdb: update peer %d: %w", id, err)
 	}
 	return nil
 }
 
-// DeletePeer deletes a peer by name, returning the deleted config.
-func (s *Store) DeletePeer(name string) (config.PeerConfig, bool, error) {
-	p, found, err := s.GetPeer(name)
+// DeletePeer deletes a peer by ID, returning the deleted config.
+func (s *Store) DeletePeer(id int) (config.PeerConfig, bool, error) {
+	p, found, err := s.GetPeer(id)
 	if err != nil {
 		return config.PeerConfig{}, false, err
 	}
 	if !found {
 		return config.PeerConfig{}, false, nil
 	}
-	if _, err := s.db.Exec(`DELETE FROM wg_peers WHERE name = ?`, name); err != nil {
-		return config.PeerConfig{}, false, fmt.Errorf("statsdb: delete peer %q: %w", name, err)
+	if _, err := s.db.Exec(`DELETE FROM wg_peers WHERE id = ?`, id); err != nil {
+		return config.PeerConfig{}, false, fmt.Errorf("statsdb: delete peer %d: %w", id, err)
 	}
 	return p, true, nil
 }
 
-// RenamePeer renames a peer from oldName to newName.
-func (s *Store) RenamePeer(oldName, newName string) error {
-	_, found, err := s.GetPeer(oldName)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return fmt.Errorf("statsdb: peer %q not found", oldName)
-	}
-
-	_, found, err = s.GetPeer(newName)
-	if err != nil {
-		return err
-	}
-	if found {
-		return fmt.Errorf("statsdb: peer %q already exists", newName)
+// RemovePeerFromRules removes a peer ID from peers_json in all DNS and
+// routing rule tables. Rules that referenced only this peer end up with an
+// empty peers list (meaning "applies to all peers").
+func (s *Store) RemovePeerFromRules(peerID int) error {
+	tables := []string{
+		"dns_rules",
+		"routing_ip_rules",
+		"routing_sni_rules",
+		"routing_port_rules",
+		"routing_protocol_rules",
 	}
 
-	_, err = s.db.Exec(
-		`UPDATE wg_peers SET name = ?, updated_unix = unixepoch() WHERE name = ?`,
-		newName, oldName,
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("statsdb: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	for _, table := range tables {
+		query := `UPDATE ` + table + ` SET peers_json = (
+				SELECT COALESCE(json_group_array(j.value), '[]')
+				FROM json_each(` + table + `.peers_json) AS j
+				WHERE CAST(j.value AS INTEGER) != ?
+			), updated_unix = unixepoch()
+			WHERE peers_json IS NOT NULL AND peers_json != '' AND peers_json != '[]'
+			  AND EXISTS (SELECT 1 FROM json_each(` + table + `.peers_json) AS j2 WHERE CAST(j2.value AS INTEGER) = ?)`
+		if _, err := tx.Exec(query, peerID, peerID); err != nil {
+			return fmt.Errorf("statsdb: remove peer %d from %s: %w", peerID, table, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// RenamePeer renames a peer by ID.
+func (s *Store) RenamePeer(id int, newName string) error {
+	res, err := s.db.Exec(
+		`UPDATE wg_peers SET name = ?, updated_unix = unixepoch() WHERE id = ?`,
+		newName, id,
 	)
 	if err != nil {
-		return fmt.Errorf("statsdb: rename peer %q to %q: %w", oldName, newName, err)
+		return fmt.Errorf("statsdb: rename peer %d: %w", id, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("statsdb: peer %d not found", id)
 	}
 	return nil
 }
 
-// ImportPeers inserts peers from a map, skipping names that already exist.
-func (s *Store) ImportPeers(peers map[string]config.PeerConfig) (int, error) {
+// ImportPeers inserts peers from a map, skipping public keys that already exist.
+func (s *Store) ImportPeers(peers map[int]config.PeerConfig) (int, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, fmt.Errorf("statsdb: begin tx: %w", err)
@@ -839,14 +1070,14 @@ func (s *Store) ImportPeers(peers map[string]config.PeerConfig) (int, error) {
 	defer stmt.Close()
 
 	var count int
-	for name, p := range peers {
+	for _, p := range peers {
 		disabled := 0
 		if p.Disabled {
 			disabled = 1
 		}
-		res, err := stmt.Exec(name, p.PrivateKey, p.PublicKey, p.PresharedKey, p.AllowedIPs, disabled, p.UpstreamGroup)
+		res, err := stmt.Exec(p.Name, p.PrivateKey, p.PublicKey, p.PresharedKey, p.AllowedIPs, disabled, p.UpstreamGroup)
 		if err != nil {
-			return 0, fmt.Errorf("statsdb: import peer %q: %w", name, err)
+			return 0, fmt.Errorf("statsdb: import peer %q: %w", p.Name, err)
 		}
 		n, _ := res.RowsAffected()
 		count += int(n)
@@ -859,48 +1090,48 @@ func (s *Store) ImportPeers(peers map[string]config.PeerConfig) (int, error) {
 }
 
 // SetPeerUpstreamGroup updates the upstream_group for a peer.
-func (s *Store) SetPeerUpstreamGroup(name, group string) error {
-	res, err := s.db.Exec(`UPDATE wg_peers SET upstream_group = ?, updated_unix = unixepoch() WHERE name = ?`, group, name)
+func (s *Store) SetPeerUpstreamGroup(id int, group string) error {
+	res, err := s.db.Exec(`UPDATE wg_peers SET upstream_group = ?, updated_unix = unixepoch() WHERE id = ?`, group, id)
 	if err != nil {
-		return fmt.Errorf("statsdb: set peer upstream group %q: %w", name, err)
+		return fmt.Errorf("statsdb: set peer upstream group %d: %w", id, err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("peer %q not found", name)
+		return fmt.Errorf("peer %d not found", id)
 	}
 	return nil
 }
 
 // SetPeerExcludePrivate updates the exclude_private flag for a peer.
-func (s *Store) SetPeerExcludePrivate(name string, excludePrivate bool) error {
+func (s *Store) SetPeerExcludePrivate(id int, excludePrivate bool) error {
 	val := 0
 	if excludePrivate {
 		val = 1
 	}
-	res, err := s.db.Exec(`UPDATE wg_peers SET exclude_private = ?, updated_unix = unixepoch() WHERE name = ?`, val, name)
+	res, err := s.db.Exec(`UPDATE wg_peers SET exclude_private = ?, updated_unix = unixepoch() WHERE id = ?`, val, id)
 	if err != nil {
-		return fmt.Errorf("statsdb: set peer exclude_private %q: %w", name, err)
+		return fmt.Errorf("statsdb: set peer exclude_private %d: %w", id, err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("peer %q not found", name)
+		return fmt.Errorf("peer %d not found", id)
 	}
 	return nil
 }
 
 // SetPeerExcludeServer updates the exclude_server flag for a peer.
-func (s *Store) SetPeerExcludeServer(name string, excludeServer bool) error {
+func (s *Store) SetPeerExcludeServer(id int, excludeServer bool) error {
 	val := 0
 	if excludeServer {
 		val = 1
 	}
-	res, err := s.db.Exec(`UPDATE wg_peers SET exclude_server = ?, updated_unix = unixepoch() WHERE name = ?`, val, name)
+	res, err := s.db.Exec(`UPDATE wg_peers SET exclude_server = ?, updated_unix = unixepoch() WHERE id = ?`, val, id)
 	if err != nil {
-		return fmt.Errorf("statsdb: set peer exclude_server %q: %w", name, err)
+		return fmt.Errorf("statsdb: set peer exclude_server %d: %w", id, err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("peer %q not found", name)
+		return fmt.Errorf("peer %d not found", id)
 	}
 	return nil
 }
@@ -931,16 +1162,20 @@ func (s *Store) ListSecrets() ([]string, error) {
 	return out, nil
 }
 
-// AddSecret inserts a new secret. Returns error if it already exists.
-func (s *Store) AddSecret(secretHex, comment string) error {
-	_, err := s.db.Exec(
+// AddSecret inserts a new secret and returns its ID.
+func (s *Store) AddSecret(secretHex, comment string) (int, error) {
+	res, err := s.db.Exec(
 		`INSERT INTO mtproxy_secrets (secret_hex, comment) VALUES (?, ?)`,
 		secretHex, comment,
 	)
 	if err != nil {
-		return fmt.Errorf("statsdb: add secret: %w", err)
+		return 0, fmt.Errorf("statsdb: add secret: %w", err)
 	}
-	return nil
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("statsdb: last insert id: %w", err)
+	}
+	return int(id), nil
 }
 
 // SecretNames returns a map of secret_hex → comment for the given secrets.
@@ -974,9 +1209,9 @@ func (s *Store) SecretNames(secrets []string) (map[string]string, error) {
 	return out, rows.Err()
 }
 
-// RenameSecret updates the comment (display name) of a secret.
-func (s *Store) RenameSecret(secretHex, name string) error {
-	res, err := s.db.Exec(`UPDATE mtproxy_secrets SET comment = ? WHERE secret_hex = ?`, name, secretHex)
+// RenameSecret updates the comment (display name) of a secret by ID.
+func (s *Store) RenameSecret(id int, name string) error {
+	res, err := s.db.Exec(`UPDATE mtproxy_secrets SET comment = ? WHERE id = ?`, name, id)
 	if err != nil {
 		return fmt.Errorf("statsdb: rename secret: %w", err)
 	}
@@ -987,14 +1222,20 @@ func (s *Store) RenameSecret(secretHex, name string) error {
 	return nil
 }
 
-// DeleteSecret deletes a secret by hex string.
-func (s *Store) DeleteSecret(secretHex string) (bool, error) {
-	res, err := s.db.Exec(`DELETE FROM mtproxy_secrets WHERE secret_hex = ?`, secretHex)
-	if err != nil {
-		return false, fmt.Errorf("statsdb: delete secret: %w", err)
+// DeleteSecret deletes a secret by ID, returning the secret_hex and whether it was found.
+func (s *Store) DeleteSecret(id int) (string, bool, error) {
+	var secretHex string
+	err := s.db.QueryRow(`SELECT secret_hex FROM mtproxy_secrets WHERE id = ?`, id).Scan(&secretHex)
+	if err == sql.ErrNoRows {
+		return "", false, nil
 	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
+	if err != nil {
+		return "", false, fmt.Errorf("statsdb: get secret %d: %w", id, err)
+	}
+	if _, err := s.db.Exec(`DELETE FROM mtproxy_secrets WHERE id = ?`, id); err != nil {
+		return "", false, fmt.Errorf("statsdb: delete secret: %w", err)
+	}
+	return secretHex, true, nil
 }
 
 // ImportSecrets inserts secrets from a list, skipping those that already exist.
@@ -1027,34 +1268,35 @@ func (s *Store) ImportSecrets(secrets []string) (int, error) {
 	return count, nil
 }
 
-// ListSecretUpstreamGroups returns a map of secret_hex -> upstream_group for all secrets.
-func (s *Store) ListSecretUpstreamGroups() (map[string]string, error) {
-	rows, err := s.db.Query(`SELECT secret_hex, upstream_group FROM mtproxy_secrets WHERE upstream_group != ''`)
+// ListSecretUpstreamGroups returns a map of secret ID -> upstream_group for all secrets.
+func (s *Store) ListSecretUpstreamGroups() (map[int]string, error) {
+	rows, err := s.db.Query(`SELECT id, upstream_group FROM mtproxy_secrets WHERE upstream_group != ''`)
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: list secret upstream groups: %w", err)
 	}
 	defer rows.Close()
 
-	out := make(map[string]string)
+	out := make(map[int]string)
 	for rows.Next() {
-		var hex, group string
-		if err := rows.Scan(&hex, &group); err != nil {
+		var id int
+		var group string
+		if err := rows.Scan(&id, &group); err != nil {
 			return nil, fmt.Errorf("statsdb: scan secret upstream group: %w", err)
 		}
-		out[hex] = group
+		out[id] = group
 	}
 	return out, rows.Err()
 }
 
-// SetSecretUpstreamGroup updates the upstream_group for an MTProxy secret.
-func (s *Store) SetSecretUpstreamGroup(secretHex, group string) error {
-	res, err := s.db.Exec(`UPDATE mtproxy_secrets SET upstream_group = ? WHERE secret_hex = ?`, group, secretHex)
+// SetSecretUpstreamGroup updates the upstream_group for an MTProxy secret by ID.
+func (s *Store) SetSecretUpstreamGroup(id int, group string) error {
+	res, err := s.db.Exec(`UPDATE mtproxy_secrets SET upstream_group = ? WHERE id = ?`, group, id)
 	if err != nil {
-		return fmt.Errorf("statsdb: set secret upstream group %q: %w", secretHex, err)
+		return fmt.Errorf("statsdb: set secret upstream group %d: %w", id, err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return fmt.Errorf("secret %q not found", secretHex)
+		return fmt.Errorf("secret %d not found", id)
 	}
 	return nil
 }
@@ -1624,41 +1866,41 @@ func (s *Store) GetUserDisplayNames(userIDs []int64) (map[int64]string, error) {
 }
 
 // ListPeerOwners returns a map of peer_name → owner_user_id for all owned peers.
-func (s *Store) ListPeerOwners() (map[string]int64, error) {
-	rows, err := s.db.Query(`SELECT name, owner_user_id FROM wg_peers WHERE owner_user_id IS NOT NULL`)
+func (s *Store) ListPeerOwners() (map[int]int64, error) {
+	rows, err := s.db.Query(`SELECT id, owner_user_id FROM wg_peers WHERE owner_user_id IS NOT NULL`)
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: list peer owners: %w", err)
 	}
 	defer rows.Close()
 
-	out := make(map[string]int64)
+	out := make(map[int]int64)
 	for rows.Next() {
-		var name string
+		var id int
 		var ownerID int64
-		if err := rows.Scan(&name, &ownerID); err != nil {
+		if err := rows.Scan(&id, &ownerID); err != nil {
 			return nil, fmt.Errorf("statsdb: scan peer owner: %w", err)
 		}
-		out[name] = ownerID
+		out[id] = ownerID
 	}
 	return out, rows.Err()
 }
 
-// ListSecretOwners returns a map of secret_hex → owner_user_id for all owned secrets.
-func (s *Store) ListSecretOwners() (map[string]int64, error) {
-	rows, err := s.db.Query(`SELECT secret_hex, owner_user_id FROM mtproxy_secrets WHERE owner_user_id IS NOT NULL`)
+// ListSecretOwners returns a map of secret ID → owner_user_id for all owned secrets.
+func (s *Store) ListSecretOwners() (map[int]int64, error) {
+	rows, err := s.db.Query(`SELECT id, owner_user_id FROM mtproxy_secrets WHERE owner_user_id IS NOT NULL`)
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: list secret owners: %w", err)
 	}
 	defer rows.Close()
 
-	out := make(map[string]int64)
+	out := make(map[int]int64)
 	for rows.Next() {
-		var hex string
+		var id int
 		var ownerID int64
-		if err := rows.Scan(&hex, &ownerID); err != nil {
+		if err := rows.Scan(&id, &ownerID); err != nil {
 			return nil, fmt.Errorf("statsdb: scan secret owner: %w", err)
 		}
-		out[hex] = ownerID
+		out[id] = ownerID
 	}
 	return out, rows.Err()
 }
@@ -1705,7 +1947,7 @@ func (s *Store) ListDNSRules() ([]config.DNSRuleConfig, error) {
 			}
 		}
 		if peersJSON != "" && peersJSON != "[]" {
-			if err := json.Unmarshal([]byte(peersJSON), &r.Peers); err != nil {
+			if err := json.Unmarshal([]byte(peersJSON), &r.PeerIDs); err != nil {
 				return nil, fmt.Errorf("statsdb: unmarshal peers for %q: %w", r.Name, err)
 			}
 		}
@@ -1826,7 +2068,11 @@ func (s *Store) AddDNSRule(r config.DNSRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal lists: %w", err)
 	}
-	peersJSON, err := json.Marshal(r.Peers)
+	peerIDs := r.PeerIDs
+	if peerIDs == nil {
+		peerIDs = []int{}
+	}
+	peersJSON, err := json.Marshal(peerIDs)
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal peers: %w", err)
 	}
@@ -1862,7 +2108,11 @@ func (s *Store) UpdateDNSRule(r config.DNSRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal lists: %w", err)
 	}
-	peersJSON, err := json.Marshal(r.Peers)
+	peerIDs := r.PeerIDs
+	if peerIDs == nil {
+		peerIDs = []int{}
+	}
+	peersJSON, err := json.Marshal(peerIDs)
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal peers: %w", err)
 	}
@@ -1916,7 +2166,11 @@ func (s *Store) ImportDNSRules(rules []config.DNSRuleConfig) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: marshal lists for %q: %w", r.Name, err)
 		}
-		peersJSON, err := json.Marshal(r.Peers)
+		peerIDs := r.PeerIDs
+		if peerIDs == nil {
+			peerIDs = []int{}
+		}
+		peersJSON, err := json.Marshal(peerIDs)
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: marshal peers for %q: %w", r.Name, err)
 		}
@@ -2097,7 +2351,7 @@ func (s *Store) ListIPRules() ([]config.IPRuleConfig, error) {
 			}
 		}
 		if peersJSON != "" && peersJSON != "[]" {
-			if err := json.Unmarshal([]byte(peersJSON), &r.Peers); err != nil {
+			if err := json.Unmarshal([]byte(peersJSON), &r.PeerIDs); err != nil {
 				return nil, fmt.Errorf("statsdb: unmarshal peers for %q: %w", r.Name, err)
 			}
 		}
@@ -2123,7 +2377,11 @@ func (s *Store) AddIPRule(r config.IPRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal lists: %w", err)
 	}
-	peersJSON, err := json.Marshal(r.Peers)
+	peerIDs := r.PeerIDs
+	if peerIDs == nil {
+		peerIDs = []int{}
+	}
+	peersJSON, err := json.Marshal(peerIDs)
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal peers: %w", err)
 	}
@@ -2185,7 +2443,11 @@ func (s *Store) ImportIPRules(rules []config.IPRuleConfig) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: marshal lists for %q: %w", r.Name, err)
 		}
-		peersJSON, err := json.Marshal(r.Peers)
+		peerIDs := r.PeerIDs
+		if peerIDs == nil {
+			peerIDs = []int{}
+		}
+		peersJSON, err := json.Marshal(peerIDs)
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: marshal peers for %q: %w", r.Name, err)
 		}
@@ -2241,7 +2503,11 @@ func (s *Store) UpdateIPRule(r config.IPRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal lists: %w", err)
 	}
-	peersJSON, err := json.Marshal(r.Peers)
+	peerIDs := r.PeerIDs
+	if peerIDs == nil {
+		peerIDs = []int{}
+	}
+	peersJSON, err := json.Marshal(peerIDs)
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal peers: %w", err)
 	}
@@ -2288,7 +2554,7 @@ func (s *Store) ListSNIRules() ([]config.SNIRuleConfig, error) {
 			}
 		}
 		if peersJSON != "" && peersJSON != "[]" {
-			if err := json.Unmarshal([]byte(peersJSON), &r.Peers); err != nil {
+			if err := json.Unmarshal([]byte(peersJSON), &r.PeerIDs); err != nil {
 				return nil, fmt.Errorf("statsdb: unmarshal peers for %q: %w", r.Name, err)
 			}
 		}
@@ -2306,7 +2572,11 @@ func (s *Store) AddSNIRule(r config.SNIRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal domains: %w", err)
 	}
-	peersJSON, err := json.Marshal(r.Peers)
+	peerIDs := r.PeerIDs
+	if peerIDs == nil {
+		peerIDs = []int{}
+	}
+	peersJSON, err := json.Marshal(peerIDs)
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal peers: %w", err)
 	}
@@ -2338,7 +2608,11 @@ func (s *Store) UpdateSNIRule(r config.SNIRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal domains: %w", err)
 	}
-	peersJSON, err := json.Marshal(r.Peers)
+	peerIDs := r.PeerIDs
+	if peerIDs == nil {
+		peerIDs = []int{}
+	}
+	peersJSON, err := json.Marshal(peerIDs)
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal peers: %w", err)
 	}
@@ -2386,7 +2660,11 @@ func (s *Store) ImportSNIRules(rules []config.SNIRuleConfig) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: marshal domains for %q: %w", r.Name, err)
 		}
-		peersJSON, err := json.Marshal(r.Peers)
+		peerIDs := r.PeerIDs
+		if peerIDs == nil {
+			peerIDs = []int{}
+		}
+		peersJSON, err := json.Marshal(peerIDs)
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: marshal peers for %q: %w", r.Name, err)
 		}
@@ -2432,7 +2710,7 @@ func (s *Store) ListPortRules() ([]config.PortRuleConfig, error) {
 			}
 		}
 		if peersJSON != "" && peersJSON != "[]" {
-			if err := json.Unmarshal([]byte(peersJSON), &r.Peers); err != nil {
+			if err := json.Unmarshal([]byte(peersJSON), &r.PeerIDs); err != nil {
 				return nil, fmt.Errorf("statsdb: unmarshal peers for %q: %w", r.Name, err)
 			}
 		}
@@ -2450,7 +2728,11 @@ func (s *Store) AddPortRule(r config.PortRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal ports: %w", err)
 	}
-	peersJSON, err := json.Marshal(r.Peers)
+	peerIDs := r.PeerIDs
+	if peerIDs == nil {
+		peerIDs = []int{}
+	}
+	peersJSON, err := json.Marshal(peerIDs)
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal peers: %w", err)
 	}
@@ -2482,7 +2764,11 @@ func (s *Store) UpdatePortRule(r config.PortRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal ports: %w", err)
 	}
-	peersJSON, err := json.Marshal(r.Peers)
+	peerIDs := r.PeerIDs
+	if peerIDs == nil {
+		peerIDs = []int{}
+	}
+	peersJSON, err := json.Marshal(peerIDs)
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal peers: %w", err)
 	}
@@ -2530,7 +2816,11 @@ func (s *Store) ImportPortRules(rules []config.PortRuleConfig) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: marshal ports for %q: %w", r.Name, err)
 		}
-		peersJSON, err := json.Marshal(r.Peers)
+		peerIDs := r.PeerIDs
+		if peerIDs == nil {
+			peerIDs = []int{}
+		}
+		peersJSON, err := json.Marshal(peerIDs)
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: marshal peers for %q: %w", r.Name, err)
 		}
@@ -2576,7 +2866,7 @@ func (s *Store) ListProtocolRules() ([]config.ProtocolRuleConfig, error) {
 			}
 		}
 		if peersJSON != "" && peersJSON != "[]" {
-			if err := json.Unmarshal([]byte(peersJSON), &r.Peers); err != nil {
+			if err := json.Unmarshal([]byte(peersJSON), &r.PeerIDs); err != nil {
 				return nil, fmt.Errorf("statsdb: unmarshal peers for %q: %w", r.Name, err)
 			}
 		}
@@ -2594,7 +2884,11 @@ func (s *Store) AddProtocolRule(r config.ProtocolRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal protocols: %w", err)
 	}
-	peersJSON, err := json.Marshal(r.Peers)
+	peerIDs := r.PeerIDs
+	if peerIDs == nil {
+		peerIDs = []int{}
+	}
+	peersJSON, err := json.Marshal(peerIDs)
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal peers: %w", err)
 	}
@@ -2626,7 +2920,11 @@ func (s *Store) UpdateProtocolRule(r config.ProtocolRuleConfig) error {
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal protocols: %w", err)
 	}
-	peersJSON, err := json.Marshal(r.Peers)
+	peerIDs := r.PeerIDs
+	if peerIDs == nil {
+		peerIDs = []int{}
+	}
+	peersJSON, err := json.Marshal(peerIDs)
 	if err != nil {
 		return fmt.Errorf("statsdb: marshal peers: %w", err)
 	}
@@ -2674,7 +2972,11 @@ func (s *Store) ImportProtocolRules(rules []config.ProtocolRuleConfig) (int, err
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: marshal protocols for %q: %w", r.Name, err)
 		}
-		peersJSON, err := json.Marshal(r.Peers)
+		peerIDs := r.PeerIDs
+		if peerIDs == nil {
+			peerIDs = []int{}
+		}
+		peersJSON, err := json.Marshal(peerIDs)
 		if err != nil {
 			return 0, fmt.Errorf("statsdb: marshal peers for %q: %w", r.Name, err)
 		}
@@ -2698,23 +3000,23 @@ func (s *Store) ImportProtocolRules(rules []config.ProtocolRuleConfig) (int, err
 // ---------------------------------------------------------------------------
 
 // SetPeerOwner sets the owner_user_id for a peer.
-func (s *Store) SetPeerOwner(name string, ownerID int64) error {
-	_, err := s.db.Exec(`UPDATE wg_peers SET owner_user_id = ? WHERE name = ?`, ownerID, name)
+func (s *Store) SetPeerOwner(id int, ownerID int64) error {
+	_, err := s.db.Exec(`UPDATE wg_peers SET owner_user_id = ? WHERE id = ?`, ownerID, id)
 	if err != nil {
-		return fmt.Errorf("statsdb: set peer owner %q: %w", name, err)
+		return fmt.Errorf("statsdb: set peer owner %d: %w", id, err)
 	}
 	return nil
 }
 
 // GetPeerOwner returns the owner_user_id for a peer. Returns nil if unowned or not found.
-func (s *Store) GetPeerOwner(name string) (*int64, error) {
+func (s *Store) GetPeerOwner(id int) (*int64, error) {
 	var ownerID sql.NullInt64
-	err := s.db.QueryRow(`SELECT owner_user_id FROM wg_peers WHERE name = ?`, name).Scan(&ownerID)
+	err := s.db.QueryRow(`SELECT owner_user_id FROM wg_peers WHERE id = ?`, id).Scan(&ownerID)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("statsdb: get peer owner %q: %w", name, err)
+		return nil, fmt.Errorf("statsdb: get peer owner %d: %w", id, err)
 	}
 	if !ownerID.Valid {
 		return nil, nil
@@ -2732,43 +3034,43 @@ func (s *Store) CountPeersByOwner(ownerID int64) (int, error) {
 	return count, nil
 }
 
-// ListPeerNamesByOwner returns the set of peer names owned by a user.
-func (s *Store) ListPeerNamesByOwner(ownerID int64) (map[string]struct{}, error) {
-	rows, err := s.db.Query(`SELECT name FROM wg_peers WHERE owner_user_id = ?`, ownerID)
+// ListPeerIDsByOwner returns the set of peer IDs owned by a user.
+func (s *Store) ListPeerIDsByOwner(ownerID int64) (map[int]struct{}, error) {
+	rows, err := s.db.Query(`SELECT id FROM wg_peers WHERE owner_user_id = ?`, ownerID)
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: list peers by owner %d: %w", ownerID, err)
 	}
 	defer rows.Close()
 
-	out := make(map[string]struct{})
+	out := make(map[int]struct{})
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, fmt.Errorf("statsdb: scan peer name: %w", err)
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("statsdb: scan peer id: %w", err)
 		}
-		out[name] = struct{}{}
+		out[id] = struct{}{}
 	}
 	return out, rows.Err()
 }
 
-// SetSecretOwner sets the owner_user_id for a secret.
-func (s *Store) SetSecretOwner(secretHex string, ownerID int64) error {
-	_, err := s.db.Exec(`UPDATE mtproxy_secrets SET owner_user_id = ? WHERE secret_hex = ?`, ownerID, secretHex)
+// SetSecretOwner sets the owner_user_id for a secret by ID.
+func (s *Store) SetSecretOwner(id int, ownerID int64) error {
+	_, err := s.db.Exec(`UPDATE mtproxy_secrets SET owner_user_id = ? WHERE id = ?`, ownerID, id)
 	if err != nil {
-		return fmt.Errorf("statsdb: set secret owner %q: %w", secretHex, err)
+		return fmt.Errorf("statsdb: set secret owner %d: %w", id, err)
 	}
 	return nil
 }
 
-// GetSecretOwner returns the owner_user_id for a secret. Returns nil if unowned or not found.
-func (s *Store) GetSecretOwner(secretHex string) (*int64, error) {
+// GetSecretOwner returns the owner_user_id for a secret by ID. Returns nil if unowned or not found.
+func (s *Store) GetSecretOwner(id int) (*int64, error) {
 	var ownerID sql.NullInt64
-	err := s.db.QueryRow(`SELECT owner_user_id FROM mtproxy_secrets WHERE secret_hex = ?`, secretHex).Scan(&ownerID)
+	err := s.db.QueryRow(`SELECT owner_user_id FROM mtproxy_secrets WHERE id = ?`, id).Scan(&ownerID)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("statsdb: get secret owner %q: %w", secretHex, err)
+		return nil, fmt.Errorf("statsdb: get secret owner %d: %w", id, err)
 	}
 	if !ownerID.Valid {
 		return nil, nil
@@ -2786,21 +3088,21 @@ func (s *Store) CountSecretsByOwner(ownerID int64) (int, error) {
 	return count, nil
 }
 
-// ListSecretHexByOwner returns the set of secret hex strings owned by a user.
-func (s *Store) ListSecretHexByOwner(ownerID int64) (map[string]struct{}, error) {
-	rows, err := s.db.Query(`SELECT secret_hex FROM mtproxy_secrets WHERE owner_user_id = ?`, ownerID)
+// ListSecretIDsByOwner returns the set of secret IDs owned by a user.
+func (s *Store) ListSecretIDsByOwner(ownerID int64) (map[int]struct{}, error) {
+	rows, err := s.db.Query(`SELECT id FROM mtproxy_secrets WHERE owner_user_id = ?`, ownerID)
 	if err != nil {
 		return nil, fmt.Errorf("statsdb: list secrets by owner %d: %w", ownerID, err)
 	}
 	defer rows.Close()
 
-	out := make(map[string]struct{})
+	out := make(map[int]struct{})
 	for rows.Next() {
-		var hex string
-		if err := rows.Scan(&hex); err != nil {
-			return nil, fmt.Errorf("statsdb: scan secret hex: %w", err)
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("statsdb: scan secret id: %w", err)
 		}
-		out[hex] = struct{}{}
+		out[id] = struct{}{}
 	}
 	return out, rows.Err()
 }
@@ -2912,6 +3214,39 @@ func (s *Store) DeleteInviteLink(token string) (bool, error) {
 // Creation-order helpers
 // ---------------------------------------------------------------------------
 
+// idsOrdered runs a query that returns a single INTEGER column and collects the
+// results into an ordered slice.
+func (s *Store) idsOrdered(query string) ([]int, error) {
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []int
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// GetSecretIDByHex looks up a secret's ID by its hex string.
+func (s *Store) GetSecretIDByHex(secretHex string) (int, bool, error) {
+	var id int
+	err := s.db.QueryRow(`SELECT id FROM mtproxy_secrets WHERE secret_hex = ?`, secretHex).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("statsdb: get secret id by hex: %w", err)
+	}
+	return id, true, nil
+}
+
 // namesOrdered runs a query that returns a single TEXT column and collects the
 // results into an ordered slice.
 func (s *Store) namesOrdered(query string) ([]string, error) {
@@ -2932,9 +3267,9 @@ func (s *Store) namesOrdered(query string) ([]string, error) {
 	return out, rows.Err()
 }
 
-// PeerNamesOrdered returns peer names sorted by creation time (oldest first).
-func (s *Store) PeerNamesOrdered() ([]string, error) {
-	return s.namesOrdered(`SELECT name FROM wg_peers ORDER BY created_unix ASC`)
+// PeerIDsOrdered returns peer IDs sorted by creation time (oldest first).
+func (s *Store) PeerIDsOrdered() ([]int, error) {
+	return s.idsOrdered(`SELECT id FROM wg_peers ORDER BY created_unix ASC`)
 }
 
 // UpstreamNamesOrdered returns upstream names sorted by creation time (oldest first).
@@ -2947,9 +3282,9 @@ func (s *Store) ProxyNamesOrdered() ([]string, error) {
 	return s.namesOrdered(`SELECT name FROM proxy_servers ORDER BY created_unix ASC`)
 }
 
-// SecretHexOrdered returns secret hex strings sorted by creation time (oldest first).
-func (s *Store) SecretHexOrdered() ([]string, error) {
-	return s.namesOrdered(`SELECT secret_hex FROM mtproxy_secrets ORDER BY created_unix ASC`)
+// SecretIDsOrdered returns secret IDs sorted by creation time (oldest first).
+func (s *Store) SecretIDsOrdered() ([]int, error) {
+	return s.idsOrdered(`SELECT id FROM mtproxy_secrets ORDER BY created_unix ASC`)
 }
 
 // DNSRecordNamesOrdered returns DNS record names sorted by creation time (oldest first).

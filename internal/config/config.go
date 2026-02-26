@@ -37,8 +37,7 @@ type Config struct {
 	Upstreams         []UpstreamConfig        `yaml:"upstreams"`
 	Routing           RoutingConfig           `yaml:"routing"`
 	GeoIP             []GeoIPConfig           `yaml:"geoip"`
-	PeersDir          string                  `yaml:"peers_dir"`
-	Peers             map[string]PeerConfig   `yaml:"-"`
+	Peers             map[int]PeerConfig      `yaml:"-"`
 }
 
 type ObservabilityHTTPConfig struct {
@@ -97,7 +96,7 @@ type DNSRuleConfig struct {
 	Upstream string          `yaml:"upstream"` // for action=upstream
 	Domains  []string        `yaml:"domains"`  // glob patterns like "*.example.com"
 	Lists    []DNSListConfig `yaml:"lists"`    // URL-based blocklists
-	Peers    []string        `yaml:"peers"`    // if set, rule applies only to these peers; empty = all
+	PeerIDs  []int           `yaml:"-"`        // runtime: peer IDs from DB; empty = applies to all
 }
 
 type DNSListConfig struct {
@@ -107,6 +106,8 @@ type DNSListConfig struct {
 }
 
 type PeerConfig struct {
+	ID             int    `yaml:"-"`
+	Name           string `yaml:"-"`
 	PrivateKey     string `yaml:"private_key"`
 	PublicKey      string `yaml:"public_key"`
 	AllowedIPs     string `yaml:"allowed_ips"`
@@ -132,7 +133,7 @@ type IPRuleConfig struct {
 	CIDRs         []string       `yaml:"cidrs"`
 	ASNs          []int          `yaml:"asns"`
 	Lists         []IPListConfig `yaml:"lists"`
-	Peers         []string       `yaml:"peers"` // if set, rule applies only to these peers; empty = all
+	PeerIDs       []int          `yaml:"-"`      // runtime: peer IDs from DB; empty = applies to all
 }
 
 type IPListConfig struct {
@@ -145,7 +146,7 @@ type SNIRuleConfig struct {
 	Action        string   `yaml:"action"`
 	UpstreamGroup string   `yaml:"upstream_group"`
 	Domains       []string `yaml:"domains"`
-	Peers         []string `yaml:"peers"` // if set, rule applies only to these peers; empty = all
+	PeerIDs       []int    `yaml:"-"`     // runtime: peer IDs from DB; empty = applies to all
 }
 
 type PortRuleConfig struct {
@@ -153,7 +154,7 @@ type PortRuleConfig struct {
 	Action        string   `yaml:"action"`
 	UpstreamGroup string   `yaml:"upstream_group"`
 	Ports         []string `yaml:"ports"` // single port "6881" or range "6881-6889"
-	Peers         []string `yaml:"peers"` // if set, rule applies only to these peers; empty = all
+	PeerIDs       []int    `yaml:"-"`     // runtime: peer IDs from DB; empty = applies to all
 }
 
 type ProtocolRuleConfig struct {
@@ -161,7 +162,7 @@ type ProtocolRuleConfig struct {
 	Action        string   `yaml:"action"`
 	UpstreamGroup string   `yaml:"upstream_group"`
 	Protocols     []string `yaml:"protocols"` // "bittorrent"
-	Peers         []string `yaml:"peers"`     // if set, rule applies only to these peers; empty = all
+	PeerIDs       []int    `yaml:"-"`         // runtime: peer IDs from DB; empty = applies to all
 }
 
 // UpstreamConfig describes a generic upstream endpoint.
@@ -199,7 +200,7 @@ type MTProxyConfig struct {
 	Enabled       bool             `yaml:"enabled"`
 	Listen        []string         `yaml:"listen"`
 	UpstreamGroup string           `yaml:"upstream_group"`
-	Secrets       []string         `yaml:"secrets"`
+	Secrets       []string         `yaml:"-"`
 	StatsAddr     string           `yaml:"stats_addr"`
 	FakeTLS       FakeTLSConfig    `yaml:"fake_tls"`
 	Endpoints     map[int][]string `yaml:"endpoints"`
@@ -398,57 +399,9 @@ func Load(path string) (*Config, error) {
 		}
 	}
 
-	if cfg.PeersDir == "" {
-		cfg.PeersDir = filepath.Join(filepath.Dir(path), "peers")
-	}
-	peers, err := LoadPeers(cfg.PeersDir)
-	if err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("loading peers: %w", err)
-	}
-	if peers == nil {
-		peers = make(map[string]PeerConfig)
-	}
-	cfg.Peers = peers
+	cfg.Peers = make(map[int]PeerConfig)
 
 	return &cfg, nil
-}
-
-func LoadPeers(dir string) (map[string]PeerConfig, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-
-	peers := make(map[string]PeerConfig)
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".wg.conf") {
-			continue
-		}
-		name := strings.TrimSuffix(entry.Name(), ".wg.conf")
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
-		if err != nil {
-			return nil, fmt.Errorf("reading peer %q: %w", name, err)
-		}
-		var peer PeerConfig
-		peerDec := yaml.NewDecoder(strings.NewReader(string(data)))
-		peerDec.KnownFields(true)
-		if err := peerDec.Decode(&peer); err != nil {
-			return nil, fmt.Errorf("parsing peer %q: %w", name, err)
-		}
-		peers[name] = peer
-	}
-	return peers, nil
-}
-
-func SavePeer(dir, name string, peer PeerConfig) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("creating peers directory: %w", err)
-	}
-	data, err := yaml.Marshal(peer)
-	if err != nil {
-		return fmt.Errorf("marshaling peer: %w", err)
-	}
-	return os.WriteFile(filepath.Join(dir, name+".wg.conf"), data, 0o600)
 }
 
 func (c *Config) Save(path string) error {
@@ -640,35 +593,35 @@ func PeerUAPIRemove(publicKey string) (string, error) {
 }
 
 type PeerDiff struct {
-	Added   map[string]PeerConfig
-	Removed map[string]PeerConfig
+	Added   map[int]PeerConfig
+	Removed map[int]PeerConfig
 }
 
-func DiffPeers(old, new map[string]PeerConfig) PeerDiff {
+func DiffPeers(old, new map[int]PeerConfig) PeerDiff {
 	diff := PeerDiff{
-		Added:   make(map[string]PeerConfig),
-		Removed: make(map[string]PeerConfig),
+		Added:   make(map[int]PeerConfig),
+		Removed: make(map[int]PeerConfig),
 	}
-	for name, p := range new {
+	for id, p := range new {
 		if p.Disabled {
 			continue
 		}
-		if oldP, exists := old[name]; !exists || oldP.Disabled {
-			diff.Added[name] = p
+		if oldP, exists := old[id]; !exists || oldP.Disabled {
+			diff.Added[id] = p
 		}
 	}
-	for name, p := range old {
+	for id, p := range old {
 		if p.Disabled {
 			continue
 		}
-		if newP, exists := new[name]; !exists || newP.Disabled {
-			diff.Removed[name] = p
+		if newP, exists := new[id]; !exists || newP.Disabled {
+			diff.Removed[id] = p
 		}
 	}
 	return diff
 }
 
-func (c *WireGuardConfig) ToUAPI(peers map[string]PeerConfig) (string, error) {
+func (c *WireGuardConfig) ToUAPI(peers map[int]PeerConfig) (string, error) {
 	var b strings.Builder
 
 	privHex, err := base64ToHex(c.PrivateKey)

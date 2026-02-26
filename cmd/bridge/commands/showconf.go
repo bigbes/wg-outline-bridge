@@ -14,11 +14,11 @@ import (
 func ShowConf(args []string, logger *slog.Logger) {
 	fs := flag.NewFlagSet("showconf", flag.ExitOnError)
 	configPath := fs.String("config", "configs/bridge.yaml", "path to config file")
-	name := fs.String("name", "", "peer name (required)")
+	id := fs.Int("id", 0, "peer ID (required)")
 	fs.Parse(args)
 
-	if *name == "" {
-		fmt.Fprintln(os.Stderr, "error: -name is required")
+	if *id == 0 {
+		fmt.Fprintln(os.Stderr, "error: -id is required")
 		fs.Usage()
 		os.Exit(1)
 	}
@@ -47,9 +47,9 @@ func ShowConf(args []string, logger *slog.Logger) {
 		}
 	}
 
-	peer, ok := cfg.Peers[*name]
+	peer, ok := cfg.Peers[*id]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "error: peer %q not found\n", *name)
+		fmt.Fprintf(os.Stderr, "error: peer %d not found\n", *id)
 		os.Exit(1)
 	}
 

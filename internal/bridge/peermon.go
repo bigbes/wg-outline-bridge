@@ -27,14 +27,14 @@ type peerStatus struct {
 
 type peerMonitor struct {
 	dev    wg.Device
-	peers  map[string]config.PeerConfig
+	peers  map[int]config.PeerConfig
 	logger *slog.Logger
 
 	// lastGoodHandshake tracks when each peer (by public key) last had a valid handshake.
 	lastGoodHandshake map[string]time.Time
 }
 
-func newPeerMonitor(dev wg.Device, peers map[string]config.PeerConfig, logger *slog.Logger) *peerMonitor {
+func newPeerMonitor(dev wg.Device, peers map[int]config.PeerConfig, logger *slog.Logger) *peerMonitor {
 	return &peerMonitor{
 		dev:               dev,
 		peers:             peers,
@@ -134,15 +134,15 @@ func (m *peerMonitor) getPeerStatuses() []peerStatus {
 }
 
 func (m *peerMonitor) peerName(pubB64 string) string {
-	for name, peer := range m.peers {
+	for _, peer := range m.peers {
 		if peer.PublicKey == pubB64 {
-			return name
+			return peer.Name
 		}
 	}
 	return pubB64[:8] + "..."
 }
 
-func (m *peerMonitor) updatePeers(peers map[string]config.PeerConfig) {
+func (m *peerMonitor) updatePeers(peers map[int]config.PeerConfig) {
 	m.peers = peers
 }
 

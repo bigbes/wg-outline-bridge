@@ -66,8 +66,7 @@ wireguard:
 #   listen:
 #     - "0.0.0.0:443"
 #   upstream_group: "default"  # upstream group name for backend connections
-#   secrets:                   # inline 16-byte hex secrets (32 chars; optional dd/ee prefix)
-#     - "dd0123456789abcdef0123456789abcdef"
+#   # secrets are managed via database (use 'bridge gensecret' to add)
 #   stats_addr: "127.0.0.1:8080"  # HTTP stats endpoint (localhost-only, GET /stats)
 #   fake_tls:                  # fake TLS handshake for censorship resistance
 #     enabled: false

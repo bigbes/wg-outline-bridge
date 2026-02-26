@@ -84,7 +84,7 @@ func TestRouteProtocol(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dec, ok := r.RouteProtocol(tt.protocol, "")
+			dec, ok := r.RouteProtocol(tt.protocol, 0, false)
 			if ok != tt.wantOK {
 				t.Fatalf("RouteProtocol() matched=%v, want %v", ok, tt.wantOK)
 			}

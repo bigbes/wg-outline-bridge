@@ -53,6 +53,26 @@ func sortByCreationOrder[T any](items []T, nameFunc func(T) string, order []stri
 	})
 }
 
+// sortByCreationOrderInt reorders items so that IDs appearing in order come
+// first (in the given order) and unknown IDs are appended at the end.
+func sortByCreationOrderInt[T any](items []T, idFunc func(T) int, order []int) {
+	orderMap := make(map[int]int, len(order))
+	for i, id := range order {
+		orderMap[id] = i
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		oi, oki := orderMap[idFunc(items[i])]
+		oj, okj := orderMap[idFunc(items[j])]
+		if !oki {
+			oi = len(order)
+		}
+		if !okj {
+			oj = len(order)
+		}
+		return oi < oj
+	})
+}
+
 type statusResponse struct {
 	Daemon    daemonInfo             `json:"daemon"`
 	Peers     []peerInfo             `json:"peers"`
@@ -69,6 +89,7 @@ type daemonInfo struct {
 }
 
 type peerInfo struct {
+	ID                int    `json:"id"`
 	Name              string `json:"name"`
 	PublicKey         string `json:"public_key"`
 	AllowedIPs        string `json:"allowed_ips"`
@@ -101,6 +122,7 @@ type mtproxyInfo struct {
 }
 
 type secretInfo struct {
+	ID                int    `json:"id"`
 	Secret            string `json:"secret"`
 	LastConnection    int64  `json:"last_connection_unix"`
 	Connections       int64  `json:"connections"`
@@ -167,12 +189,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	// For guests, load owned resources to filter visibility.
 	admin := isAdminRequest(r)
-	var ownedPeers map[string]struct{}
-	var ownedSecrets map[string]struct{}
+	var ownedPeers map[int]struct{}
+	var ownedSecrets map[int]struct{}
 	if !admin && s.store != nil {
 		uid := requestUserID(r)
-		ownedPeers, _ = s.store.ListPeerNamesByOwner(uid)
-		ownedSecrets, _ = s.store.ListSecretHexByOwner(uid)
+		ownedPeers, _ = s.store.ListPeerIDsByOwner(uid)
+		ownedSecrets, _ = s.store.ListSecretIDsByOwner(uid)
 	}
 
 	resp := statusResponse{
@@ -187,11 +209,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	allPeers := cfg.Peers
 	for _, p := range peers {
 		if !admin {
-			if _, ok := ownedPeers[p.Name]; !ok {
+			if _, ok := ownedPeers[p.ID]; !ok {
 				continue
 			}
 		}
 		pi := peerInfo{
+			ID:                p.ID,
 			Name:              p.Name,
 			PublicKey:         p.PublicKey,
 			LastHandshake:     p.LastHandshake.Unix(),
@@ -202,7 +225,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			ActiveConnections: p.ActiveConnections,
 			ConnectionsTotal:  p.ConnectionsTotal,
 		}
-		if pc, ok := allPeers[p.Name]; ok {
+		if pc, ok := allPeers[p.ID]; ok {
 			pi.AllowedIPs = pc.AllowedIPs
 			pi.Disabled = pc.Disabled
 			pi.ExcludePrivate = pc.ExcludePrivate
@@ -238,19 +261,41 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		BytesB2C:          mt.BytesB2C,
 		BytesC2BTotal:     mt.BytesC2BTotal,
 		BytesB2CTotal:     mt.BytesB2CTotal,
-		Links:             s.proxyLinksFiltered(cfg, ownedSecrets),
 	}
-	var secretUpstreamGroups map[string]string
+
+	// Build hex-based allowed set for proxy link filtering.
+	var allowedSecretHexes map[string]struct{}
+	if ownedSecrets != nil {
+		allowedSecretHexes = make(map[string]struct{})
+		for _, hex := range cfg.MTProxy.Secrets {
+			if s.store != nil {
+				id, found, _ := s.store.GetSecretIDByHex(hex)
+				if found {
+					if _, ok := ownedSecrets[id]; ok {
+						allowedSecretHexes[hex] = struct{}{}
+					}
+				}
+			}
+		}
+	}
+	resp.MTProxy.Links = s.proxyLinksFiltered(cfg, allowedSecretHexes)
+
+	var secretUpstreamGroups map[int]string
 	if s.store != nil {
 		secretUpstreamGroups, _ = s.store.ListSecretUpstreamGroups()
 	}
 	for _, c := range mt.Clients {
+		var secretID int
+		if s.store != nil {
+			secretID, _, _ = s.store.GetSecretIDByHex(c.Secret)
+		}
 		if !admin {
-			if _, ok := ownedSecrets[c.Secret]; !ok {
+			if _, ok := ownedSecrets[secretID]; !ok {
 				continue
 			}
 		}
-		resp.MTProxy.Secrets = append(resp.MTProxy.Secrets, secretInfo{
+		si := secretInfo{
+			ID:                secretID,
 			Secret:            c.Secret,
 			LastConnection:    c.LastConnection.Unix(),
 			Connections:       c.Connections,
@@ -259,8 +304,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			ConnectionsTotal:  c.ConnectionsTotal,
 			BytesC2B:          c.BytesC2B,
 			BytesB2C:          c.BytesB2C,
-			UpstreamGroup:     secretUpstreamGroups[c.Secret],
-		})
+			UpstreamGroup:     secretUpstreamGroups[secretID],
+		}
+		resp.MTProxy.Secrets = append(resp.MTProxy.Secrets, si)
 	}
 
 	// Proxy servers.
@@ -289,8 +335,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	// Sort all lists by creation time.
 	if s.store != nil {
-		if order, err := s.store.PeerNamesOrdered(); err == nil {
-			sortByCreationOrder(resp.Peers, func(p peerInfo) string { return p.Name }, order)
+		if order, err := s.store.PeerIDsOrdered(); err == nil {
+			sortByCreationOrderInt(resp.Peers, func(p peerInfo) int { return p.ID }, order)
 		}
 		if order, err := s.store.UpstreamNamesOrdered(); err == nil {
 			sortByCreationOrder(resp.Upstreams, func(u upstreamInfo) string { return u.Name }, order)
@@ -298,8 +344,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		if order, err := s.store.ProxyNamesOrdered(); err == nil {
 			sortByCreationOrder(resp.Proxies, func(p proxyInfo) string { return p.Name }, order)
 		}
-		if order, err := s.store.SecretHexOrdered(); err == nil {
-			sortByCreationOrder(resp.MTProxy.Secrets, func(s secretInfo) string { return s.Secret }, order)
+		if order, err := s.store.SecretIDsOrdered(); err == nil {
+			sortByCreationOrderInt(resp.MTProxy.Secrets, func(s secretInfo) int { return s.ID }, order)
 		}
 	}
 
@@ -315,12 +361,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			ownerIDs[id] = struct{}{}
 		}
 		for i := range resp.Peers {
-			if ownerID, ok := peerOwners[resp.Peers[i].Name]; ok {
+			if ownerID, ok := peerOwners[resp.Peers[i].ID]; ok {
 				resp.Peers[i].OwnerID = ownerID
 			}
 		}
 		for i := range resp.MTProxy.Secrets {
-			if ownerID, ok := secretOwners[resp.MTProxy.Secrets[i].Secret]; ok {
+			if ownerID, ok := secretOwners[resp.MTProxy.Secrets[i].ID]; ok {
 				resp.MTProxy.Secrets[i].OwnerID = ownerID
 			}
 		}
@@ -331,12 +377,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			}
 			if names, err := s.store.GetUserDisplayNames(ids); err == nil {
 				for i := range resp.Peers {
-					if ownerID, ok := peerOwners[resp.Peers[i].Name]; ok {
+					if ownerID, ok := peerOwners[resp.Peers[i].ID]; ok {
 						resp.Peers[i].OwnerName = names[ownerID]
 					}
 				}
 				for i := range resp.MTProxy.Secrets {
-					if ownerID, ok := secretOwners[resp.MTProxy.Secrets[i].Secret]; ok {
+					if ownerID, ok := secretOwners[resp.MTProxy.Secrets[i].ID]; ok {
 						resp.MTProxy.Secrets[i].OwnerName = names[ownerID]
 					}
 				}
@@ -385,25 +431,26 @@ func (s *Server) handleAddPeer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	peer, err := s.manager.AddPeer(req.Name)
+	id, peer, err := s.manager.AddPeer(req.Name)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
 	// Enable exclude_server by default.
-	if err := s.manager.SetPeerExcludeServer(req.Name, true); err != nil {
-		s.logger.Error("miniapp: failed to set exclude_server", "peer", req.Name, "err", err)
+	if err := s.manager.SetPeerExcludeServer(id, true); err != nil {
+		s.logger.Error("miniapp: failed to set exclude_server", "id", id, "err", err)
 	}
 
 	// Set ownership.
 	if s.store != nil {
-		if err := s.store.SetPeerOwner(req.Name, uid); err != nil {
-			s.logger.Error("miniapp: failed to set peer owner", "peer", req.Name, "user_id", uid, "err", err)
+		if err := s.store.SetPeerOwner(id, uid); err != nil {
+			s.logger.Error("miniapp: failed to set peer owner", "id", id, "user_id", uid, "err", err)
 		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
+		"id":          id,
 		"name":        req.Name,
 		"public_key":  peer.PublicKey,
 		"allowed_ips": peer.AllowedIPs,
@@ -416,15 +463,20 @@ func (s *Server) handleDeletePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := strings.TrimPrefix(r.URL.Path, "/api/peers/")
-	if name == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer name is required"})
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/peers/")
+	if idStr == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer id is required"})
+		return
+	}
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid peer id"})
 		return
 	}
 
 	// Guests can only delete their own peers.
 	if !isAdminRequest(r) && s.store != nil {
-		owner, err := s.store.GetPeerOwner(name)
+		owner, err := s.store.GetPeerOwner(id)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -435,7 +487,7 @@ func (s *Server) handleDeletePeer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.manager.DeletePeer(name); err != nil {
+	if err := s.manager.DeletePeer(id); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -444,15 +496,20 @@ func (s *Server) handleDeletePeer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimPrefix(r.URL.Path, "/api/peers/")
-	if name == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer name is required"})
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/peers/")
+	if idStr == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer id is required"})
+		return
+	}
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid peer id"})
 		return
 	}
 
 	// Guests can only update their own peers.
 	if !isAdminRequest(r) && s.store != nil {
-		owner, err := s.store.GetPeerOwner(name)
+		owner, err := s.store.GetPeerOwner(id)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -476,28 +533,28 @@ func (s *Server) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Disabled != nil {
-		if err := s.manager.SetPeerDisabled(name, *req.Disabled); err != nil {
+		if err := s.manager.SetPeerDisabled(id, *req.Disabled); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
 	}
 
 	if req.ExcludePrivate != nil {
-		if err := s.manager.SetPeerExcludePrivate(name, *req.ExcludePrivate); err != nil {
+		if err := s.manager.SetPeerExcludePrivate(id, *req.ExcludePrivate); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
 	}
 
 	if req.ExcludeServer != nil {
-		if err := s.manager.SetPeerExcludeServer(name, *req.ExcludeServer); err != nil {
+		if err := s.manager.SetPeerExcludeServer(id, *req.ExcludeServer); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
 	}
 
 	if req.UpstreamGroup != nil {
-		if err := s.manager.SetPeerUpstreamGroup(name, *req.UpstreamGroup); err != nil {
+		if err := s.manager.SetPeerUpstreamGroup(id, *req.UpstreamGroup); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -509,16 +566,13 @@ func (s *Server) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer name must not be empty"})
 			return
 		}
-		if newName != name {
-			if err := s.manager.RenamePeer(name, newName); err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-				return
-			}
-			name = newName
+		if err := s.manager.RenamePeer(id, newName); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // buildPeerConfText generates a WireGuard/AmneziaWG client config text for the given peer.
@@ -625,17 +679,22 @@ func (s *Server) handlePeerConf(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract peer name from path: /api/peers/<name>/conf
+	// Extract peer id from path: /api/peers/<id>/conf
 	path := strings.TrimPrefix(r.URL.Path, "/api/peers/")
-	name := strings.TrimSuffix(path, "/conf")
-	if name == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer name is required"})
+	idStr := strings.TrimSuffix(path, "/conf")
+	if idStr == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer id is required"})
+		return
+	}
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid peer id"})
 		return
 	}
 
 	// Guests can only view their own peer configs.
 	if !isAdminRequest(r) && s.store != nil {
-		owner, err := s.store.GetPeerOwner(name)
+		owner, err := s.store.GetPeerOwner(id)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -648,7 +707,7 @@ func (s *Server) handlePeerConf(w http.ResponseWriter, r *http.Request) {
 
 	cfg := s.cfgProv.CurrentConfig()
 
-	peer, ok := cfg.Peers[name]
+	peer, ok := cfg.Peers[id]
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
 		return
@@ -659,7 +718,7 @@ func (s *Server) handlePeerConf(w http.ResponseWriter, r *http.Request) {
 	// Return raw file download when ?download=1 is set (for tg.downloadFile).
 	if r.URL.Query().Get("download") == "1" {
 		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.conf", sanitizeFilename(name)))
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.conf", sanitizeFilename(peer.Name)))
 		w.Header().Set("Access-Control-Allow-Origin", "https://web.telegram.org")
 		w.Write([]byte(confText))
 		return
@@ -674,17 +733,22 @@ func (s *Server) handlePeerQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract peer name from path: /api/peers/<name>/qr
+	// Extract peer id from path: /api/peers/<id>/qr
 	path := strings.TrimPrefix(r.URL.Path, "/api/peers/")
-	name := strings.TrimSuffix(path, "/qr")
-	if name == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer name is required"})
+	idStr := strings.TrimSuffix(path, "/qr")
+	if idStr == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer id is required"})
+		return
+	}
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid peer id"})
 		return
 	}
 
 	// Guests can only view their own peer configs.
 	if !isAdminRequest(r) && s.store != nil {
-		owner, err := s.store.GetPeerOwner(name)
+		owner, err := s.store.GetPeerOwner(id)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -697,7 +761,7 @@ func (s *Server) handlePeerQR(w http.ResponseWriter, r *http.Request) {
 
 	cfg := s.cfgProv.CurrentConfig()
 
-	peer, ok := cfg.Peers[name]
+	peer, ok := cfg.Peers[id]
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
 		return
@@ -721,11 +785,16 @@ func (s *Server) handlePeerSendConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract peer name from path: /api/peers/<name>/send
+	// Extract peer id from path: /api/peers/<id>/send
 	path := strings.TrimPrefix(r.URL.Path, "/api/peers/")
-	name := strings.TrimSuffix(path, "/send")
-	if name == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer name is required"})
+	idStr := strings.TrimSuffix(path, "/send")
+	if idStr == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer id is required"})
+		return
+	}
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid peer id"})
 		return
 	}
 
@@ -733,7 +802,7 @@ func (s *Server) handlePeerSendConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Guests can only send their own peer configs.
 	if !isAdminRequest(r) && s.store != nil {
-		owner, err := s.store.GetPeerOwner(name)
+		owner, err := s.store.GetPeerOwner(id)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -746,7 +815,7 @@ func (s *Server) handlePeerSendConfig(w http.ResponseWriter, r *http.Request) {
 
 	cfg := s.cfgProv.CurrentConfig()
 
-	peer, ok := cfg.Peers[name]
+	peer, ok := cfg.Peers[id]
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "peer not found"})
 		return
@@ -758,10 +827,10 @@ func (s *Server) handlePeerSendConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	confText := buildPeerConfText(cfg, peer)
-	filename := sanitizeFilename(name) + ".conf"
+	filename := sanitizeFilename(peer.Name) + ".conf"
 
-	if err := s.bot.SendDocument(r.Context(), userID, filename, []byte(confText), "🔐 WireGuard config: "+name); err != nil {
-		s.logger.Error("miniapp: failed to send config to telegram", "peer", name, "user_id", userID, "err", err)
+	if err := s.bot.SendDocument(r.Context(), userID, filename, []byte(confText), "🔐 WireGuard config: "+peer.Name); err != nil {
+		s.logger.Error("miniapp: failed to send config to telegram", "id", id, "user_id", userID, "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to send config"})
 		return
 	}
@@ -807,7 +876,7 @@ func (s *Server) handleAddSecret(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	secretHex, err := s.manager.AddSecret(req.Type, req.Comment)
+	id, secretHex, err := s.manager.AddSecret(req.Type, req.Comment)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -815,12 +884,12 @@ func (s *Server) handleAddSecret(w http.ResponseWriter, r *http.Request) {
 
 	// Set ownership.
 	if s.store != nil {
-		if err := s.store.SetSecretOwner(secretHex, uid); err != nil {
-			s.logger.Error("miniapp: failed to set secret owner", "secret", secretHex, "user_id", uid, "err", err)
+		if err := s.store.SetSecretOwner(id, uid); err != nil {
+			s.logger.Error("miniapp: failed to set secret owner", "id", id, "user_id", uid, "err", err)
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"secret": secretHex})
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "secret": secretHex})
 }
 
 func (s *Server) handleSecretsRoute(w http.ResponseWriter, r *http.Request) {
@@ -846,15 +915,20 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	secretHex := strings.TrimPrefix(r.URL.Path, "/api/secrets/")
-	if secretHex == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "secret hex is required"})
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/secrets/")
+	if idStr == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "secret id is required"})
+		return
+	}
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid secret id"})
 		return
 	}
 
 	// Guests can only delete their own secrets.
 	if !isAdminRequest(r) && s.store != nil {
-		owner, err := s.store.GetSecretOwner(secretHex)
+		owner, err := s.store.GetSecretOwner(id)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -865,7 +939,7 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := s.manager.DeleteSecret(secretHex); err != nil {
+	if err := s.manager.DeleteSecret(id); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -903,10 +977,15 @@ func (s *Server) handleRenameSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	secretHex := strings.TrimPrefix(r.URL.Path, "/api/secrets/")
-	secretHex = strings.TrimSuffix(secretHex, "/name")
-	if secretHex == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "secret hex is required"})
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/secrets/")
+	idStr = strings.TrimSuffix(idStr, "/name")
+	if idStr == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "secret id is required"})
+		return
+	}
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid secret id"})
 		return
 	}
 
@@ -923,7 +1002,7 @@ func (s *Server) handleRenameSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.store.RenameSecret(secretHex, req.Name); err != nil {
+	if err := s.store.RenameSecret(id, req.Name); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -932,15 +1011,20 @@ func (s *Server) handleRenameSecret(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateSecret(w http.ResponseWriter, r *http.Request) {
-	secretHex := strings.TrimPrefix(r.URL.Path, "/api/secrets/")
-	if secretHex == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "secret hex is required"})
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/secrets/")
+	if idStr == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "secret id is required"})
+		return
+	}
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid secret id"})
 		return
 	}
 
 	// Guests can only update their own secrets.
 	if !isAdminRequest(r) && s.store != nil {
-		owner, err := s.store.GetSecretOwner(secretHex)
+		owner, err := s.store.GetSecretOwner(id)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -960,7 +1044,7 @@ func (s *Server) handleUpdateSecret(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.UpstreamGroup != nil {
-		if err := s.manager.SetSecretUpstreamGroup(secretHex, *req.UpstreamGroup); err != nil {
+		if err := s.manager.SetSecretUpstreamGroup(id, *req.UpstreamGroup); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -1660,40 +1744,9 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.store == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "not configured"})
-		return
-	}
-
-	// Collect owned peers and secrets before deleting the user.
-	ownedPeers, err := s.store.ListPeerNamesByOwner(userID)
-	if err != nil {
+	if err := s.manager.DeleteUser(userID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
-	}
-	ownedSecrets, err := s.store.ListSecretHexByOwner(userID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	deleted, err := s.store.DeleteAllowedUser(userID)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if !deleted {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
-		return
-	}
-
-	// Cascade-delete owned peers.
-	for name := range ownedPeers {
-		_ = s.manager.DeletePeer(name)
-	}
-	// Cascade-delete owned MTProxy secrets.
-	for hex := range ownedSecrets {
-		_ = s.manager.DeleteSecret(hex)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -1953,13 +2006,66 @@ type dnsRecordInfo struct {
 	TTL  uint32   `json:"ttl"`
 }
 
+type peerRefInfo struct {
+	ID        int    `json:"id"`
+	Name      string `json:"name"`
+	OwnerName string `json:"owner_name,omitempty"`
+}
+
+// peerOwnerNames builds a mapping from peer name to owner display name.
+func (s *Server) peerOwnerNames() map[string]string {
+	if s.store == nil {
+		return nil
+	}
+	peerOwners, err := s.store.ListPeerOwners()
+	if err != nil || len(peerOwners) == 0 {
+		return nil
+	}
+	cfg := s.cfgProv.CurrentConfig()
+	ownerIDs := make(map[int64]struct{})
+	for _, uid := range peerOwners {
+		ownerIDs[uid] = struct{}{}
+	}
+	ids := make([]int64, 0, len(ownerIDs))
+	for id := range ownerIDs {
+		ids = append(ids, id)
+	}
+	names, err := s.store.GetUserDisplayNames(ids)
+	if err != nil {
+		return nil
+	}
+	result := make(map[string]string)
+	for peerID, ownerID := range peerOwners {
+		if pc, ok := cfg.Peers[peerID]; ok {
+			if name, ok := names[ownerID]; ok {
+				result[pc.Name] = name
+			}
+		}
+	}
+	return result
+}
+
+// buildPeerRefs converts a list of peer IDs to peerRefInfo with names and owner names.
+func buildPeerRefs(peerIDs []int, peers map[int]config.PeerConfig, ownerNames map[string]string) []peerRefInfo {
+	refs := make([]peerRefInfo, 0, len(peerIDs))
+	for _, id := range peerIDs {
+		ref := peerRefInfo{ID: id}
+		if p, ok := peers[id]; ok {
+			ref.Name = p.Name
+			ref.OwnerName = ownerNames[p.Name]
+		}
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
 type dnsRuleInfo struct {
 	Name     string        `json:"name"`
 	Action   string        `json:"action"`
 	Upstream string        `json:"upstream,omitempty"`
 	Domains  []string      `json:"domains"`
 	Lists    []dnsListInfo `json:"lists"`
-	Peers    []string      `json:"peers"`
+	Peers    []peerRefInfo `json:"peers"`
 }
 
 type dnsListInfo struct {
@@ -2011,13 +2117,14 @@ func (s *Server) handleDNS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Rules.
+	ownerNames := s.peerOwnerNames()
 	for _, rule := range dns.Rules {
 		ri := dnsRuleInfo{
 			Name:     rule.Name,
 			Action:   rule.Action,
 			Upstream: rule.Upstream,
 			Domains:  rule.Domains,
-			Peers:    rule.Peers,
+			Peers:    buildPeerRefs(rule.PeerIDs, cfg.Peers, ownerNames),
 		}
 		for _, l := range rule.Lists {
 			ri.Lists = append(ri.Lists, dnsListInfo{
@@ -2163,7 +2270,7 @@ func (s *Server) handleAddDNSRule(w http.ResponseWriter, r *http.Request) {
 			Format  string `json:"format"`
 			Refresh int    `json:"refresh"`
 		} `json:"lists"`
-		Peers []string `json:"peers"`
+		PeerIDs []int `json:"peer_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -2192,7 +2299,7 @@ func (s *Server) handleAddDNSRule(w http.ResponseWriter, r *http.Request) {
 		Action:   req.Action,
 		Upstream: req.Upstream,
 		Domains:  req.Domains,
-		Peers:    req.Peers,
+		PeerIDs:  req.PeerIDs,
 	}
 	for _, l := range req.Lists {
 		format := l.Format
@@ -2256,7 +2363,7 @@ func (s *Server) handleUpdateDNSRule(w http.ResponseWriter, r *http.Request) {
 			Format  string `json:"format"`
 			Refresh int    `json:"refresh"`
 		} `json:"lists"`
-		Peers []string `json:"peers"`
+		PeerIDs []int `json:"peer_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -2280,7 +2387,7 @@ func (s *Server) handleUpdateDNSRule(w http.ResponseWriter, r *http.Request) {
 		Action:   req.Action,
 		Upstream: req.Upstream,
 		Domains:  req.Domains,
-		Peers:    req.Peers,
+		PeerIDs:  req.PeerIDs,
 	}
 	for _, l := range req.Lists {
 		format := l.Format
@@ -2345,13 +2452,13 @@ type routingResponse struct {
 }
 
 type ipRuleInfo struct {
-	Name          string       `json:"name"`
-	Action        string       `json:"action"`
-	UpstreamGroup string       `json:"upstream_group,omitempty"`
-	CIDRs         []string     `json:"cidrs"`
-	ASNs          []int        `json:"asns"`
-	Lists         []ipListInfo `json:"lists"`
-	Peers         []string     `json:"peers"`
+	Name          string        `json:"name"`
+	Action        string        `json:"action"`
+	UpstreamGroup string        `json:"upstream_group,omitempty"`
+	CIDRs         []string      `json:"cidrs"`
+	ASNs          []int         `json:"asns"`
+	Lists         []ipListInfo  `json:"lists"`
+	Peers         []peerRefInfo `json:"peers"`
 }
 
 type ipListInfo struct {
@@ -2360,27 +2467,27 @@ type ipListInfo struct {
 }
 
 type sniRuleInfo struct {
-	Name          string   `json:"name"`
-	Action        string   `json:"action"`
-	UpstreamGroup string   `json:"upstream_group,omitempty"`
-	Domains       []string `json:"domains"`
-	Peers         []string `json:"peers"`
+	Name          string        `json:"name"`
+	Action        string        `json:"action"`
+	UpstreamGroup string        `json:"upstream_group,omitempty"`
+	Domains       []string      `json:"domains"`
+	Peers         []peerRefInfo `json:"peers"`
 }
 
 type portRuleInfo struct {
-	Name          string   `json:"name"`
-	Action        string   `json:"action"`
-	UpstreamGroup string   `json:"upstream_group,omitempty"`
-	Ports         []string `json:"ports"`
-	Peers         []string `json:"peers"`
+	Name          string        `json:"name"`
+	Action        string        `json:"action"`
+	UpstreamGroup string        `json:"upstream_group,omitempty"`
+	Ports         []string      `json:"ports"`
+	Peers         []peerRefInfo `json:"peers"`
 }
 
 type protocolRuleInfo struct {
-	Name          string   `json:"name"`
-	Action        string   `json:"action"`
-	UpstreamGroup string   `json:"upstream_group,omitempty"`
-	Protocols     []string `json:"protocols"`
-	Peers         []string `json:"peers"`
+	Name          string        `json:"name"`
+	Action        string        `json:"action"`
+	UpstreamGroup string        `json:"upstream_group,omitempty"`
+	Protocols     []string      `json:"protocols"`
+	Peers         []peerRefInfo `json:"peers"`
 }
 
 func (s *Server) handleRoutingRoute(w http.ResponseWriter, r *http.Request) {
@@ -2402,6 +2509,8 @@ func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
 		resp.CIDRs = []config.CIDREntry{}
 	}
 
+	ownerNames := s.peerOwnerNames()
+
 	for _, rule := range routing.IPRules {
 		ri := ipRuleInfo{
 			Name:          rule.Name,
@@ -2409,7 +2518,7 @@ func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
 			UpstreamGroup: rule.UpstreamGroup,
 			CIDRs:         rule.CIDRs,
 			ASNs:          rule.ASNs,
-			Peers:         rule.Peers,
+			Peers:         buildPeerRefs(rule.PeerIDs, cfg.Peers, ownerNames),
 		}
 		if ri.CIDRs == nil {
 			ri.CIDRs = []string{}
@@ -2418,7 +2527,7 @@ func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
 			ri.ASNs = []int{}
 		}
 		if ri.Peers == nil {
-			ri.Peers = []string{}
+			ri.Peers = []peerRefInfo{}
 		}
 		for _, l := range rule.Lists {
 			ri.Lists = append(ri.Lists, ipListInfo{
@@ -2441,13 +2550,13 @@ func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
 			Action:        rule.Action,
 			UpstreamGroup: rule.UpstreamGroup,
 			Domains:       rule.Domains,
-			Peers:         rule.Peers,
+			Peers:         buildPeerRefs(rule.PeerIDs, cfg.Peers, ownerNames),
 		}
 		if ri.Domains == nil {
 			ri.Domains = []string{}
 		}
 		if ri.Peers == nil {
-			ri.Peers = []string{}
+			ri.Peers = []peerRefInfo{}
 		}
 		resp.SNIRules = append(resp.SNIRules, ri)
 	}
@@ -2461,13 +2570,13 @@ func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
 			Action:        rule.Action,
 			UpstreamGroup: rule.UpstreamGroup,
 			Ports:         rule.Ports,
-			Peers:         rule.Peers,
+			Peers:         buildPeerRefs(rule.PeerIDs, cfg.Peers, ownerNames),
 		}
 		if ri.Ports == nil {
 			ri.Ports = []string{}
 		}
 		if ri.Peers == nil {
-			ri.Peers = []string{}
+			ri.Peers = []peerRefInfo{}
 		}
 		resp.PortRules = append(resp.PortRules, ri)
 	}
@@ -2481,13 +2590,13 @@ func (s *Server) handleRouting(w http.ResponseWriter, r *http.Request) {
 			Action:        rule.Action,
 			UpstreamGroup: rule.UpstreamGroup,
 			Protocols:     rule.Protocols,
-			Peers:         rule.Peers,
+			Peers:         buildPeerRefs(rule.PeerIDs, cfg.Peers, ownerNames),
 		}
 		if ri.Protocols == nil {
 			ri.Protocols = []string{}
 		}
 		if ri.Peers == nil {
-			ri.Peers = []string{}
+			ri.Peers = []peerRefInfo{}
 		}
 		resp.ProtocolRules = append(resp.ProtocolRules, ri)
 	}
@@ -2582,7 +2691,7 @@ func (s *Server) handleUpdateIPRule(w http.ResponseWriter, r *http.Request) {
 			URL     string `json:"url"`
 			Refresh int    `json:"refresh"`
 		} `json:"lists"`
-		Peers []string `json:"peers"`
+		PeerIDs []int `json:"peer_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -2603,7 +2712,7 @@ func (s *Server) handleUpdateIPRule(w http.ResponseWriter, r *http.Request) {
 		UpstreamGroup: req.UpstreamGroup,
 		CIDRs:         req.CIDRs,
 		ASNs:          req.ASNs,
-		Peers:         req.Peers,
+		PeerIDs:       req.PeerIDs,
 	}
 	for _, l := range req.Lists {
 		rule.Lists = append(rule.Lists, config.IPListConfig{
@@ -2687,7 +2796,7 @@ func (s *Server) handleAddIPRule(w http.ResponseWriter, r *http.Request) {
 			URL     string `json:"url"`
 			Refresh int    `json:"refresh"`
 		} `json:"lists"`
-		Peers []string `json:"peers"`
+		PeerIDs []int `json:"peer_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -2716,7 +2825,7 @@ func (s *Server) handleAddIPRule(w http.ResponseWriter, r *http.Request) {
 		UpstreamGroup: req.UpstreamGroup,
 		CIDRs:         req.CIDRs,
 		ASNs:          req.ASNs,
-		Peers:         req.Peers,
+		PeerIDs:       req.PeerIDs,
 	}
 	for _, l := range req.Lists {
 		rule.Lists = append(rule.Lists, config.IPListConfig{
@@ -2764,7 +2873,7 @@ func (s *Server) handleAddSNIRule(w http.ResponseWriter, r *http.Request) {
 		Action        string   `json:"action"`
 		UpstreamGroup string   `json:"upstream_group"`
 		Domains       []string `json:"domains"`
-		Peers         []string `json:"peers"`
+		PeerIDs       []int    `json:"peer_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -2792,7 +2901,7 @@ func (s *Server) handleAddSNIRule(w http.ResponseWriter, r *http.Request) {
 		Action:        req.Action,
 		UpstreamGroup: req.UpstreamGroup,
 		Domains:       req.Domains,
-		Peers:         req.Peers,
+		PeerIDs:       req.PeerIDs,
 	}
 
 	if err := s.manager.AddSNIRule(rule); err != nil {
@@ -2840,7 +2949,7 @@ func (s *Server) handleUpdateSNIRule(w http.ResponseWriter, r *http.Request) {
 		Action        string   `json:"action"`
 		UpstreamGroup string   `json:"upstream_group"`
 		Domains       []string `json:"domains"`
-		Peers         []string `json:"peers"`
+		PeerIDs       []int    `json:"peer_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -2864,7 +2973,7 @@ func (s *Server) handleUpdateSNIRule(w http.ResponseWriter, r *http.Request) {
 		Action:        req.Action,
 		UpstreamGroup: req.UpstreamGroup,
 		Domains:       req.Domains,
-		Peers:         req.Peers,
+		PeerIDs:       req.PeerIDs,
 	}
 
 	if err := s.manager.UpdateSNIRule(rule); err != nil {
@@ -2886,7 +2995,7 @@ func (s *Server) handleAddPortRule(w http.ResponseWriter, r *http.Request) {
 		Action        string   `json:"action"`
 		UpstreamGroup string   `json:"upstream_group"`
 		Ports         []string `json:"ports"`
-		Peers         []string `json:"peers"`
+		PeerIDs       []int    `json:"peer_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -2914,7 +3023,7 @@ func (s *Server) handleAddPortRule(w http.ResponseWriter, r *http.Request) {
 		Action:        req.Action,
 		UpstreamGroup: req.UpstreamGroup,
 		Ports:         req.Ports,
-		Peers:         req.Peers,
+		PeerIDs:       req.PeerIDs,
 	}
 
 	if err := s.manager.AddPortRule(rule); err != nil {
@@ -2962,7 +3071,7 @@ func (s *Server) handleUpdatePortRule(w http.ResponseWriter, r *http.Request) {
 		Action        string   `json:"action"`
 		UpstreamGroup string   `json:"upstream_group"`
 		Ports         []string `json:"ports"`
-		Peers         []string `json:"peers"`
+		PeerIDs       []int    `json:"peer_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -2986,7 +3095,7 @@ func (s *Server) handleUpdatePortRule(w http.ResponseWriter, r *http.Request) {
 		Action:        req.Action,
 		UpstreamGroup: req.UpstreamGroup,
 		Ports:         req.Ports,
-		Peers:         req.Peers,
+		PeerIDs:       req.PeerIDs,
 	}
 
 	if err := s.manager.UpdatePortRule(rule); err != nil {
@@ -3008,7 +3117,7 @@ func (s *Server) handleAddProtocolRule(w http.ResponseWriter, r *http.Request) {
 		Action        string   `json:"action"`
 		UpstreamGroup string   `json:"upstream_group"`
 		Protocols     []string `json:"protocols"`
-		Peers         []string `json:"peers"`
+		PeerIDs       []int    `json:"peer_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -3036,7 +3145,7 @@ func (s *Server) handleAddProtocolRule(w http.ResponseWriter, r *http.Request) {
 		Action:        req.Action,
 		UpstreamGroup: req.UpstreamGroup,
 		Protocols:     req.Protocols,
-		Peers:         req.Peers,
+		PeerIDs:       req.PeerIDs,
 	}
 
 	if err := s.manager.AddProtocolRule(rule); err != nil {
@@ -3084,7 +3193,7 @@ func (s *Server) handleUpdateProtocolRule(w http.ResponseWriter, r *http.Request
 		Action        string   `json:"action"`
 		UpstreamGroup string   `json:"upstream_group"`
 		Protocols     []string `json:"protocols"`
-		Peers         []string `json:"peers"`
+		PeerIDs       []int    `json:"peer_ids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -3108,7 +3217,7 @@ func (s *Server) handleUpdateProtocolRule(w http.ResponseWriter, r *http.Request
 		Action:        req.Action,
 		UpstreamGroup: req.UpstreamGroup,
 		Protocols:     req.Protocols,
-		Peers:         req.Peers,
+		PeerIDs:       req.PeerIDs,
 	}
 
 	if err := s.manager.UpdateProtocolRule(rule); err != nil {

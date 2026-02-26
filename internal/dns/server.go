@@ -25,12 +25,12 @@ type Rule struct {
 	Upstream  string // for action=upstream
 	Patterns  []DomainPattern
 	Blocklist *BlocklistLoader
-	Peers     []string // if set, rule applies only to these peers; empty = all
+	PeerIDs   []int // if set, rule applies only to these peer IDs; empty = all
 }
 
-// PeerNameResolver maps peer VPN IPs to peer names.
-type PeerNameResolver interface {
-	NameFor(ip netip.Addr) string
+// PeerIDResolver maps peer VPN IPs to peer IDs.
+type PeerIDResolver interface {
+	IDFor(ip netip.Addr) (int, bool)
 }
 
 type DomainPattern struct {
@@ -66,7 +66,7 @@ type Server struct {
 	rules        []Rule
 	logger       *slog.Logger
 	server       *dnspkg.Server
-	peerResolver PeerNameResolver
+	peerResolver PeerIDResolver
 }
 
 func New(listenAddr, upstream string, records map[string]Record, rules []Rule, logger *slog.Logger) *Server {
@@ -137,9 +137,9 @@ func (s *Server) UpdateRecords(records map[string]Record) {
 	s.mu.Unlock()
 }
 
-// SetPeerResolver sets the resolver used to map peer IPs to peer names
+// SetPeerResolver sets the resolver used to map peer IPs to peer IDs
 // for per-peer DNS rule filtering.
-func (s *Server) SetPeerResolver(r PeerNameResolver) {
+func (s *Server) SetPeerResolver(r PeerIDResolver) {
 	s.peerResolver = r
 }
 
@@ -178,10 +178,11 @@ func (s *Server) serveDNSWithPeer(w dnspkg.ResponseWriter, r *dnspkg.Msg, peerIP
 		return
 	}
 
-	// Resolve peer name for per-peer rule filtering.
-	peerName := ""
+	// Resolve peer ID for per-peer rule filtering.
+	peerID := 0
+	peerKnown := false
 	if peerIP.IsValid() && s.peerResolver != nil {
-		peerName = s.peerResolver.NameFor(peerIP)
+		peerID, peerKnown = s.peerResolver.IDFor(peerIP)
 	}
 
 	s.mu.RLock()
@@ -191,7 +192,7 @@ func (s *Server) serveDNSWithPeer(w dnspkg.ResponseWriter, r *dnspkg.Msg, peerIP
 	// 2. Rules (first match wins)
 	for i := range rules {
 		rule := &rules[i]
-		if !s.ruleAppliesToPeer(rule, peerName) {
+		if !ruleAppliesToPeer(rule.PeerIDs, peerID, peerKnown) {
 			continue
 		}
 		if !s.ruleMatches(rule, name) {
@@ -211,15 +212,15 @@ func (s *Server) serveDNSWithPeer(w dnspkg.ResponseWriter, r *dnspkg.Msg, peerIP
 	s.forward(w, r, s.upstream, "")
 }
 
-func (s *Server) ruleAppliesToPeer(rule *Rule, peerName string) bool {
-	if len(rule.Peers) == 0 {
+func ruleAppliesToPeer(peerIDs []int, peerID int, peerKnown bool) bool {
+	if len(peerIDs) == 0 {
 		return true
 	}
-	if peerName == "" {
+	if !peerKnown {
 		return false
 	}
-	for _, p := range rule.Peers {
-		if p == peerName {
+	for _, id := range peerIDs {
+		if id == peerID {
 			return true
 		}
 	}

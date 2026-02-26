@@ -81,13 +81,14 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 		}
 	}()
 
-	// Resolve peer name for per-peer rule filtering.
-	peerName := ""
+	// Resolve peer ID for per-peer rule filtering.
+	var peerID int
+	var peerKnown bool
 	if srcAddr.IsValid() && p.peerNameResolver != nil {
-		peerName = p.peerNameResolver.NameFor(srcAddr)
+		peerID, peerKnown = p.peerNameResolver.IDFor(srcAddr)
 	}
 
-	req := routing.Request{DestIP: destIP, DestPort: destPort, PeerName: peerName}
+	req := routing.Request{DestIP: destIP, DestPort: destPort, PeerID: peerID, PeerKnown: peerKnown}
 
 	dec, matched := p.router.RouteIP(req)
 
@@ -134,7 +135,7 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 		peeked, _ := br.Peek(20)
 		clientConn.SetReadDeadline(time.Time{})
 		if proto := routing.DetectTCPProtocol(peeked); proto != "" {
-			if protoDec, ok := p.router.RouteProtocol(proto, peerName); ok {
+			if protoDec, ok := p.router.RouteProtocol(proto, peerID, peerKnown); ok {
 				dec = protoDec
 				matched = true
 				if dec.Action == routing.ActionBlock {

@@ -28,22 +28,25 @@ func GenConf(args []string, logger *slog.Logger) {
 		os.Exit(1)
 	}
 
-	if cfg.Database.Path != "" {
-		store, err := statsdb.Open(cfg.Database.Path, logger)
-		if err != nil {
-			logger.Error("failed to open database", "err", err)
-			os.Exit(1)
-		}
-		defer store.Close()
+	if cfg.Database.Path == "" {
+		logger.Error("database path is required in config to store peers")
+		os.Exit(1)
+	}
 
-		dbPeers, err := store.ListPeers()
-		if err != nil {
-			logger.Error("failed to load peers from database", "err", err)
-			os.Exit(1)
-		}
-		if len(dbPeers) > 0 {
-			cfg.Peers = dbPeers
-		}
+	store, err := statsdb.Open(cfg.Database.Path, logger)
+	if err != nil {
+		logger.Error("failed to open database", "err", err)
+		os.Exit(1)
+	}
+	defer store.Close()
+
+	dbPeers, err := store.ListPeers()
+	if err != nil {
+		logger.Error("failed to load peers from database", "err", err)
+		os.Exit(1)
+	}
+	if len(dbPeers) > 0 {
+		cfg.Peers = dbPeers
 	}
 
 	privateKey, publicKey, err := config.GenerateKeyPair()
@@ -70,26 +73,15 @@ func GenConf(args []string, logger *slog.Logger) {
 		PresharedKey: presharedKey,
 		AllowedIPs:   clientIP + "/32",
 	}
-	if cfg.Database.Path != "" {
-		store, err := statsdb.Open(cfg.Database.Path, logger)
-		if err != nil {
-			logger.Error("failed to open database", "err", err)
-			os.Exit(1)
-		}
-		defer store.Close()
 
-		if err := store.UpsertPeer(*name, peer); err != nil {
-			logger.Error("failed to save peer to database", "err", err)
-			os.Exit(1)
-		}
-	} else {
-		if err := config.SavePeer(cfg.PeersDir, *name, peer); err != nil {
-			logger.Error("failed to save peer", "err", err)
-			os.Exit(1)
-		}
+	peerID, err := store.InsertPeer(*name, peer)
+	if err != nil {
+		logger.Error("failed to save peer to database", "err", err)
+		os.Exit(1)
 	}
 
 	fmt.Println("=== Peer added to config ===")
+	fmt.Printf("ID:          %d\n", peerID)
 	fmt.Printf("Name:        %s\n", *name)
 	fmt.Printf("Client IP:   %s\n", clientIP)
 	fmt.Printf("Public Key:  %s\n", publicKey)

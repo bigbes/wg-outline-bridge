@@ -97,13 +97,14 @@ func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest str
 		}
 	}()
 
-	// Resolve peer name for per-peer rule filtering.
-	peerName := ""
+	// Resolve peer ID for per-peer rule filtering.
+	var peerID int
+	var peerKnown bool
 	if srcAddr.IsValid() && p.peerNameResolver != nil {
-		peerName = p.peerNameResolver.NameFor(srcAddr)
+		peerID, peerKnown = p.peerNameResolver.IDFor(srcAddr)
 	}
 
-	req := routing.Request{DestIP: destIP, DestPort: destPort, PeerName: peerName}
+	req := routing.Request{DestIP: destIP, DestPort: destPort, PeerID: peerID, PeerKnown: peerKnown}
 	dec, matched := p.router.RouteIP(req)
 
 	if !matched {
@@ -160,7 +161,7 @@ func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest str
 			if firstPacket && hasProtoRules {
 				firstPacket = false
 				if proto := routing.DetectUDPProtocol(buf[:n]); proto != "" {
-					if protoDec, ok := p.router.RouteProtocol(proto, peerName); ok && protoDec.Action == routing.ActionBlock {
+					if protoDec, ok := p.router.RouteProtocol(proto, peerID, peerKnown); ok && protoDec.Action == routing.ActionBlock {
 						p.logger.Info("udp: protocol blocked", "src", srcAddr, "dest", dest, "protocol", proto, "rule", protoDec.RuleName)
 						break
 					}
