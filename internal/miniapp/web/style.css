@@ -1035,6 +1035,9 @@ select.tg-input {
     height: 20px;
     color: var(--active-green);
 }
+#toast-icon-error {
+    color: #ff3b30;
+}
 
 /* --- Status Badge --- */
 .status-badge {
