@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"crypto/subtle"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -67,7 +68,11 @@ func RunBridge(args []string, logger *slog.Logger, version string, dirty bool) {
 			mux.HandleFunc("/debug/pprof/", http.DefaultServeMux.ServeHTTP)
 		}
 		if obs.Metrics {
-			mux.Handle("/metrics", promhttp.Handler())
+			handler := promhttp.Handler()
+			if obs.Username != "" {
+				handler = basicAuth(handler, obs.Username, obs.Password)
+			}
+			mux.Handle("/metrics", handler)
 		}
 		go func() {
 			logger.Info("starting observability server", "addr", obs.Addr, "pprof", obs.Pprof, "metrics", obs.Metrics)
@@ -87,4 +92,18 @@ func RunBridge(args []string, logger *slog.Logger, version string, dirty bool) {
 		os.Exit(1)
 	}
 	cancel()
+}
+
+func basicAuth(next http.Handler, username, password string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if !ok ||
+			subtle.ConstantTimeCompare([]byte(user), []byte(username)) != 1 ||
+			subtle.ConstantTimeCompare([]byte(pass), []byte(password)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Basic realm="metrics"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

@@ -5,6 +5,9 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"github.com/bigbes/wireguard-outline-bridge/internal/metrics"
 )
 
 // dialer is the interface satisfied by Client and SwappableClient.
@@ -53,7 +56,7 @@ func (s *StatsDialer) DialStream(ctx context.Context, addr string) (net.Conn, er
 		return nil, err
 	}
 	s.conns.Add(1)
-	return &statsConn{Conn: conn, sd: s}, nil
+	return &statsConn{Conn: conn, sd: s, createdAt: time.Now()}, nil
 }
 
 // DialPacket dials a packet connection and wraps it with stats tracking.
@@ -63,13 +66,14 @@ func (s *StatsDialer) DialPacket(ctx context.Context, addr string) (net.Conn, er
 		return nil, err
 	}
 	s.conns.Add(1)
-	return &statsConn{Conn: conn, sd: s}, nil
+	return &statsConn{Conn: conn, sd: s, createdAt: time.Now()}, nil
 }
 
 type statsConn struct {
 	net.Conn
 	sd        *StatsDialer
 	closeOnce sync.Once
+	createdAt time.Time
 }
 
 func (c *statsConn) Read(p []byte) (int, error) {
@@ -91,6 +95,9 @@ func (c *statsConn) Write(p []byte) (int, error) {
 func (c *statsConn) Close() error {
 	var err error
 	c.closeOnce.Do(func() {
+		if !c.createdAt.IsZero() {
+			metrics.UpstreamConnAge.WithLabelValues(c.sd.Name).Observe(time.Since(c.createdAt).Seconds())
+		}
 		c.sd.conns.Add(-1)
 		err = c.Conn.Close()
 	})

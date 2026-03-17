@@ -41,9 +41,11 @@ type Config struct {
 }
 
 type ObservabilityHTTPConfig struct {
-	Addr    string `yaml:"addr"`    // e.g. ":6060"
-	Pprof   bool   `yaml:"pprof"`   // serve /debug/pprof/*
-	Metrics bool   `yaml:"metrics"` // serve /metrics (Prometheus)
+	Addr     string `yaml:"addr"`     // e.g. ":6060"
+	Pprof    bool   `yaml:"pprof"`    // serve /debug/pprof/*
+	Metrics  bool   `yaml:"metrics"`  // serve /metrics (Prometheus)
+	Username string `yaml:"username"` // optional: HTTP Basic Auth for /metrics
+	Password string `yaml:"password"` // optional: HTTP Basic Auth for /metrics
 }
 
 type WireGuardConfig struct {

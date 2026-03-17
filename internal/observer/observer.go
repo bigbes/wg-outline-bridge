@@ -88,12 +88,21 @@ type UpstreamStatus struct {
 	LastError         string
 }
 
+// HealthStatus holds host health probe data.
+type HealthStatus struct {
+	SchedStalls  int64
+	ChannelLen   int
+	ChannelCap   int
+	ChannelDrops int64
+}
+
 // StatusProvider supplies bridge status data to the observer.
 type StatusProvider interface {
 	PeerStatuses() []PeerStatus
 	DaemonStatus() DaemonStatus
 	MTProxyStatus() MTProxyStatus
 	UpstreamStatuses() []UpstreamStatus
+	HealthStatus() *HealthStatus
 }
 
 // ConfigProvider supplies the current config to the observer.
@@ -319,7 +328,8 @@ func (o *Observer) sendStatus(ctx context.Context) {
 	daemon := o.provider.DaemonStatus()
 	mt := o.provider.MTProxyStatus()
 	upstreams := o.provider.UpstreamStatuses()
-	msg := formatStatus(peers, daemon, mt, upstreams)
+	health := o.provider.HealthStatus()
+	msg := formatStatus(peers, daemon, mt, upstreams, health)
 	o.send(ctx, msg)
 }
 
@@ -367,7 +377,7 @@ func miniAppURL(cfg *config.Config) string {
 	return fmt.Sprintf("https://%s:%s/", cfg.MiniApp.Domain, port)
 }
 
-func formatStatus(peers []PeerStatus, daemon DaemonStatus, mt MTProxyStatus, upstreams []UpstreamStatus) string {
+func formatStatus(peers []PeerStatus, daemon DaemonStatus, mt MTProxyStatus, upstreams []UpstreamStatus, health *HealthStatus) string {
 	var b strings.Builder
 	b.WriteString("📊 Bridge Status\n")
 
@@ -495,6 +505,17 @@ func formatStatus(peers []PeerStatus, daemon DaemonStatus, mt MTProxyStatus, ups
 				fmt.Fprintf(&b, "  Last error: %s\n", u.LastError)
 			}
 		}
+		b.WriteString("\n")
+	}
+
+	if health != nil {
+		b.WriteString("🖥 Host Health\n")
+		if health.ChannelCap > 0 {
+			util := float64(health.ChannelLen) / float64(health.ChannelCap) * 100
+			fmt.Fprintf(&b, "  WG Channel: %d/%d (%.1f%%) | Drops: %d\n",
+				health.ChannelLen, health.ChannelCap, util, health.ChannelDrops)
+		}
+		fmt.Fprintf(&b, "  Sched Stalls: %d\n", health.SchedStalls)
 		b.WriteString("\n")
 	}
 

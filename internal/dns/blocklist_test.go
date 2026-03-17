@@ -1,6 +1,9 @@
 package dns
 
-import "testing"
+import (
+	"log/slog"
+	"testing"
+)
 
 func TestDetectBlocklistFormat(t *testing.T) {
 	tests := []struct {
@@ -62,6 +65,7 @@ func TestIsBlockedWithSuffixes(t *testing.T) {
 		suffixes: []string{
 			".wildcard.com.",
 		},
+		logger: slog.Default(),
 	}
 
 	tests := []struct {

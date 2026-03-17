@@ -137,7 +137,11 @@ func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest str
 	}
 	p.logger.Debug("udp: new session", "src", srcAddr, "dest", dest, "route", routeDesc)
 
-	outConn, err := dialer.DialPacket(context.Background(), dest)
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer dialCancel()
+	dialStart := time.Now()
+	outConn, err := dialer.DialPacket(dialCtx, dest)
+	metrics.UDPDialLatency.Observe(time.Since(dialStart).Seconds())
 	if err != nil {
 		metrics.UDPDialErrors.Inc()
 		p.logger.Error("udp: failed to dial outline", "dest", dest, "err", err)

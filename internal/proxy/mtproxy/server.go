@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bigbes/wireguard-outline-bridge/internal/metrics"
 	mpcrypto "github.com/bigbes/wireguard-outline-bridge/internal/proxy/mtproxy/crypto"
 	"github.com/bigbes/wireguard-outline-bridge/internal/proxy/mtproxy/telegram"
 )
@@ -295,7 +296,12 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	s.stats.Connections.Add(1)
 	s.stats.ActiveConnections.Add(1)
-	defer s.stats.ActiveConnections.Add(-1)
+	metrics.MTProxyConnectionsTotal.Inc()
+	metrics.MTProxyConnectionsActive.Inc()
+	defer func() {
+		s.stats.ActiveConnections.Add(-1)
+		metrics.MTProxyConnectionsActive.Dec()
+	}()
 
 	remoteAddr := conn.RemoteAddr().String()
 	conn.SetDeadline(time.Now().Add(handshakeTimeout))
@@ -304,6 +310,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	var peekBuf [3]byte
 	if _, err := io.ReadFull(conn, peekBuf[:]); err != nil {
 		s.stats.HandshakeErrors.Add(1)
+		metrics.MTProxyHandshakeErrors.Inc()
 		s.logger.Debug("handshake: failed to read initial bytes", "remote", remoteAddr, "err", err)
 		return
 	}
@@ -315,6 +322,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	if peekBuf[0] == 0x16 && peekBuf[1] == 0x03 && peekBuf[2] == 0x01 {
 		if s.config.FakeTLS == nil {
 			s.stats.HandshakeErrors.Add(1)
+			metrics.MTProxyHandshakeErrors.Inc()
 			s.logger.Debug("handshake: TLS not configured, dropping", "remote", remoteAddr)
 			return
 		}
@@ -323,12 +331,14 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 		tlsConn, err := s.handleFakeTLSHandshake(conn, peekBuf[:])
 		if err != nil {
 			s.stats.HandshakeErrors.Add(1)
+			metrics.MTProxyHandshakeErrors.Inc()
 			s.logger.Debug("handshake: fake TLS failed", "remote", remoteAddr, "err", err)
 			return
 		}
 		innerConn = tlsConn
 		isTLS = true
 		s.stats.TLSConnections.Add(1)
+		metrics.MTProxyTLSConnectionsTotal.Inc()
 	}
 
 	// Read the 64-byte obfuscated header
@@ -341,6 +351,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 		copy(fullHeader[:3], peekBuf[:])
 		if _, err := io.ReadFull(conn, fullHeader[3:]); err != nil {
 			s.stats.HandshakeErrors.Add(1)
+			metrics.MTProxyHandshakeErrors.Inc()
 			s.logger.Debug("handshake: failed to read obfuscated header", "remote", remoteAddr, "err", err)
 			return
 		}
@@ -350,24 +361,39 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	if headerReader != nil {
 		if _, err := io.ReadFull(headerReader, fullHeader[:]); err != nil {
 			s.stats.HandshakeErrors.Add(1)
+			metrics.MTProxyHandshakeErrors.Inc()
 			s.logger.Debug("handshake: failed to read obfuscated header from TLS", "remote", remoteAddr, "err", err)
 			return
 		}
 	}
 
 	// Decrypt header with configured secrets
-	secrets, _ := s.getSecrets()
+	secrets, hexes := s.getSecrets()
 	parsed, secretIdx, err := mpcrypto.DecryptHeader(fullHeader, secrets)
 	if err != nil {
 		s.stats.HandshakeErrors.Add(1)
+		metrics.MTProxyHandshakeErrors.Inc()
 		s.logger.Debug("handshake: header decryption failed", "remote", remoteAddr, "err", err)
 		return
+	}
+
+	secretLabel := "unknown"
+	if secretIdx >= 0 && secretIdx < len(hexes) {
+		h := hexes[secretIdx]
+		if len(h) > 8 {
+			h = h[:8]
+		}
+		secretLabel = h
 	}
 
 	sc := s.getSecretCounters(secretIdx)
 	sc.connections.Add(1)
 	sc.activeConnections.Add(1)
-	defer sc.activeConnections.Add(-1)
+	metrics.MTProxySecretConnectionsActive.WithLabelValues(secretLabel).Inc()
+	defer func() {
+		sc.activeConnections.Add(-1)
+		metrics.MTProxySecretConnectionsActive.WithLabelValues(secretLabel).Dec()
+	}()
 	sc.lastConnUnix.Store(time.Now().Unix())
 
 	// Track unique IPs (per-secret and global).
@@ -381,6 +407,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 		if _, exists := s.uniqueIPs[remoteIP]; !exists {
 			s.uniqueIPs[remoteIP] = struct{}{}
 			s.stats.UniqueUsers.Add(1)
+			metrics.MTProxyUniqueUsers.Inc()
 		}
 		s.uniqueIPsMu.Unlock()
 	}
@@ -391,6 +418,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	backendAddr, err := s.endpoints.Resolve(dcID)
 	if err != nil {
 		s.stats.HandshakeErrors.Add(1)
+		metrics.MTProxyHandshakeErrors.Inc()
 		s.logger.Warn("no backend for DC", "dc_id", dcID, "remote", remoteAddr)
 		return
 	}
@@ -408,6 +436,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	backendConn, err := dialer.DialStream(ctx, backendAddr)
 	if err != nil {
 		s.stats.BackendDialErrors.Add(1)
+		metrics.MTProxyDialErrors.Inc()
 		sc.backendDialErrors.Add(1)
 		s.logger.Error("failed to dial backend", "backend", backendAddr, "dc_id", dcID, "err", err)
 		return
@@ -480,6 +509,10 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	relayWg.Wait()
 	s.stats.BytesClientToBackend.Add(bytesUp)
 	s.stats.BytesBackendToClient.Add(bytesDown)
+	metrics.MTProxyBytesTotal.WithLabelValues("c2b").Add(float64(bytesUp))
+	metrics.MTProxyBytesTotal.WithLabelValues("b2c").Add(float64(bytesDown))
+	metrics.MTProxySecretBytesTotal.WithLabelValues(secretLabel, "c2b").Add(float64(bytesUp))
+	metrics.MTProxySecretBytesTotal.WithLabelValues(secretLabel, "b2c").Add(float64(bytesDown))
 	sc.bytesC2B.Add(bytesUp)
 	sc.bytesB2C.Add(bytesDown)
 	s.logger.Debug("connection closed",

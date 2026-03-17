@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"os"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"gvisor.dev/gvisor/pkg/buffer"
@@ -33,6 +34,7 @@ type netTUNCore struct {
 	hasV4, hasV6   bool
 	logger         *slog.Logger
 	closeOnce      sync.Once
+	dropCount      atomic.Int64
 }
 
 // createNetTUN creates a netTUNCore with a gVisor network stack.
@@ -159,8 +161,14 @@ func (t *netTUNCore) WriteNotify() {
 	case t.incomingPacket <- view:
 		t.logger.Debug("tun: queued outgoing packet for WireGuard", "size", view.Size(), "queue_len", len(t.incomingPacket))
 	default:
+		t.dropCount.Add(1)
 		t.logger.Warn("tun: dropping outgoing packet, channel full", "size", view.Size())
 	}
+}
+
+// ChannelStats returns the current incomingPacket channel length and total drop count.
+func (t *netTUNCore) ChannelStats() (queueLen int, drops int64) {
+	return len(t.incomingPacket), t.dropCount.Load()
 }
 
 func (t *netTUNCore) Close() error {

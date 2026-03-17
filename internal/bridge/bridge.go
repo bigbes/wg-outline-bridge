@@ -19,6 +19,7 @@ import (
 	"github.com/bigbes/wireguard-outline-bridge/internal/config"
 	"github.com/bigbes/wireguard-outline-bridge/internal/dns"
 	"github.com/bigbes/wireguard-outline-bridge/internal/geoip"
+	"github.com/bigbes/wireguard-outline-bridge/internal/healthmon"
 	"github.com/bigbes/wireguard-outline-bridge/internal/metrics"
 	"github.com/bigbes/wireguard-outline-bridge/internal/miniapp"
 	"github.com/bigbes/wireguard-outline-bridge/internal/observer"
@@ -56,6 +57,7 @@ type Bridge struct {
 	statsStore      *statsdb.Store
 	router          *routing.Router
 	proxySrvs       map[string]*proxyserver.Server
+	healthMon       *healthmon.Monitor
 }
 
 func New(configPath string, cfg *config.Config, logger *slog.Logger, version string, dirty bool) *Bridge {
@@ -103,6 +105,16 @@ func (b *Bridge) Run(ctx context.Context) error {
 	b.tracker = proxy.NewConnTracker()
 	b.peerResolver = proxy.NewPeerUpstreamResolver()
 	b.peerDNSResolver = proxy.NewPeerDNSNameResolver()
+
+	// Start health monitor.
+	hmon := healthmon.New(b.logger, nil)
+	var cs healthmon.ChannelStatter
+	if statter, ok := tunDevice.(healthmon.ChannelStatter); ok {
+		cs = statter
+	}
+	hmon.Start(ctx, cs)
+	b.healthMon = hmon
+	defer hmon.Stop()
 
 	if b.cfg.Database.Path != "" {
 		// Note: peerResolver will be populated after peers are loaded from DB below.
@@ -804,6 +816,20 @@ func (b *Bridge) DaemonStatus() observer.DaemonStatus {
 		return observer.DaemonStatus{StartTime: b.startTime, Version: b.version, Dirty: b.dirty}
 	}
 	return observer.DaemonStatus{StartTime: t, Version: b.version, Dirty: b.dirty}
+}
+
+// HealthStatus implements observer.StatusProvider.
+func (b *Bridge) HealthStatus() *observer.HealthStatus {
+	if b.healthMon == nil {
+		return nil
+	}
+	snap := b.healthMon.Snapshot()
+	return &observer.HealthStatus{
+		SchedStalls:  snap.SchedStalls,
+		ChannelLen:   snap.ChannelLen,
+		ChannelCap:   snap.ChannelCap,
+		ChannelDrops: snap.ChannelDrops,
+	}
 }
 
 // CurrentConfig returns the current config (thread-safe).
@@ -1998,13 +2024,33 @@ func (b *Bridge) statsFlush() {
 	snapshots := make([]statsdb.WGPeerSnapshot, 0, len(statuses))
 	for _, st := range statuses {
 		pubB64 := hexToBase64(st.publicKeyHex)
+		name := nameByPub[pubB64]
 		snapshots = append(snapshots, statsdb.WGPeerSnapshot{
 			PublicKey:        pubB64,
-			Name:             nameByPub[pubB64],
+			Name:             name,
 			LastHandshakeSec: st.lastHandshakeSec,
 			RxBytes:          st.rxBytes,
 			TxBytes:          st.txBytes,
 		})
+		if name != "" {
+			metrics.WGPeerRxBytes.WithLabelValues(name).Set(float64(st.rxBytes))
+			metrics.WGPeerTxBytes.WithLabelValues(name).Set(float64(st.txBytes))
+			if st.lastHandshakeSec > 0 {
+				metrics.WGPeerLastHandshake.WithLabelValues(name).Set(float64(st.lastHandshakeSec))
+			}
+		}
+	}
+
+	// Update per-peer active connection gauges.
+	for _, peer := range peers {
+		if peer.Name == "" || peer.Disabled {
+			continue
+		}
+		var count int
+		for _, ip := range peerAllowedIPs(peer) {
+			count += b.tracker.CountBySource(ip)
+		}
+		metrics.WGPeerActiveConnections.WithLabelValues(peer.Name).Set(float64(count))
 	}
 
 	if len(snapshots) > 0 {

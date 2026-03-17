@@ -184,7 +184,11 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 
 	p.logger.Debug("tcp: new connection", "src", srcAddr, "dest", dest, "route", routeDesc, "sni", req.SNI)
 
-	outConn, err := dialer.DialStream(context.Background(), dest)
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer dialCancel()
+	dialStart := time.Now()
+	outConn, err := dialer.DialStream(dialCtx, dest)
+	metrics.TCPDialLatency.Observe(time.Since(dialStart).Seconds())
 	if err != nil {
 		metrics.TCPDialErrors.Inc()
 		p.logger.Error("tcp: failed to dial", "dest", dest, "route", routeDesc, "err", err)
