@@ -369,6 +369,9 @@ func parsePortRange(s string) (portRange, error) {
 		if err != nil {
 			return portRange{}, fmt.Errorf("invalid port: %s", to)
 		}
+		if fromPort > toPort {
+			return portRange{}, fmt.Errorf("invalid port range: %s > %s", from, to)
+		}
 		return portRange{from: uint16(fromPort), to: uint16(toPort)}, nil
 	}
 	port, err := strconv.ParseUint(s, 10, 16)

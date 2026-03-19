@@ -472,55 +472,53 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	idle := &idleTimer{timeout: relayIdleTimeout, a: conn, b: backendConn}
 	idle.touch()
 
-	var relayWg sync.WaitGroup
-	relayWg.Add(2)
-
-	var bytesUp, bytesDown int64
-	var upReason, downReason string
+	type relayResult struct {
+		bytes  int64
+		reason string
+	}
+	upCh := make(chan relayResult, 1)
+	downCh := make(chan relayResult, 1)
 
 	// Client -> Backend (decrypt from client, forward to backend)
 	go func() {
-		defer relayWg.Done()
 		sr := &cipher.StreamReader{S: parsed.Decrypt, R: &activityReader{r: clientReader, idle: idle}}
 		n, err := io.Copy(backendWriter, sr)
-		bytesUp = n
+		reason := "client EOF"
 		if err != nil {
-			upReason = fmt.Sprintf("client->backend: %v", err)
-		} else {
-			upReason = "client EOF"
+			reason = fmt.Sprintf("client->backend: %v", err)
 		}
+		upCh <- relayResult{bytes: n, reason: reason}
 		backendConn.Close() // unblock backend->client reader
 	}()
 
 	// Backend -> Client (read from backend, encrypt for client)
 	go func() {
-		defer relayWg.Done()
 		sw := &cipher.StreamWriter{S: parsed.Encrypt, W: clientWriter}
 		n, err := io.Copy(sw, &activityReader{r: backendReader, idle: idle})
-		bytesDown = n
+		reason := "backend EOF"
 		if err != nil {
-			downReason = fmt.Sprintf("backend->client: %v", err)
-		} else {
-			downReason = "backend EOF"
+			reason = fmt.Sprintf("backend->client: %v", err)
 		}
+		downCh <- relayResult{bytes: n, reason: reason}
 		conn.Close() // unblock client->backend reader
 	}()
 
-	relayWg.Wait()
-	s.stats.BytesClientToBackend.Add(bytesUp)
-	s.stats.BytesBackendToClient.Add(bytesDown)
-	metrics.MTProxyBytesTotal.WithLabelValues("c2b").Add(float64(bytesUp))
-	metrics.MTProxyBytesTotal.WithLabelValues("b2c").Add(float64(bytesDown))
-	metrics.MTProxySecretBytesTotal.WithLabelValues(secretLabel, "c2b").Add(float64(bytesUp))
-	metrics.MTProxySecretBytesTotal.WithLabelValues(secretLabel, "b2c").Add(float64(bytesDown))
-	sc.bytesC2B.Add(bytesUp)
-	sc.bytesB2C.Add(bytesDown)
+	up := <-upCh
+	down := <-downCh
+	s.stats.BytesClientToBackend.Add(up.bytes)
+	s.stats.BytesBackendToClient.Add(down.bytes)
+	metrics.MTProxyBytesTotal.WithLabelValues("c2b").Add(float64(up.bytes))
+	metrics.MTProxyBytesTotal.WithLabelValues("b2c").Add(float64(down.bytes))
+	metrics.MTProxySecretBytesTotal.WithLabelValues(secretLabel, "c2b").Add(float64(up.bytes))
+	metrics.MTProxySecretBytesTotal.WithLabelValues(secretLabel, "b2c").Add(float64(down.bytes))
+	sc.bytesC2B.Add(up.bytes)
+	sc.bytesB2C.Add(down.bytes)
 	s.logger.Debug("connection closed",
 		"remote", remoteAddr,
 		"dc_id", dcID,
-		"up", bytesUp,
-		"down", bytesDown,
-		"close", upReason+"; "+downReason,
+		"up", up.bytes,
+		"down", down.bytes,
+		"close", up.reason+"; "+down.reason,
 	)
 }
 
@@ -586,10 +584,9 @@ func (s *Server) handleFakeTLSHandshake(conn net.Conn, peeked []byte) (*tlsFrame
 	}
 
 	// Check replay
-	if s.hasClientRandom(clientRandom) {
+	if s.checkAndAddClientRandom(clientRandom) {
 		return nil, fmt.Errorf("replayed client_random")
 	}
-	s.addClientRandom(clientRandom)
 
 	// Validate timestamp: XOR of expected_random[28:32] with client_random[28:32]
 	timestampBytes := binary.LittleEndian.Uint32(expectedRandom[28:32]) ^ binary.LittleEndian.Uint32(clientRandom[28:32])
@@ -777,18 +774,16 @@ func (t *tlsFramedConn) Write(p []byte) (int, error) {
 	return total, nil
 }
 
-// Replay cache methods
-func (s *Server) hasClientRandom(random [32]byte) bool {
+// checkAndAddClientRandom atomically checks for replay and inserts the random.
+// Returns true if the random was already present (replay detected).
+func (s *Server) checkAndAddClientRandom(random [32]byte) bool {
 	s.replayMu.Lock()
 	defer s.replayMu.Unlock()
-	_, exists := s.replayCache[random]
-	return exists
-}
-
-func (s *Server) addClientRandom(random [32]byte) {
-	s.replayMu.Lock()
-	defer s.replayMu.Unlock()
+	if _, exists := s.replayCache[random]; exists {
+		return true
+	}
 	s.replayCache[random] = time.Now()
+	return false
 }
 
 // idleTimer tracks bidirectional activity and sets read deadlines on both
@@ -830,8 +825,8 @@ func (s *Server) cleanupReplayCache(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.replayMu.Lock()
 			cutoff := time.Now().Add(-ttl)
+			s.replayMu.Lock()
 			for k, t := range s.replayCache {
 				if t.Before(cutoff) {
 					delete(s.replayCache, k)
