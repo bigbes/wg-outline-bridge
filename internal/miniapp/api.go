@@ -2162,7 +2162,7 @@ func (s *Server) handleUpdateDNS(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDNSRecordsRoute(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/api/dns/records/")
-	if name == "" {
+	if name == "" || name == r.URL.Path {
 		// /api/dns/records — POST only
 		if r.Method == http.MethodPost {
 			s.handleAddDNSRecord(w, r)
