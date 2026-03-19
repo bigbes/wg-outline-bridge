@@ -3,7 +3,6 @@ package wireguard
 import (
 	"fmt"
 	"log/slog"
-	"net"
 	"net/netip"
 	"os"
 	"sync"
@@ -22,6 +21,21 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 )
 
+const (
+	// incomingPacketCapacity is the buffer between gVisor's outbound path and
+	// the WireGuard device Read loop. 16384 prevents silent packet drops under
+	// burst traffic (the previous value of 256 caused TCP ACK loss and freezes).
+	// At ~128 KB of pointer storage this is cheap insurance against stalls.
+	incomingPacketCapacity = 16384
+
+	// tunBatchSize is the number of packets the WireGuard device may read or
+	// write in a single call. Matches wireguard-go's conn.IdealBatchSize (128),
+	// which is already pre-allocated on the bind side. Our Read() blocks on the
+	// first packet then drains non-blocking, so a large value adds no latency —
+	// it just raises the ceiling for burst absorption.
+	tunBatchSize = 128
+)
+
 // netTUNCore contains the shared gVisor netstack TUN logic.
 // It implements most of tun.Device methods but not Events(),
 // which is provided by the backend-specific wrappers (wgTUN, awgTUN).
@@ -37,6 +51,15 @@ type netTUNCore struct {
 	dropCount      atomic.Int64
 }
 
+// pktBufPool reuses byte slices for packet injection into gVisor,
+// reducing GC pressure on the hot path.
+var pktBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, 1500)
+		return &b
+	},
+}
+
 // createNetTUN creates a netTUNCore with a gVisor network stack.
 func createNetTUN(localAddresses []netip.Addr, mtu int, logger *slog.Logger) (*netTUNCore, error) {
 	opts := stack.Options{
@@ -48,7 +71,7 @@ func createNetTUN(localAddresses []netip.Addr, mtu int, logger *slog.Logger) (*n
 	dev := &netTUNCore{
 		ep:             channel.New(1024, uint32(mtu), ""),
 		Stack:          stack.New(opts),
-		incomingPacket: make(chan *buffer.View, 256),
+		incomingPacket: make(chan *buffer.View, incomingPacketCapacity),
 		mtu:            mtu,
 		logger:         logger,
 	}
@@ -108,9 +131,10 @@ func createNetTUN(localAddresses []netip.Addr, mtu int, logger *slog.Logger) (*n
 func (t *netTUNCore) File() *os.File        { return nil }
 func (t *netTUNCore) MTU() (int, error)     { return t.mtu, nil }
 func (t *netTUNCore) Name() (string, error) { return "wgbridge0", nil }
-func (t *netTUNCore) BatchSize() int        { return 1 }
+func (t *netTUNCore) BatchSize() int { return tunBatchSize }
 
 func (t *netTUNCore) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
+	// Block on the first packet.
 	view, ok := <-t.incomingPacket
 	if !ok {
 		return 0, os.ErrClosed
@@ -120,8 +144,26 @@ func (t *netTUNCore) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 		return 0, err
 	}
 	sizes[0] = n
-	t.logger.Debug("tun: WireGuard read outgoing packet", "size", n)
-	return 1, nil
+	count := 1
+
+	// Drain up to BatchSize-1 more packets without blocking.
+	for count < len(bufs) {
+		select {
+		case view, ok = <-t.incomingPacket:
+			if !ok {
+				return count, os.ErrClosed
+			}
+			n, err = view.Read(bufs[count][offset:])
+			if err != nil {
+				return count, err
+			}
+			sizes[count] = n
+			count++
+		default:
+			return count, nil
+		}
+	}
+	return count, nil
 }
 
 func (t *netTUNCore) Write(bufs [][]byte, offset int) (int, error) {
@@ -131,18 +173,25 @@ func (t *netTUNCore) Write(bufs [][]byte, offset int) (int, error) {
 			continue
 		}
 
-		pkb := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(packet)})
+		// Copy packet into a pooled buffer so the caller can reuse its
+		// slice immediately while gVisor processes the packet.
+		bp := pktBufPool.Get().(*[]byte)
+		pkt := append((*bp)[:0], packet...)
+
+		pkb := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(pkt)})
+
+		// Return the buffer to the pool after gVisor has consumed the data.
+		// MakeWithData copies the bytes, so the pooled slice is safe to reuse.
+		*bp = pkt[:0]
+		pktBufPool.Put(bp)
+
 		switch packet[0] >> 4 {
 		case 4:
 			t.ep.InjectInbound(header.IPv4ProtocolNumber, pkb)
-			srcIP := net.IP(packet[12:16])
-			dstIP := net.IP(packet[16:20])
-			t.logger.Debug("tun: injected IPv4 packet into gVisor", "size", len(packet), "src", srcIP, "dst", dstIP)
+			t.logger.Debug("tun: injected IPv4 packet into gVisor", "size", len(packet))
 		case 6:
 			t.ep.InjectInbound(header.IPv6ProtocolNumber, pkb)
-			srcIP := net.IP(packet[8:24])
-			dstIP := net.IP(packet[24:40])
-			t.logger.Debug("tun: injected IPv6 packet into gVisor", "size", len(packet), "src", srcIP, "dst", dstIP)
+			t.logger.Debug("tun: injected IPv6 packet into gVisor", "size", len(packet))
 		default:
 			return 0, syscall.EAFNOSUPPORT
 		}
