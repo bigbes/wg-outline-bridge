@@ -1555,6 +1555,7 @@ if (!tg || !tg.initData) {
     window.openGroupEditModal = function (name) {
         editingGroupName = name;
         document.getElementById("group-edit-modal-title").textContent = "Edit Group: " + name;
+        document.getElementById("inp-group-edit-name").value = name;
 
         // Build member checkboxes from all upstreams
         var ups = (statusData && statusData.upstreams) || [];
@@ -1606,47 +1607,78 @@ if (!tg || !tg.initData) {
     };
     window.saveGroupEdit = function () {
         if (!editingGroupName) return;
-        var ups = (statusData && statusData.upstreams) || [];
-        var promises = [];
+        var newName = document.getElementById("inp-group-edit-name").value.trim();
+        var oldName = editingGroupName;
 
-        ups.forEach(function (u) {
-            var elId = "group-member-" + u.name.replace(/[^a-zA-Z0-9]/g, '_');
-            var el = document.getElementById(elId);
-            var nowMember = el && el.classList.contains("active");
-            var wasMember = groupEditOriginalMembers[u.name] || false;
-
-            if (nowMember !== wasMember) {
-                // Get current explicit groups
-                var currentGroups = (u.groups || []).filter(function(g) { return g !== "all" && g !== "default"; });
-                var newGroups;
-                if (nowMember) {
-                    newGroups = currentGroups.concat([editingGroupName]);
-                } else {
-                    newGroups = currentGroups.filter(function(g) { return g !== editingGroupName; });
-                }
-                promises.push(
-                    api("PUT", "/api/upstreams/" + encodeURIComponent(u.name), { groups: newGroups })
-                );
-            }
-        });
-
-        if (promises.length === 0) {
-            closeGroupEditModal();
-            return;
+        // Rename first if name changed, then update members.
+        var renamePromise;
+        if (newName && newName !== oldName) {
+            renamePromise = api("PUT", "/api/groups/" + encodeURIComponent(oldName), { name: newName });
+        } else {
+            renamePromise = Promise.resolve(null);
         }
 
-        Promise.all(promises).then(function (results) {
-            var errors = results.filter(function(d) { return d.error; });
-            if (errors.length > 0) {
+        renamePromise.then(function (renameResult) {
+            if (renameResult && renameResult.error) {
                 haptic("notification", "error");
-                showToast(errors[0].error, true);
+                showToast(renameResult.error, true);
                 return;
             }
-            haptic("notification", "success");
-            showToast("Group updated");
-            closeGroupEditModal();
-            refresh();
-            if (groupsLoaded) refreshGroups();
+
+            // Use the effective group name (may have been renamed).
+            var effectiveName = (newName && newName !== oldName) ? newName : oldName;
+            var ups = (statusData && statusData.upstreams) || [];
+            var promises = [];
+
+            ups.forEach(function (u) {
+                var elId = "group-member-" + u.name.replace(/[^a-zA-Z0-9]/g, '_');
+                var el = document.getElementById(elId);
+                var nowMember = el && el.classList.contains("active");
+                var wasMember = groupEditOriginalMembers[u.name] || false;
+
+                if (nowMember !== wasMember) {
+                    // Get current explicit groups
+                    var currentGroups = (u.groups || []).filter(function(g) { return g !== "all" && g !== "default"; });
+                    // Replace old name with new name in existing groups
+                    currentGroups = currentGroups.map(function(g) { return g === oldName ? effectiveName : g; });
+                    var newGroups;
+                    if (nowMember) {
+                        newGroups = currentGroups.concat([effectiveName]);
+                    } else {
+                        newGroups = currentGroups.filter(function(g) { return g !== effectiveName; });
+                    }
+                    promises.push(
+                        api("PUT", "/api/upstreams/" + encodeURIComponent(u.name), { groups: newGroups })
+                    );
+                }
+            });
+
+            if (promises.length === 0) {
+                if (newName && newName !== oldName) {
+                    haptic("notification", "success");
+                    showToast("Group renamed");
+                    closeGroupEditModal();
+                    refresh();
+                    if (groupsLoaded) refreshGroups();
+                } else {
+                    closeGroupEditModal();
+                }
+                return;
+            }
+
+            Promise.all(promises).then(function (results) {
+                var errors = results.filter(function(d) { return d.error; });
+                if (errors.length > 0) {
+                    haptic("notification", "error");
+                    showToast(errors[0].error, true);
+                    return;
+                }
+                haptic("notification", "success");
+                showToast("Group updated");
+                closeGroupEditModal();
+                refresh();
+                if (groupsLoaded) refreshGroups();
+            });
         });
     };
 

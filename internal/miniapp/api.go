@@ -1469,11 +1469,17 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGroupsItemRoute(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
+	switch r.Method {
+	case http.MethodDelete:
+		s.handleDeleteGroup(w, r)
+	case http.MethodPut:
+		s.handleRenameGroup(w, r)
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
 	}
+}
 
+func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/api/groups/")
 	if name == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "group name is required"})
@@ -1482,6 +1488,33 @@ func (s *Server) handleGroupsItemRoute(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.manager.DeleteGroup(name); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleRenameGroup(w http.ResponseWriter, r *http.Request) {
+	oldName := strings.TrimPrefix(r.URL.Path, "/api/groups/")
+	if oldName == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "group name is required"})
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
+
+	if err := s.manager.RenameGroup(oldName, req.Name); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
 

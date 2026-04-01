@@ -168,6 +168,7 @@ type Manager interface {
 	SetRoutingEnabled(enabled bool) error
 	CreateGroup(name string) error
 	DeleteGroup(name string) error
+	RenameGroup(oldName, newName string) error
 	ResetConfig() error
 }
 

@@ -1654,6 +1654,53 @@ func (s *Store) DeleteGroup(name string) (bool, error) {
 	return n > 0, nil
 }
 
+// RenameGroup renames a group in the upstream_groups table and updates all
+// upstreams that reference the old name in their comma-separated groups column.
+func (s *Store) RenameGroup(oldName, newName string) error {
+	// Rename the explicit group entry.
+	_, err := s.db.Exec(
+		`UPDATE upstream_groups SET name = ? WHERE name = ?`, newName, oldName)
+	if err != nil {
+		return fmt.Errorf("statsdb: rename group %q→%q: %w", oldName, newName, err)
+	}
+
+	// Update all upstreams referencing the old group name.
+	rows, err := s.db.Query(`SELECT name, groups FROM upstreams WHERE groups LIKE '%' || ? || '%'`, oldName)
+	if err != nil {
+		return fmt.Errorf("statsdb: query upstreams for group %q: %w", oldName, err)
+	}
+	defer rows.Close()
+
+	type upd struct {
+		name   string
+		groups string
+	}
+	var updates []upd
+	for rows.Next() {
+		var name, groups string
+		if err := rows.Scan(&name, &groups); err != nil {
+			return fmt.Errorf("statsdb: scan upstream: %w", err)
+		}
+		parts := strings.Split(groups, ",")
+		for i, p := range parts {
+			if p == oldName {
+				parts[i] = newName
+			}
+		}
+		updates = append(updates, upd{name: name, groups: strings.Join(parts, ",")})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, u := range updates {
+		if _, err := s.db.Exec(`UPDATE upstreams SET groups = ?, updated_unix = unixepoch() WHERE name = ?`, u.groups, u.name); err != nil {
+			return fmt.Errorf("statsdb: update upstream %q groups: %w", u.name, err)
+		}
+	}
+	return nil
+}
+
 // RemoveGroupFromUpstreams removes the given group name from the groups column
 // of all upstreams that reference it.
 func (s *Store) RemoveGroupFromUpstreams(group string) (int, error) {

@@ -1939,6 +1939,53 @@ func (b *Bridge) DeleteGroup(name string) error {
 	return nil
 }
 
+// RenameGroup renames a named upstream group and updates all references.
+func (b *Bridge) RenameGroup(oldName, newName string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.statsStore == nil {
+		return fmt.Errorf("database not configured")
+	}
+	if newName == "" {
+		return fmt.Errorf("new group name cannot be empty")
+	}
+	if oldName == newName {
+		return nil
+	}
+
+	// Check if new name already exists (in-memory or DB).
+	for _, u := range b.cfg.Upstreams {
+		if slices.Contains(u.Groups, newName) {
+			return fmt.Errorf("group %q already exists", newName)
+		}
+	}
+
+	if err := b.statsStore.RenameGroup(oldName, newName); err != nil {
+		return fmt.Errorf("renaming group: %w", err)
+	}
+
+	// Update in-memory config.
+	var changed bool
+	for i := range b.cfg.Upstreams {
+		for j, g := range b.cfg.Upstreams[i].Groups {
+			if g == oldName {
+				b.cfg.Upstreams[i].Groups[j] = newName
+				changed = true
+			}
+		}
+	}
+
+	if changed {
+		if err := b.upstreams.Apply(b.cfg.ToUpstreamSpecs()); err != nil {
+			b.logger.Error("failed to apply upstream specs", "err", err)
+		}
+	}
+
+	b.logger.Info("group renamed", "old", oldName, "new", newName)
+	return nil
+}
+
 // getPeerStatuses reads peer status from the WireGuard device via IPC.
 func (b *Bridge) getPeerStatuses() []peerStatus {
 	if b.wgDev == nil {
