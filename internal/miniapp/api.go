@@ -74,12 +74,13 @@ func sortByCreationOrderInt[T any](items []T, idFunc func(T) int, order []int) {
 }
 
 type statusResponse struct {
-	Daemon    daemonInfo             `json:"daemon"`
-	Peers     []peerInfo             `json:"peers"`
-	Upstreams []upstreamInfo         `json:"upstreams"`
-	MTProxy   mtproxyInfo            `json:"mtproxy"`
-	Proxies   []proxyInfo            `json:"proxies"`
-	UsedPorts []porttracker.PortInfo `json:"used_ports"`
+	Daemon      daemonInfo             `json:"daemon"`
+	BotUsername string                 `json:"bot_username,omitempty"`
+	Peers       []peerInfo             `json:"peers"`
+	Upstreams   []upstreamInfo         `json:"upstreams"`
+	MTProxy     mtproxyInfo            `json:"mtproxy"`
+	Proxies     []proxyInfo            `json:"proxies"`
+	UsedPorts   []porttracker.PortInfo `json:"used_ports"`
 }
 
 type daemonInfo struct {
@@ -203,6 +204,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			Version:       daemon.Version,
 			Dirty:         daemon.Dirty,
 		},
+		BotUsername: s.getBotUsername(),
 	}
 
 	// Peers.

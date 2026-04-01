@@ -2282,7 +2282,7 @@ if (!tg || !tg.initData) {
             const roleBadge = inv.role === 'admin'
                 ? '<span class="status-badge admin">Admin</span>'
                 : '<span class="status-badge guest">Guest</span>';
-            const inviteUrl = inv.link || (location.origin + '/?invite=' + inv.token);
+            const inviteUrl = inv.link || (statusData.bot_username ? 'https://t.me/' + statusData.bot_username + '?start=inv_' + inv.token : '');
             const escapedToken = inv.token.replace(/'/g, "\\'");
             const escapedUrl = inviteUrl.replace(/'/g, "\\'");
             return '<div class="list-item">' +
@@ -2314,7 +2314,7 @@ if (!tg || !tg.initData) {
                 return;
             }
             haptic("notification", "success");
-            const inviteUrl = d.link || (location.origin + '/?invite=' + d.token);
+            const inviteUrl = d.link || (statusData.bot_username ? 'https://t.me/' + statusData.bot_username + '?start=inv_' + d.token : '');
             navigator.clipboard.writeText(inviteUrl).then(() => {
                 showToast("Invite created & copied!");
             }).catch(() => {

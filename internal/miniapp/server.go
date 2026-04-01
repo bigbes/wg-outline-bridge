@@ -42,8 +42,8 @@ type Server struct {
 	acmeEmail       string
 	acmeDir         string
 	logger          *slog.Logger
-	botUsername     string
-	botUsernameOnce sync.Once
+	botUsername string
+	botMu      sync.Mutex
 }
 
 // New creates a new Mini App server.
@@ -89,17 +89,23 @@ func (s *Server) URL() string {
 }
 
 // getBotUsername returns the cached bot username, fetching it lazily on first call.
+// Retries on failure so a transient error doesn't permanently break invite links.
 func (s *Server) getBotUsername() string {
-	s.botUsernameOnce.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		info, err := s.bot.GetMe(ctx)
-		if err != nil {
-			s.logger.Error("miniapp: failed to get bot username", "err", err)
-			return
-		}
-		s.botUsername = info.Username
-	})
+	s.botMu.Lock()
+	defer s.botMu.Unlock()
+
+	if s.botUsername != "" {
+		return s.botUsername
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	info, err := s.bot.GetMe(ctx)
+	if err != nil {
+		s.logger.Error("miniapp: failed to get bot username", "err", err)
+		return ""
+	}
+	s.botUsername = info.Username
 	return s.botUsername
 }
 
