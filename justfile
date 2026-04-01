@@ -62,9 +62,9 @@ upload-bin: build
 upload-config:
     scp {{ local_config }} {{ remote_host }}:{{ remote_config_example }}
 
-# Fetch logs from remote host
-logs:
-    scp {{ remote_host }}:{{ remote_log }} ./output.log
+# Fetch logs from remote host via journalctl
+logs lines='100':
+    ssh {{ remote_host }} sudo journalctl -u bridge -n {{ lines }} --no-pager
 
 # Restart the remote service
 restart:
