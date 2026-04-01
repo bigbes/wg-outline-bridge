@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"sync"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
@@ -17,7 +18,18 @@ import (
 	"github.com/bigbes/wireguard-outline-bridge/internal/routing"
 )
 
-const udpSessionTimeout = 60 * time.Second
+const (
+	udpSessionTimeout = 60 * time.Second
+	udpBufSize        = 4096
+)
+
+// udpBufPool reuses UDP relay buffers to reduce GC pressure.
+var udpBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, udpBufSize)
+		return &b
+	},
+}
 
 type PacketDialer interface {
 	DialPacket(ctx context.Context, addr string) (net.Conn, error)
@@ -153,7 +165,8 @@ func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest str
 	done := make(chan struct{}, 2)
 
 	go func() {
-		buf := make([]byte, 4096)
+		bp := udpBufPool.Get().(*[]byte)
+		buf := *bp
 		firstPacket := true
 		for {
 			clientConn.SetReadDeadline(time.Now().Add(udpSessionTimeout))
@@ -177,11 +190,13 @@ func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest str
 			}
 			p.logger.Debug("udp: client -> outline", "src", srcAddr, "dest", dest, "bytes", n)
 		}
+		udpBufPool.Put(bp)
 		done <- struct{}{}
 	}()
 
 	go func() {
-		buf := make([]byte, 4096)
+		bp := udpBufPool.Get().(*[]byte)
+		buf := *bp
 		for {
 			outConn.SetReadDeadline(time.Now().Add(udpSessionTimeout))
 			n, err := outConn.Read(buf)
@@ -195,6 +210,7 @@ func (p *UDPProxy) relay(clientConn *gonet.UDPConn, srcAddr netip.Addr, dest str
 			}
 			p.logger.Debug("udp: outline -> client", "src", srcAddr, "dest", dest, "bytes", n)
 		}
+		udpBufPool.Put(bp)
 		done <- struct{}{}
 	}()
 
@@ -212,7 +228,10 @@ func (p *UDPProxy) relayDNS(clientConn *gonet.UDPConn, srcAddr netip.Addr, origD
 
 	p.logger.Debug("udp: dns intercept", "src", srcAddr, "orig_dest", origDest, "dns_target", p.dnsTarget)
 
-	buf := make([]byte, 4096)
+	bp := udpBufPool.Get().(*[]byte)
+	buf := *bp
+	defer udpBufPool.Put(bp)
+
 	for {
 		clientConn.SetReadDeadline(time.Now().Add(udpSessionTimeout))
 		n, err := clientConn.Read(buf)

@@ -131,7 +131,7 @@ func createNetTUN(localAddresses []netip.Addr, mtu int, logger *slog.Logger) (*n
 func (t *netTUNCore) File() *os.File        { return nil }
 func (t *netTUNCore) MTU() (int, error)     { return t.mtu, nil }
 func (t *netTUNCore) Name() (string, error) { return "wgbridge0", nil }
-func (t *netTUNCore) BatchSize() int { return tunBatchSize }
+func (t *netTUNCore) BatchSize() int        { return tunBatchSize }
 
 func (t *netTUNCore) Read(bufs [][]byte, sizes []int, offset int) (int, error) {
 	// Block on the first packet.
@@ -176,13 +176,13 @@ func (t *netTUNCore) Write(bufs [][]byte, offset int) (int, error) {
 		// Copy packet into a pooled buffer so the caller can reuse its
 		// slice immediately while gVisor processes the packet.
 		bp := pktBufPool.Get().(*[]byte)
-		pkt := append((*bp)[:0], packet...)
+		*bp = append((*bp)[:0], packet...)
 
-		pkb := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(pkt)})
+		pkb := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(*bp)})
 
 		// Return the buffer to the pool after gVisor has consumed the data.
 		// MakeWithData copies the bytes, so the pooled slice is safe to reuse.
-		*bp = pkt[:0]
+		*bp = (*bp)[:0]
 		pktBufPool.Put(bp)
 
 		switch packet[0] >> 4 {

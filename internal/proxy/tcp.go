@@ -20,7 +20,18 @@ import (
 	"github.com/bigbes/wireguard-outline-bridge/internal/routing"
 )
 
-const tcpIdleTimeout = 5 * time.Minute
+const (
+	tcpIdleTimeout  = 5 * time.Minute
+	tcpRelayBufSize = 64 * 1024
+)
+
+// tcpBufPool reuses relay buffers to reduce GC pressure under load.
+var tcpBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, tcpRelayBufSize)
+		return &b
+	},
+}
 
 type StreamDialer interface {
 	DialStream(ctx context.Context, addr string) (net.Conn, error)
@@ -184,7 +195,7 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 
 	p.logger.Debug("tcp: new connection", "src", srcAddr, "dest", dest, "route", routeDesc, "sni", req.SNI)
 
-	dialCtx, dialCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer dialCancel()
 	dialStart := time.Now()
 	outConn, err := dialer.DialStream(dialCtx, dest)
@@ -204,7 +215,9 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 
 	go func() {
 		defer wg.Done()
-		n, err := io.Copy(outConn, &activityReader{r: clientReader, idle: idle})
+		bp := tcpBufPool.Get().(*[]byte)
+		n, err := io.CopyBuffer(outConn, &activityReader{r: clientReader, idle: idle}, *bp)
+		tcpBufPool.Put(bp)
 		metrics.TCPBytesTotal.WithLabelValues("tx").Add(float64(n))
 		p.logger.Debug("tcp: client -> upstream done", "src", srcAddr, "dest", dest, "bytes", n, "err", err)
 		outConn.Close() // unblock upstream -> client read
@@ -212,7 +225,9 @@ func (p *TCPProxy) proxy(clientConn *gonet.TCPConn, srcAddr netip.Addr, dest str
 
 	go func() {
 		defer wg.Done()
-		n, err := io.Copy(clientConn, &activityReader{r: outConn, idle: idle})
+		bp := tcpBufPool.Get().(*[]byte)
+		n, err := io.CopyBuffer(clientConn, &activityReader{r: outConn, idle: idle}, *bp)
+		tcpBufPool.Put(bp)
 		metrics.TCPBytesTotal.WithLabelValues("rx").Add(float64(n))
 		p.logger.Debug("tcp: upstream -> client done", "src", srcAddr, "dest", dest, "bytes", n, "err", err)
 		clientConn.Close() // unblock client -> upstream read
