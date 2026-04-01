@@ -82,7 +82,7 @@ func (h *Handler) checkAuth(r *http.Request) bool {
 func (h *Handler) handleConnect(w http.ResponseWriter, r *http.Request) {
 	h.logger.Debug("http: CONNECT", "dest", r.Host)
 
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
 	upstream, err := h.dialer.DialStream(ctx, r.Host)
@@ -140,7 +140,7 @@ func (h *Handler) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.Debug("http: forward", "method", r.Method, "dest", host)
 
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
 	upstream, err := h.dialer.DialStream(ctx, host)
