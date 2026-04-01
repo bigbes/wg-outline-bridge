@@ -80,7 +80,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 
 	// Initialize upstream manager.
 	b.upstreams = upstream.NewManager(ctx, b.logger)
-	b.upstreams.RegisterFactory(outlineprovider.Factory{})
+	b.upstreams.RegisterFactory(&outlineprovider.Factory{})
 
 	specs := b.cfg.ToUpstreamSpecs()
 	if err := b.upstreams.Apply(specs); err != nil {

@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"net"
 	"sync/atomic"
+	"time"
 
 	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/x/configurl"
 )
+
+const tcpKeepAlive = 30 * time.Second
 
 // Client wraps Outline SDK stream and packet dialers.
 type Client struct {
@@ -16,9 +19,21 @@ type Client struct {
 	PacketDialer transport.PacketDialer
 }
 
+// newProviders creates a ProviderContainer with TCP keepalive enabled on the base dialer.
+func newProviders() *configurl.ProviderContainer {
+	c := &configurl.ProviderContainer{
+		StreamDialers: configurl.NewExtensibleProvider[transport.StreamDialer](
+			&transport.TCPDialer{Dialer: net.Dialer{KeepAlive: tcpKeepAlive}},
+		),
+		PacketDialers:   configurl.NewExtensibleProvider[transport.PacketDialer](&transport.UDPDialer{}),
+		PacketListeners: configurl.NewExtensibleProvider[transport.PacketListener](&transport.UDPListener{}),
+	}
+	return configurl.RegisterDefaultProviders(c)
+}
+
 // NewClient creates a new Outline client from a transport config URI.
 func NewClient(transportConfig string) (*Client, error) {
-	providers := configurl.NewDefaultProviders()
+	providers := newProviders()
 	ctx := context.Background()
 
 	streamDialer, err := providers.NewStreamDialer(ctx, transportConfig)

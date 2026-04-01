@@ -3,6 +3,7 @@ package outline
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/bigbes/wireguard-outline-bridge/internal/upstream"
 )
@@ -13,15 +14,41 @@ type OutlineConfig struct {
 }
 
 // Factory builds outline upstream dialers.
-type Factory struct{}
+// It deduplicates health-check dialers so upstreams sharing the same transport
+// config reuse a single health-check client.
+type Factory struct {
+	mu            sync.Mutex
+	healthDialers map[string]*Client
+}
 
 // Type returns the upstream type this factory handles.
-func (Factory) Type() upstream.Type {
+func (f *Factory) Type() upstream.Type {
 	return upstream.TypeOutline
 }
 
+// getHealthDialer returns a shared health dialer for the given transport config.
+func (f *Factory) getHealthDialer(transport string) (*Client, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.healthDialers == nil {
+		f.healthDialers = make(map[string]*Client)
+	}
+
+	if c, ok := f.healthDialers[transport]; ok {
+		return c, nil
+	}
+
+	c, err := NewClient(transport)
+	if err != nil {
+		return nil, err
+	}
+	f.healthDialers[transport] = c
+	return c, nil
+}
+
 // Build creates an outline upstream from the given spec.
-func (Factory) Build(spec upstream.Spec) (upstream.Built, error) {
+func (f *Factory) Build(spec upstream.Spec) (upstream.Built, error) {
 	var cfg OutlineConfig
 	if err := json.Unmarshal(spec.Config, &cfg); err != nil {
 		return upstream.Built{}, fmt.Errorf("parsing outline config: %w", err)
@@ -37,7 +64,7 @@ func (Factory) Build(spec upstream.Spec) (upstream.Built, error) {
 	swappable := NewSwappableClient(trafficClient)
 	statsDialer := NewStatsDialer(spec.Name, swappable)
 
-	healthClient, err := NewClient(cfg.Transport)
+	healthClient, err := f.getHealthDialer(cfg.Transport)
 	if err != nil {
 		return upstream.Built{}, fmt.Errorf("creating outline health client: %w", err)
 	}
