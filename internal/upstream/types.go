@@ -34,9 +34,10 @@ type Spec struct {
 
 // HealthCheckConfig controls periodic upstream health verification.
 type HealthCheckConfig struct {
-	Enabled  bool          `json:"enabled"`
-	Interval time.Duration `json:"interval"`
-	Target   string        `json:"target"`
+	Enabled          bool          `json:"enabled"`
+	Interval         time.Duration `json:"interval"`
+	Target           string        `json:"target"`
+	LatencyThreshold time.Duration `json:"latency_threshold"`
 }
 
 // EffectiveGroups returns all groups an upstream belongs to,

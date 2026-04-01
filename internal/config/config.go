@@ -188,9 +188,10 @@ func (u *UpstreamConfig) IsEnabled() bool {
 }
 
 type HealthCheckConfig struct {
-	Enabled  bool   `yaml:"enabled"`
-	Interval int    `yaml:"interval"`
-	Target   string `yaml:"target"`
+	Enabled          bool   `yaml:"enabled"`
+	Interval         int    `yaml:"interval"`
+	Target           string `yaml:"target"`
+	LatencyThreshold int    `yaml:"latency_threshold"`
 }
 
 type GeoIPConfig struct {
@@ -436,9 +437,10 @@ func (c *Config) ToUpstreamSpecs() []upstream.Spec {
 			Default: u.Default,
 			Groups:  u.Groups,
 			HealthCheck: upstream.HealthCheckConfig{
-				Enabled:  u.HealthCheck.Enabled,
-				Interval: time.Duration(u.HealthCheck.Interval) * time.Second,
-				Target:   u.HealthCheck.Target,
+				Enabled:          u.HealthCheck.Enabled,
+				Interval:         time.Duration(u.HealthCheck.Interval) * time.Second,
+				Target:           u.HealthCheck.Target,
+				LatencyThreshold: time.Duration(u.HealthCheck.LatencyThreshold) * time.Second,
 			},
 		}
 		if u.Type == "outline" {

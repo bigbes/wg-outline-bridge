@@ -2,8 +2,13 @@ package upstream
 
 import (
 	"context"
+	"fmt"
 	"time"
+
+	"github.com/bigbes/wireguard-outline-bridge/internal/metrics"
 )
+
+const defaultLatencyThreshold = 3 * time.Second
 
 func (m *Manager) startHealthCheck(e *entry) {
 	if e.healthCancel != nil {
@@ -21,12 +26,16 @@ func (m *Manager) startHealthCheck(e *entry) {
 	if target == "" {
 		target = "1.1.1.1:80"
 	}
+	threshold := e.spec.HealthCheck.LatencyThreshold
+	if threshold == 0 {
+		threshold = defaultLatencyThreshold
+	}
 
-	go m.runHealthCheck(ctx, e, interval, target)
+	go m.runHealthCheck(ctx, e, interval, target, threshold)
 }
 
-func (m *Manager) runHealthCheck(ctx context.Context, e *entry, interval time.Duration, target string) {
-	m.doHealthCheck(ctx, e, target)
+func (m *Manager) runHealthCheck(ctx context.Context, e *entry, interval time.Duration, target string, threshold time.Duration) {
+	m.doHealthCheck(ctx, e, target, threshold)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -36,12 +45,12 @@ func (m *Manager) runHealthCheck(ctx context.Context, e *entry, interval time.Du
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			m.doHealthCheck(ctx, e, target)
+			m.doHealthCheck(ctx, e, target, threshold)
 		}
 	}
 }
 
-func (m *Manager) doHealthCheck(ctx context.Context, e *entry, target string) {
+func (m *Manager) doHealthCheck(ctx context.Context, e *entry, target string, threshold time.Duration) {
 	if e.built.HealthDialer == nil {
 		return
 	}
@@ -49,7 +58,11 @@ func (m *Manager) doHealthCheck(ctx context.Context, e *entry, target string) {
 	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	start := time.Now()
 	conn, err := e.built.HealthDialer.DialStream(checkCtx, target)
+	elapsed := time.Since(start)
+	metrics.UpstreamHealthCheckLatency.WithLabelValues(e.spec.Name).Observe(elapsed.Seconds())
+
 	if err != nil {
 		m.logger.Warn("upstream health check failed",
 			"name", e.spec.Name, "target", target, "err", err)
@@ -62,8 +75,19 @@ func (m *Manager) doHealthCheck(ctx context.Context, e *entry, target string) {
 	}
 	conn.Close()
 
+	if elapsed > threshold {
+		m.logger.Warn("upstream health check too slow",
+			"name", e.spec.Name, "target", target, "latency", elapsed, "threshold", threshold)
+		m.mu.Lock()
+		if e.state != StateDisabled {
+			m.setEntryState(e, StateDegraded, fmt.Sprintf("latency %s exceeds threshold %s", elapsed, threshold))
+		}
+		m.mu.Unlock()
+		return
+	}
+
 	m.logger.Debug("upstream health check passed",
-		"name", e.spec.Name, "target", target)
+		"name", e.spec.Name, "target", target, "latency", elapsed)
 	m.mu.Lock()
 	if e.state == StateDegraded {
 		m.setEntryState(e, StateHealthy, "")

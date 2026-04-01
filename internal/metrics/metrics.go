@@ -65,6 +65,13 @@ var (
 	})
 
 	// Upstream metrics.
+	UpstreamHealthCheckLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "bridge",
+		Subsystem: "upstream",
+		Name:      "health_check_latency_seconds",
+		Help:      "Dial latency of upstream health checks.",
+		Buckets:   []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+	}, []string{"name"})
 	UpstreamHealthy = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "bridge",
 		Subsystem: "upstream",
@@ -232,6 +239,7 @@ func init() {
 		UDPDialLatency,
 
 		// Upstream
+		UpstreamHealthCheckLatency,
 		UpstreamHealthy,
 		UpstreamConnectionsActive,
 		UpstreamBytesTotal,

@@ -1178,9 +1178,10 @@ func (s *Server) handleAddUpstream(w http.ResponseWriter, r *http.Request) {
 		Groups      []string `json:"groups,omitempty"`
 		Transport   string   `json:"transport"`
 		HealthCheck struct {
-			Enabled  bool   `json:"enabled"`
-			Interval int    `json:"interval"`
-			Target   string `json:"target"`
+			Enabled          bool   `json:"enabled"`
+			Interval         int    `json:"interval"`
+			Target           string `json:"target"`
+			LatencyThreshold int    `json:"latency_threshold"`
 		} `json:"health_check"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1207,9 +1208,10 @@ func (s *Server) handleAddUpstream(w http.ResponseWriter, r *http.Request) {
 		Groups:    req.Groups,
 		Transport: req.Transport,
 		HealthCheck: config.HealthCheckConfig{
-			Enabled:  req.HealthCheck.Enabled,
-			Interval: req.HealthCheck.Interval,
-			Target:   req.HealthCheck.Target,
+			Enabled:          req.HealthCheck.Enabled,
+			Interval:         req.HealthCheck.Interval,
+			Target:           req.HealthCheck.Target,
+			LatencyThreshold: req.HealthCheck.LatencyThreshold,
 		},
 	}
 
@@ -1255,9 +1257,10 @@ func (s *Server) handleUpdateUpstream(w http.ResponseWriter, r *http.Request) {
 		Groups      []string `json:"groups"`
 		Transport   *string  `json:"transport"`
 		HealthCheck *struct {
-			Enabled  bool   `json:"enabled"`
-			Interval int    `json:"interval"`
-			Target   string `json:"target"`
+			Enabled          bool   `json:"enabled"`
+			Interval         int    `json:"interval"`
+			Target           string `json:"target"`
+			LatencyThreshold int    `json:"latency_threshold"`
 		} `json:"health_check"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1283,9 +1286,10 @@ func (s *Server) handleUpdateUpstream(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.HealthCheck != nil {
 		existing.HealthCheck = config.HealthCheckConfig{
-			Enabled:  req.HealthCheck.Enabled,
-			Interval: req.HealthCheck.Interval,
-			Target:   req.HealthCheck.Target,
+			Enabled:          req.HealthCheck.Enabled,
+			Interval:         req.HealthCheck.Interval,
+			Target:           req.HealthCheck.Target,
+			LatencyThreshold: req.HealthCheck.LatencyThreshold,
 		}
 	}
 
