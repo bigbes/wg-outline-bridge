@@ -76,6 +76,7 @@ if (!tg || !tg.initData) {
     let peerEditExcludePrivate = true;
     let peerEditExcludeServer = false;
     let editingSecretHex = null;
+    let editingSecretId = null;
     let editingProxyName = null;
     let editingCIDR = null;
     let editingIPRuleName = null;
@@ -2358,6 +2359,7 @@ if (!tg || !tg.initData) {
         const s = (mt.secrets || []).find((x) => x.secret === secretHex);
         if (!s) return;
         editingSecretHex = secretHex;
+        editingSecretId = s.id;
 
         const links = mt.links || [];
         const link = links.find((l) => l.secret === secretHex);
@@ -2398,9 +2400,10 @@ if (!tg || !tg.initData) {
     window.closeSecretEditModal = function () {
         closeModal("secret-edit-modal");
         editingSecretHex = null;
+        editingSecretId = null;
     };
     window.saveSecretEdit = function () {
-        if (!editingSecretHex) return;
+        if (!editingSecretId) return;
         const name = document
             .getElementById("inp-secret-edit-name")
             .value.trim();
@@ -2408,12 +2411,12 @@ if (!tg || !tg.initData) {
 
         const namePromise = api(
             "PUT",
-            "/api/secrets/" + encodeURIComponent(editingSecretHex) + "/name",
+            "/api/secrets/" + editingSecretId + "/name",
             { name },
         );
         const groupPromise = api(
             "PUT",
-            "/api/secrets/" + encodeURIComponent(editingSecretHex),
+            "/api/secrets/" + editingSecretId,
             { upstream_group: upstreamGroup },
         );
 
