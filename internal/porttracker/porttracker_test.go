@@ -8,24 +8,16 @@ import (
 
 func TestUsedPorts(t *testing.T) {
 	cfg := &config.Config{
-		WireGuard: config.WireGuardConfig{
-			ListenPort: 51820,
+		Frontend: config.FrontendConfig{
+			Listen: ":443",
 		},
 		DNS: config.DNSConfig{
 			Enabled: true,
 			Listen:  "10.100.0.1:53",
 		},
-		MTProxy: config.MTProxyConfig{
-			Enabled: true,
-			Listen:  []string{":443", ":8443"},
-		},
 		Proxies: []config.ProxyServerConfig{
 			{Name: "socks", Listen: "0.0.0.0:1080"},
 			{Name: "http", Listen: ":8080"},
-		},
-		MiniApp: config.MiniAppConfig{
-			Enabled: true,
-			Listen:  ":9443",
 		},
 		ObservabilityHTTP: config.ObservabilityHTTPConfig{
 			Addr: ":6060",
@@ -35,14 +27,11 @@ func TestUsedPorts(t *testing.T) {
 	ports := UsedPorts(cfg)
 
 	expected := map[int]string{
-		51820: "wireguard",
-		53:    "dns",
-		443:   "mtproxy",
-		8443:  "mtproxy",
-		1080:  "proxy:socks",
-		8080:  "proxy:http",
-		9443:  "miniapp",
-		6060:  "observability",
+		443:  "frontend",
+		53:   "dns",
+		1080: "proxy:socks",
+		8080: "proxy:http",
+		6060: "observability",
 	}
 
 	if len(ports) != len(expected) {
@@ -63,23 +52,19 @@ func TestUsedPorts(t *testing.T) {
 
 func TestUsedPorts_DisabledServices(t *testing.T) {
 	cfg := &config.Config{
+		Frontend: config.FrontendConfig{
+			Listen: ":443",
+		},
 		DNS: config.DNSConfig{
 			Enabled: false,
 			Listen:  "10.100.0.1:53",
 		},
-		MTProxy: config.MTProxyConfig{
-			Enabled: false,
-			Listen:  []string{":443"},
-		},
-		MiniApp: config.MiniAppConfig{
-			Enabled: false,
-			Listen:  ":9443",
-		},
 	}
 
 	ports := UsedPorts(cfg)
-	if len(ports) != 0 {
-		t.Errorf("expected 0 ports for disabled services, got %d: %+v", len(ports), ports)
+	// Frontend is always present.
+	if len(ports) != 1 {
+		t.Errorf("expected 1 port (frontend only), got %d: %+v", len(ports), ports)
 	}
 }
 

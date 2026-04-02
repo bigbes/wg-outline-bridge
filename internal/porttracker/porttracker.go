@@ -12,7 +12,7 @@ import (
 // PortInfo describes a single used port.
 type PortInfo struct {
 	Port  int    `json:"port"`
-	Owner string `json:"owner"` // e.g. "proxy:my-socks5", "wireguard", "dns"
+	Owner string `json:"owner"` // e.g. "proxy:my-socks5", "frontend", "dns"
 	Proto string `json:"proto"` // "tcp", "udp", or "tcp+udp"
 }
 
@@ -20,12 +20,12 @@ type PortInfo struct {
 func UsedPorts(cfg *config.Config) []PortInfo {
 	var ports []PortInfo
 
-	// WireGuard listen port (UDP).
-	if cfg.WireGuard.ListenPort > 0 {
+	// Frontend listen port (TCP+UDP).
+	if p := extractPort(cfg.Frontend.Listen); p > 0 {
 		ports = append(ports, PortInfo{
-			Port:  cfg.WireGuard.ListenPort,
-			Owner: "wireguard",
-			Proto: "udp",
+			Port:  p,
+			Owner: "frontend",
+			Proto: "tcp+udp",
 		})
 	}
 
@@ -40,19 +40,6 @@ func UsedPorts(cfg *config.Config) []PortInfo {
 		}
 	}
 
-	// MTProxy listeners.
-	if cfg.MTProxy.Enabled {
-		for _, addr := range cfg.MTProxy.Listen {
-			if p := extractPort(addr); p > 0 {
-				ports = append(ports, PortInfo{
-					Port:  p,
-					Owner: "mtproxy",
-					Proto: "tcp",
-				})
-			}
-		}
-	}
-
 	// Proxy servers.
 	for _, ps := range cfg.Proxies {
 		if p := extractPort(ps.Listen); p > 0 {
@@ -63,17 +50,6 @@ func UsedPorts(cfg *config.Config) []PortInfo {
 			ports = append(ports, PortInfo{
 				Port:  p,
 				Owner: owner,
-				Proto: "tcp",
-			})
-		}
-	}
-
-	// MiniApp HTTPS server.
-	if cfg.MiniApp.Enabled {
-		if p := extractPort(cfg.MiniApp.Listen); p > 0 {
-			ports = append(ports, PortInfo{
-				Port:  p,
-				Owner: "miniapp",
 				Proto: "tcp",
 			})
 		}
