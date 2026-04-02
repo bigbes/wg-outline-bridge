@@ -90,9 +90,10 @@ func GenConf(args []string, logger *slog.Logger) {
 	fmt.Printf("Public Key:  %s\n", publicKey)
 	fmt.Println()
 	serverIP := cfg.ServerPublicIP()
-	endpoint := fmt.Sprintf("<SERVER_IP>:%d", cfg.WireGuard.ListenPort)
+	listenPort := cfg.ListenPort()
+	endpoint := fmt.Sprintf("<SERVER_IP>:%d", listenPort)
 	if serverIP != "" {
-		endpoint = fmt.Sprintf("%s:%d", serverIP, cfg.WireGuard.ListenPort)
+		endpoint = fmt.Sprintf("%s:%d", serverIP, listenPort)
 	}
 
 	allowedIPs := "0.0.0.0/0"
@@ -111,19 +112,13 @@ func GenConf(args []string, logger *slog.Logger) {
 		allowedIPs = computed
 	}
 
-	if cfg.WireGuard.IsAmneziaWG() {
-		fmt.Println("=== Client AmneziaWG config ===")
-	} else {
-		fmt.Println("=== Client WireGuard config ===")
-	}
+	fmt.Println("=== Client AmneziaWG config ===")
 	fmt.Println()
 	fmt.Println("[Interface]")
 	fmt.Printf("PrivateKey = %s\n", privateKey)
 	fmt.Printf("Address = %s/24\n", clientIP)
 	fmt.Printf("DNS = %s\n", cfg.WireGuard.DNS)
-	if cfg.WireGuard.IsAmneziaWG() {
-		printAWGInterfaceParams(cfg.WireGuard.AmneziaWG)
-	}
+	printAWGInterfaceParams(cfg.WireGuard.AmneziaWG)
 	fmt.Println()
 	fmt.Println("[Peer]")
 	if serverPublicKey, err := config.DerivePublicKey(cfg.WireGuard.PrivateKey); err == nil {
