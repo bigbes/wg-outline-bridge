@@ -278,6 +278,18 @@ func (s *Server) SecretStatsSnapshot() []SecretSnapshot {
 	return result
 }
 
+// HandleConn handles a connection that was already accepted by an external
+// listener (e.g. the frontend TCP mux). The peeked bytes are prepended to the
+// connection so the handler sees the same byte stream as a direct connection.
+func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
+	s.handleConnection(ctx, conn)
+}
+
+// GetSecrets returns the current secrets and their hex representations.
+func (s *Server) GetSecrets() ([]mpcrypto.Secret, []string) {
+	return s.getSecrets()
+}
+
 func (s *Server) acceptLoop(ctx context.Context, ln net.Listener) {
 	for {
 		conn, err := ln.Accept()
