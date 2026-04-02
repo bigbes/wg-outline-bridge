@@ -30,13 +30,23 @@ func (AWGBackend) CreateTUN(localAddresses []netip.Addr, mtu int, logger *slog.L
 	return wrapper, tun.Stack, wrapper.Close, nil
 }
 
-func (AWGBackend) CreateDevice(tunDevice any, logger *slog.Logger, logLevel slog.Level) (Device, error) {
+func (AWGBackend) CreateDevice(tunDevice any, bind any, logger *slog.Logger, logLevel slog.Level) (Device, error) {
 	td, ok := tunDevice.(awgtun.Device)
 	if !ok {
 		return nil, fmt.Errorf("expected amneziawg tun.Device, got %T", tunDevice)
 	}
 	awgLog := newAWGLogger(logger, logLevel)
-	dev := awgdevice.NewDevice(td, awgconn.NewDefaultBind(), awgLog)
+	var b awgconn.Bind
+	if bind != nil {
+		var ok bool
+		b, ok = bind.(awgconn.Bind)
+		if !ok {
+			return nil, fmt.Errorf("expected awgconn.Bind, got %T", bind)
+		}
+	} else {
+		b = awgconn.NewDefaultBind()
+	}
+	dev := awgdevice.NewDevice(td, b, awgLog)
 	return &awgDev{dev: dev}, nil
 }
 

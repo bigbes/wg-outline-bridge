@@ -15,26 +15,22 @@ type Device interface {
 	Close()
 }
 
-// Backend creates WireGuard or AmneziaWG devices and TUN adapters.
+// Backend creates AmneziaWG devices and TUN adapters.
 type Backend interface {
 	// CreateTUN creates a netstack TUN device and returns it along with
 	// the gVisor stack. The returned tunDevice must be passed to CreateDevice.
 	CreateTUN(localAddresses []netip.Addr, mtu int, logger *slog.Logger) (tunDevice any, netStack *stack.Stack, closer func() error, err error)
 
-	// CreateDevice creates a WireGuard/AmneziaWG device from the TUN device
-	// returned by CreateTUN.
-	CreateDevice(tunDevice any, logger *slog.Logger, logLevel slog.Level) (Device, error)
+	// CreateDevice creates an AmneziaWG device from the TUN device
+	// returned by CreateTUN. If bind is non-nil it is used instead of the
+	// default UDP bind (must be awgconn.Bind).
+	CreateDevice(tunDevice any, bind any, logger *slog.Logger, logLevel slog.Level) (Device, error)
 
-	// Name returns "wireguard" or "amneziawg".
+	// Name returns "amneziawg".
 	Name() string
 }
 
-// NewBackend returns the appropriate Backend for the given mode.
-func NewBackend(mode string) Backend {
-	switch mode {
-	case "amneziawg":
-		return AWGBackend{}
-	default:
-		return WGBackend{}
-	}
+// NewBackend returns the AmneziaWG backend.
+func NewBackend() Backend {
+	return AWGBackend{}
 }
