@@ -360,7 +360,7 @@ func (o *Observer) handleInviteRedemption(ctx context.Context, msg *telegram.Mes
 
 	text := fmt.Sprintf("✅ Welcome! You've been granted <b>%s</b> access.", role)
 	cfg := o.cfgProv.CurrentConfig()
-	if cfg.MiniApp.Enabled && cfg.MiniApp.Domain != "" {
+	if cfg.Telegram.MiniApp {
 		miniAppURL := miniAppURL(cfg)
 		if err := o.bot.SendMessageWithWebApp(ctx, msg.Chat.ID, text, "HTML", "Open Panel", miniAppURL); err != nil {
 			o.logger.Error("observer: failed to send welcome message", "err", err)
@@ -371,11 +371,11 @@ func (o *Observer) handleInviteRedemption(ctx context.Context, msg *telegram.Mes
 }
 
 func miniAppURL(cfg *config.Config) string {
-	_, port, _ := strings.Cut(cfg.MiniApp.Listen, ":")
+	_, port, _ := strings.Cut(cfg.Frontend.Listen, ":")
 	if port == "" || port == "443" {
-		return fmt.Sprintf("https://%s/", cfg.MiniApp.Domain)
+		return fmt.Sprintf("https://%s/app/", cfg.Frontend.Domain)
 	}
-	return fmt.Sprintf("https://%s:%s/", cfg.MiniApp.Domain, port)
+	return fmt.Sprintf("https://%s:%s/app/", cfg.Frontend.Domain, port)
 }
 
 func formatStatus(peers []PeerStatus, daemon DaemonStatus, mt MTProxyStatus, upstreams []UpstreamStatus, health *HealthStatus) string {

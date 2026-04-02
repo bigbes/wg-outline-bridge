@@ -7,15 +7,31 @@ log_level: "info"
 #   pprof: true                    # serve /debug/pprof/* (Go profiling)
 #   metrics: true                  # serve /metrics (Prometheus)
 
+frontend:                            # All-in-one port-443 multiplexer (required)
+  listen: ":443"                     # TCP + UDP bind address (default: ":443")
+  domain: "myserver.example.com"     # TLS cert domain (ACME via Let's Encrypt)
+  acme_email: "admin@example.com"    # optional ACME email
+  # Or use static cert/key instead of ACME:
+  # cert_file: "/path/to/cert.pem"
+  # key_file: "/path/to/key.pem"
+  # static_dir: "/var/www/html"      # directory to serve as a normal website (optional; embedded default if omitted)
+  # Frontend consolidates all services on one port:
+  #   - TCP 443: peeks ClientHello, routes MTProxy (HMAC match) vs real TLS → HTTP/2
+  #   - UDP 443: classifies QUIC vs AWG packets, serves HTTP/3 + AWG on same port
+  #   - MiniApp is served at /app/ when enabled
+  #   - wireguard.mtu should be ≤ 1280 for QUIC compatibility
+
 wireguard:
   private_key: "CHANGE_ME_BASE64_PRIVATE_KEY"
-  listen_port: 51820
   address: "10.100.0.1/24"
   public_address: ""  # server's public IP, used for client config generation
   mtu: 1420
   dns: "1.1.1.1"
-  # mode: "amneziawg"          # "wireguard" (default) or "amneziawg" (DPI-resistant)
-  # amneziawg:                 # AmneziaWG obfuscation params (only when mode: amneziawg)
+  # amneziawg:                 # AmneziaWG obfuscation params
+  #   # All params below are auto-generated on first start and persisted to the
+  #   # database when database.path is configured. DB values take precedence on
+  #   # subsequent starts. Explicit YAML values override generated defaults on
+  #   # first run only.
   #   jc: 4                    # junk packet count (sent before each handshake)
   #   jmin: 50                 # minimum junk packet size
   #   jmax: 1000               # maximum junk packet size
@@ -27,7 +43,7 @@ wireguard:
   #   h2: "100-200"            # handshake response header
   #   h3: "100-200"            # cookie message header
   #   h4: "100-200"            # transport message header
-  #   i1: "<b 0xHEX>"          # special junk packet 1 (AWG 1.5+; hex-encoded protocol signature)
+  #   i1: "<b 0xHEX>"          # special junk packet 1 (AWG 1.5+; auto-generated CPS template)
   #   i2: ""                   # special junk packet 2
   #   i3: ""                   # special junk packet 3
   #   i4: ""                   # special junk packet 4
@@ -64,11 +80,8 @@ wireguard:
 
 # mtproxy:                    # MTProxy server (Telegram proxy protocol)
 #   enabled: true
-#   listen:
-#     - "0.0.0.0:443"
 #   upstream_group: "default"  # upstream group name for backend connections
 #   # secrets are managed via database (use 'bridge gensecret' to add)
-#   stats_addr: "127.0.0.1:8080"  # HTTP stats endpoint (localhost-only, GET /stats)
 #   fake_tls:                  # fake TLS handshake for censorship resistance
 #     enabled: false
 #     sni:                     # allowed SNI hostnames (first is used in client proxy links)
@@ -118,12 +131,7 @@ wireguard:
 #   interval: 300                # Status push interval in seconds (default: 300)
 #   allowed_users:               # (optional) Only these user IDs can use the bot in private chats
 #     - 123456789
-
-# miniapp:                       # Telegram Mini App (web admin panel)
-#   enabled: true
-#   listen: ":443"               # HTTPS listen address (default: ":443")
-#   domain: "admin.example.com"  # public domain (required; Telegram requires HTTPS)
-#   acme_email: "admin@example.com"  # optional email for Let's Encrypt notifications
+#   miniapp: true                # Telegram Mini App web admin panel (served at /app/); requires allowed_users
 
 upstreams:
   - name: "default"

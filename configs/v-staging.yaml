@@ -1,0 +1,30 @@
+---
+# Minimal staging configuration.
+# Uses embedded default static site (no static_dir needed).
+log_level: "debug"
+
+frontend:
+  listen: ":443"
+  domain: "v-staging.bigb.es"
+  acme_email: "bigbes@bigb.es"
+
+wireguard:
+  private_key: "0D40lmnZuDs41+LjEm3wZnkIqhqf8axLAOOsqxHlyks="
+  address: "10.100.0.1/24"
+  mtu: 1280
+
+database:
+  path: "/var/lib/wg-outline-bridge/bridge.sqlite"
+
+telegram:
+  enabled: true
+  token: "CHANGE_ME"
+  allowed_users:
+    - 32727730
+  miniapp: true
+
+upstreams:
+  - name: "default"
+    type: outline
+    transport: "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpRaGI3SlZJcHdQWXdpV0tYMWxhbTRX@37.1.208.236:39092/?outline=1"
+    default: true

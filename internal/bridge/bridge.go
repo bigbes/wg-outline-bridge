@@ -18,6 +18,7 @@ import (
 
 	"github.com/bigbes/wireguard-outline-bridge/internal/config"
 	"github.com/bigbes/wireguard-outline-bridge/internal/dns"
+	"github.com/bigbes/wireguard-outline-bridge/internal/frontend"
 	"github.com/bigbes/wireguard-outline-bridge/internal/geoip"
 	"github.com/bigbes/wireguard-outline-bridge/internal/healthmon"
 	"github.com/bigbes/wireguard-outline-bridge/internal/metrics"
@@ -58,6 +59,7 @@ type Bridge struct {
 	router          *routing.Router
 	proxySrvs       map[string]*proxyserver.Server
 	healthMon       *healthmon.Monitor
+	fe              *frontend.Frontend
 }
 
 func New(configPath string, cfg *config.Config, logger *slog.Logger, version string, dirty bool) *Bridge {
@@ -93,7 +95,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 
 	dialers := proxy.NewDialerSet(&upstreamAdapter{b.upstreams})
 
-	backend := wg.NewBackend(b.cfg.WireGuard.Mode)
+	backend := wg.NewBackend()
 	b.logger.Info("using wireguard backend", "backend", backend.Name())
 
 	tunDevice, netStack, tunCloser, err := backend.CreateTUN([]netip.Addr{addr}, b.cfg.WireGuard.MTU, b.logger)
@@ -325,6 +327,23 @@ func (b *Bridge) Run(ctx context.Context) error {
 		if routingEnabled, ok := store.GetRoutingEnabled(); ok {
 			b.cfg.Routing.Enabled = routingEnabled
 		}
+
+		// Auto-generate and persist AWG config on first run.
+		if dbAWG, ok := store.GetAWGConfig(); ok {
+			b.cfg.WireGuard.AmneziaWG = dbAWG
+			b.logger.Info("loaded AWG config from database")
+		} else {
+			generated := config.GenerateAWGDefaults()
+			if b.cfg.WireGuard.AmneziaWG != nil {
+				config.MergeAWGConfig(generated, b.cfg.WireGuard.AmneziaWG)
+			}
+			b.cfg.WireGuard.AmneziaWG = generated
+			if err := store.SetAWGConfig(generated); err != nil {
+				b.logger.Error("failed to persist AWG config", "err", err)
+			} else {
+				b.logger.Info("generated and persisted AWG config")
+			}
+		}
 	}
 
 	b.peerResolver.PopulateFromPeers(b.cfg.Peers)
@@ -366,11 +385,30 @@ func (b *Bridge) Run(ctx context.Context) error {
 
 	b.logger.Info("proxies configured on gVisor stack")
 
-	if b.cfg.MTProxy.Enabled {
-		if err := b.startMTProxy(ctx, dialers); err != nil {
-			return fmt.Errorf("starting mtproxy: %w", err)
-		}
+	// Frontend is always used — it handles AWG (UDP mux) + MTProxy (TCP mux) + TLS/HTTP.
+	acmeDir := ""
+	if b.cfg.CacheDir != "" {
+		acmeDir = filepath.Join(b.cfg.CacheDir, "acme", "frontend")
 	}
+	b.fe = frontend.New(b.cfg.Frontend, acmeDir, b.logger)
+
+	// Create MTProxy server (but don't call Listen/Serve — frontend handles TCP).
+	if b.cfg.MTProxy.Enabled {
+		if err := b.startMTProxyHandler(ctx, dialers); err != nil {
+			return fmt.Errorf("starting mtproxy handler: %w", err)
+		}
+		b.fe.SetMTProxy(b.mtSrv, func() ([]mpcrypto.Secret, []string) {
+			return b.mtSrv.GetSecrets()
+		})
+	}
+
+	// Init the frontend (binds TCP+UDP sockets, creates muxes).
+	if err := b.fe.Init(); err != nil {
+		return fmt.Errorf("frontend init: %w", err)
+	}
+
+	// Get the bind from the frontend (available after Init).
+	wgBind := b.fe.Bind()
 
 	if len(b.cfg.Proxies) > 0 {
 		if err := b.startProxyServers(ctx, dialers); err != nil {
@@ -378,7 +416,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 		}
 	}
 
-	wgDev, err := backend.CreateDevice(tunDevice, b.logger, b.cfg.ParseLogLevel())
+	wgDev, err := backend.CreateDevice(tunDevice, wgBind, b.logger, b.cfg.ParseLogLevel())
 	if err != nil {
 		return fmt.Errorf("creating wireguard device: %w", err)
 	}
@@ -433,17 +471,9 @@ func (b *Bridge) Run(ctx context.Context) error {
 		go obs.Run(ctx)
 		b.logger.Info("telegram observer started", "interval", b.cfg.Telegram.Interval)
 
-		if b.cfg.MiniApp.Enabled {
-			acmeDir := ""
-			if b.cfg.CacheDir != "" {
-				acmeDir = filepath.Join(b.cfg.CacheDir, "acme", "miniapp")
-			}
-			maSrv := miniapp.New(b, b, b, geoMgr, bot, b.statsStore, b.cfg.Telegram.Token, b.cfg.Telegram.AllowedUsers, b.cfg.MiniApp.Listen, b.cfg.MiniApp.Domain, b.cfg.MiniApp.ACMEEmail, acmeDir, b.logger)
-			go func() {
-				if err := maSrv.Run(ctx); err != nil {
-					b.logger.Error("miniapp server error", "err", err)
-				}
-			}()
+		if b.cfg.Telegram.MiniApp {
+			maSrv := miniapp.New(b, b, b, geoMgr, bot, b.statsStore, b.cfg.Telegram.Token, b.cfg.Telegram.AllowedUsers, b.cfg.Frontend.Domain, b.logger)
+			b.fe.SetMiniApp(maSrv.Handler())
 			if err := bot.SetChatMenuButton(ctx, maSrv.URL(), "Admin"); err != nil {
 				b.logger.Error("failed to set chat menu button", "err", err)
 			} else {
@@ -452,9 +482,16 @@ func (b *Bridge) Run(ctx context.Context) error {
 		}
 	}
 
+	// Start frontend serving (muxes, QUIC, HTTP) in background.
+	go func() {
+		if err := b.fe.Serve(ctx); err != nil && ctx.Err() == nil {
+			b.logger.Error("frontend serve error", "err", err)
+		}
+	}()
+
 	b.logger.Info("bridge running",
 		"wg_address", addr.String(),
-		"wg_port", b.cfg.WireGuard.ListenPort,
+		"listen", b.cfg.Frontend.Listen,
 	)
 
 	<-ctx.Done()
@@ -565,7 +602,9 @@ func (b *Bridge) ResetConfig() error {
 	return nil
 }
 
-func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) error {
+// startMTProxyHandler creates the MTProxy server without calling Listen/Serve.
+// Used when the frontend TCP mux handles connection acceptance.
+func (b *Bridge) startMTProxyHandler(_ context.Context, _ *proxy.DialerSet) error {
 	secrets := make([]mpcrypto.Secret, 0, len(b.cfg.MTProxy.Secrets))
 	for _, s := range b.cfg.MTProxy.Secrets {
 		secret, err := mpcrypto.ParseSecret(s)
@@ -576,11 +615,9 @@ func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) err
 	}
 
 	resolver := b.buildMTProxyDialerResolver()
-
 	endpoints := telegram.NewEndpointManager(b.cfg.MTProxy.Endpoints)
 
 	serverCfg := mtproxy2.ServerConfig{
-		ListenAddrs: b.cfg.MTProxy.Listen,
 		Secrets:     secrets,
 		SecretHexes: b.cfg.MTProxy.Secrets,
 	}
@@ -594,22 +631,7 @@ func (b *Bridge) startMTProxy(ctx context.Context, dialers *proxy.DialerSet) err
 
 	srv := mtproxy2.NewServer(serverCfg, resolver, endpoints, b.logger)
 	b.mtSrv = srv
-
-	if err := srv.Listen(); err != nil {
-		return fmt.Errorf("mtproxy: %w", err)
-	}
-	go srv.Serve(ctx)
-
-	if b.cfg.MTProxy.StatsAddr != "" {
-		statsSrv := mtproxy2.NewStatsServer(b.cfg.MTProxy.StatsAddr, srv, b.logger)
-		go func() {
-			if err := statsSrv.Start(ctx); err != nil {
-				b.logger.Error("mtproxy stats server exited", "err", err)
-			}
-		}()
-	}
-
-	b.logger.Info("mtproxy server started", "listen", b.cfg.MTProxy.Listen, "secrets", len(secrets), "fake_tls", b.cfg.MTProxy.FakeTLS.Enabled)
+	b.logger.Info("mtproxy handler created (frontend mode)", "secrets", len(secrets))
 	return nil
 }
 

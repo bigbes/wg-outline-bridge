@@ -32,12 +32,21 @@ type Config struct {
 	MTProxy           MTProxyConfig           `yaml:"mtproxy"`
 	Proxies           []ProxyServerConfig     `yaml:"proxies"`
 	Telegram          TelegramConfig          `yaml:"telegram"`
-	MiniApp           MiniAppConfig           `yaml:"miniapp"`
 	Database          DatabaseConfig          `yaml:"database"`
 	Upstreams         []UpstreamConfig        `yaml:"upstreams"`
 	Routing           RoutingConfig           `yaml:"routing"`
 	GeoIP             []GeoIPConfig           `yaml:"geoip"`
+	Frontend          FrontendConfig          `yaml:"frontend"`
 	Peers             map[int]PeerConfig      `yaml:"-"`
+}
+
+type FrontendConfig struct {
+	Listen    string `yaml:"listen"`     // e.g. ":443"
+	Domain    string `yaml:"domain"`     // TLS cert domain
+	ACMEEmail string `yaml:"acme_email"` // ACME email for Let's Encrypt
+	CertFile  string `yaml:"cert_file"`  // static TLS cert
+	KeyFile   string `yaml:"key_file"`   // static TLS key
+	StaticDir string `yaml:"static_dir"` // fallback website root
 }
 
 type ObservabilityHTTPConfig struct {
@@ -50,12 +59,10 @@ type ObservabilityHTTPConfig struct {
 
 type WireGuardConfig struct {
 	PrivateKey    string           `yaml:"private_key"`
-	ListenPort    int              `yaml:"listen_port"`
 	Address       string           `yaml:"address"`
 	PublicAddress string           `yaml:"public_address"`
 	MTU           int              `yaml:"mtu"`
 	DNS           string           `yaml:"dns"`
-	Mode          string           `yaml:"mode"`
 	AmneziaWG     *AmneziaWGConfig `yaml:"amneziawg,omitempty"`
 }
 
@@ -202,10 +209,8 @@ type GeoIPConfig struct {
 
 type MTProxyConfig struct {
 	Enabled       bool             `yaml:"enabled"`
-	Listen        []string         `yaml:"listen"`
 	UpstreamGroup string           `yaml:"upstream_group"`
 	Secrets       []string         `yaml:"-"`
-	StatsAddr     string           `yaml:"stats_addr"`
 	FakeTLS       FakeTLSConfig    `yaml:"fake_tls"`
 	Endpoints     map[int][]string `yaml:"endpoints"`
 }
@@ -240,13 +245,7 @@ type TelegramConfig struct {
 	ChatID       int64   `yaml:"chat_id"`
 	Interval     int     `yaml:"interval"`      // status report interval in seconds
 	AllowedUsers []int64 `yaml:"allowed_users"` // user IDs allowed in private chats
-}
-
-type MiniAppConfig struct {
-	Enabled   bool   `yaml:"enabled"`
-	Listen    string `yaml:"listen"`     // e.g. ":443"
-	Domain    string `yaml:"domain"`     // public domain for Telegram WebApp URL
-	ACMEEmail string `yaml:"acme_email"` // optional email for Let's Encrypt
+	MiniApp      bool    `yaml:"miniapp"`       // enable Telegram Mini App web panel
 }
 
 type DatabaseConfig struct {
@@ -269,14 +268,6 @@ func Load(path string) (*Config, error) {
 
 	if cfg.WireGuard.MTU == 0 {
 		cfg.WireGuard.MTU = 1420
-	}
-	if cfg.WireGuard.Mode == "" {
-		cfg.WireGuard.Mode = "wireguard"
-	}
-	switch cfg.WireGuard.Mode {
-	case "wireguard", "amneziawg":
-	default:
-		return nil, fmt.Errorf("wireguard.mode must be 'wireguard' or 'amneziawg', got %q", cfg.WireGuard.Mode)
 	}
 	if cfg.WireGuard.DNS == "" {
 		cfg.WireGuard.DNS = "1.1.1.1"
@@ -334,14 +325,6 @@ func Load(path string) (*Config, error) {
 	}
 
 	if cfg.MTProxy.Enabled {
-		if len(cfg.MTProxy.Listen) == 0 {
-			return nil, fmt.Errorf("mtproxy: at least one listen address is required")
-		}
-		for _, addr := range cfg.MTProxy.Listen {
-			if err := validateListenPort(addr); err != nil {
-				return nil, fmt.Errorf("mtproxy: %w", err)
-			}
-		}
 		if cfg.MTProxy.FakeTLS.MaxClockSkewSeconds == 0 {
 			cfg.MTProxy.FakeTLS.MaxClockSkewSeconds = 600
 		}
@@ -385,23 +368,22 @@ func Load(path string) (*Config, error) {
 		}
 	}
 
-	if cfg.MiniApp.Enabled {
-		if cfg.MiniApp.Listen == "" {
-			cfg.MiniApp.Listen = ":443"
-		}
-		if err := validateListenPort(cfg.MiniApp.Listen); err != nil {
-			return nil, fmt.Errorf("miniapp: %w", err)
-		}
-		if cfg.MiniApp.Domain == "" {
-			return nil, fmt.Errorf("miniapp: domain is required when enabled")
-		}
+	if cfg.Telegram.MiniApp {
 		if !cfg.Telegram.Enabled || cfg.Telegram.Token == "" {
-			return nil, fmt.Errorf("miniapp: requires telegram.enabled and telegram.token")
+			return nil, fmt.Errorf("telegram.miniapp: requires telegram.enabled and telegram.token")
 		}
 		if len(cfg.Telegram.AllowedUsers) == 0 {
-			return nil, fmt.Errorf("miniapp: requires telegram.allowed_users to restrict access")
+			return nil, fmt.Errorf("telegram.miniapp: requires telegram.allowed_users to restrict access")
 		}
 	}
+
+	if cfg.Frontend.Listen == "" {
+		cfg.Frontend.Listen = ":443"
+	}
+	if cfg.Frontend.Domain == "" && (cfg.Frontend.CertFile == "" || cfg.Frontend.KeyFile == "") {
+		return nil, fmt.Errorf("frontend: domain or cert_file+key_file required")
+	}
+	// static_dir is optional; when empty the frontend serves embedded defaults.
 
 	cfg.Peers = make(map[int]PeerConfig)
 
@@ -482,16 +464,25 @@ func validateListenPort(addr string) error {
 	return nil
 }
 
-func (c *WireGuardConfig) IsAmneziaWG() bool {
-	return c.Mode == "amneziawg"
-}
-
 func (c *WireGuardConfig) ParseAddress() (netip.Addr, int, error) {
 	prefix, err := netip.ParsePrefix(c.Address)
 	if err != nil {
 		return netip.Addr{}, 0, fmt.Errorf("parsing address: %w", err)
 	}
 	return prefix.Addr(), prefix.Bits(), nil
+}
+
+// ListenPort returns the port number from the frontend listen address.
+func (c *Config) ListenPort() int {
+	_, portStr, err := net.SplitHostPort(c.Frontend.Listen)
+	if err != nil {
+		return 443
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 443
+	}
+	return port
 }
 
 // ServerPublicIP returns the server's public IP address.
@@ -632,9 +623,9 @@ func (c *WireGuardConfig) ToUAPI(peers map[int]PeerConfig) (string, error) {
 		return "", fmt.Errorf("private key: %w", err)
 	}
 	fmt.Fprintf(&b, "private_key=%s\n", privHex)
-	fmt.Fprintf(&b, "listen_port=%d\n", c.ListenPort)
+	fmt.Fprintf(&b, "listen_port=0\n")
 
-	if c.IsAmneziaWG() && c.AmneziaWG != nil {
+	if c.AmneziaWG != nil {
 		awg := c.AmneziaWG
 		writeUAPIInt(&b, "jc", awg.Jc)
 		writeUAPIInt(&b, "jmin", awg.Jmin)
@@ -693,14 +684,11 @@ func ProxyLinks(cfg *Config, names map[string]string) []ProxyLink {
 		serverIP = "<SERVER_IP>"
 	}
 
-	if len(cfg.MTProxy.Listen) == 0 || len(cfg.MTProxy.Secrets) == 0 {
+	if len(cfg.MTProxy.Secrets) == 0 {
 		return nil
 	}
 
-	_, port, err := net.SplitHostPort(cfg.MTProxy.Listen[0])
-	if err != nil {
-		return nil
-	}
+	port := strconv.Itoa(cfg.ListenPort())
 
 	links := make([]ProxyLink, 0, len(cfg.MTProxy.Secrets))
 	for i, secret := range cfg.MTProxy.Secrets {
