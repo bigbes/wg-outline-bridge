@@ -582,9 +582,10 @@ func buildPeerConfText(cfg *config.Config, peer config.PeerConfig) string {
 	clientIP := strings.Split(peer.AllowedIPs, "/")[0]
 
 	serverIP := cfg.ServerPublicIP()
-	endpoint := fmt.Sprintf("<SERVER_IP>:%d", cfg.WireGuard.ListenPort)
+	listenPort := cfg.ListenPort()
+	endpoint := fmt.Sprintf("<SERVER_IP>:%d", listenPort)
 	if serverIP != "" {
-		endpoint = fmt.Sprintf("%s:%d", serverIP, cfg.WireGuard.ListenPort)
+		endpoint = fmt.Sprintf("%s:%d", serverIP, listenPort)
 	}
 
 	allowedIPs := "0.0.0.0/0"
@@ -609,7 +610,7 @@ func buildPeerConfText(cfg *config.Config, peer config.PeerConfig) string {
 	fmt.Fprintf(&b, "PrivateKey = %s\n", peer.PrivateKey)
 	fmt.Fprintf(&b, "Address = %s/24\n", clientIP)
 	fmt.Fprintf(&b, "DNS = %s\n", cfg.WireGuard.DNS)
-	if cfg.WireGuard.IsAmneziaWG() && cfg.WireGuard.AmneziaWG != nil {
+	if cfg.WireGuard.AmneziaWG != nil {
 		awg := cfg.WireGuard.AmneziaWG
 		if awg.Jc != 0 {
 			fmt.Fprintf(&b, "Jc = %d\n", awg.Jc)

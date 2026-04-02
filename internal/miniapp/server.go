@@ -2,17 +2,13 @@ package miniapp
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"slices"
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/bigbes/wireguard-outline-bridge/internal/geoip"
 	"github.com/bigbes/wireguard-outline-bridge/internal/observer"
@@ -29,21 +25,18 @@ const (
 
 // Server serves the Telegram Mini App web interface and JSON API.
 type Server struct {
-	provider        observer.StatusProvider
-	cfgProv         observer.ConfigProvider
-	manager         observer.Manager
-	geoMgr          *geoip.Manager
-	bot             *tgbot.Bot
-	store           *statsdb.Store
-	botToken        string
-	allowedUsers    []int64
-	listen          string
-	domain          string
-	acmeEmail       string
-	acmeDir         string
-	logger          *slog.Logger
-	botUsername string
-	botMu      sync.Mutex
+	provider     observer.StatusProvider
+	cfgProv      observer.ConfigProvider
+	manager      observer.Manager
+	geoMgr       *geoip.Manager
+	bot          *tgbot.Bot
+	store        *statsdb.Store
+	botToken     string
+	allowedUsers []int64
+	domain       string
+	logger       *slog.Logger
+	botUsername  string
+	botMu        sync.Mutex
 }
 
 // New creates a new Mini App server.
@@ -56,10 +49,7 @@ func New(
 	store *statsdb.Store,
 	botToken string,
 	allowedUsers []int64,
-	listen string,
 	domain string,
-	acmeEmail string,
-	acmeDir string,
 	logger *slog.Logger,
 ) *Server {
 	return &Server{
@@ -71,21 +61,14 @@ func New(
 		store:        store,
 		botToken:     botToken,
 		allowedUsers: allowedUsers,
-		listen:       listen,
 		domain:       domain,
-		acmeEmail:    acmeEmail,
-		acmeDir:      acmeDir,
 		logger:       logger,
 	}
 }
 
 // URL returns the public URL of the Mini App.
 func (s *Server) URL() string {
-	_, port, _ := strings.Cut(s.listen, ":")
-	if port == "" || port == "443" {
-		return fmt.Sprintf("https://%s/", s.domain)
-	}
-	return fmt.Sprintf("https://%s:%s/", s.domain, port)
+	return fmt.Sprintf("https://%s/app/", s.domain)
 }
 
 // getBotUsername returns the cached bot username, fetching it lazily on first call.
@@ -118,8 +101,9 @@ func (s *Server) inviteDeepLink(token string) string {
 	return fmt.Sprintf("https://t.me/%s?start=inv_%s", username, token)
 }
 
-// Run starts the HTTPS server with Let's Encrypt and blocks until ctx is cancelled.
-func (s *Server) Run(ctx context.Context) error {
+// Handler returns the HTTP handler (mux) for the Mini App.
+// The returned handler can be mounted on the frontend at /app/.
+func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// adminOnly wraps a handler to reject non-admin users.
@@ -185,68 +169,7 @@ func (s *Server) Run(ctx context.Context) error {
 	// Static files (SPA).
 	mux.HandleFunc("/", s.handleStatic)
 
-	m := &autocert.Manager{
-		Prompt:     autocert.AcceptTOS,
-		HostPolicy: autocert.HostWhitelist(s.domain),
-		Email:      s.acmeEmail,
-	}
-	if s.acmeDir != "" {
-		m.Cache = autocert.DirCache(s.acmeDir)
-	}
-
-	tlsCfg := m.TLSConfig()
-	tlsCfg.MinVersion = tls.VersionTLS12
-
-	srv := &http.Server{
-		Handler:      mux,
-		TLSConfig:    tlsCfg,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		BaseContext:  func(_ net.Listener) context.Context { return ctx },
-	}
-
-	ln, err := net.Listen("tcp", s.listen)
-	if err != nil {
-		return fmt.Errorf("miniapp: listen %s: %w", s.listen, err)
-	}
-	tlsLn := tls.NewListener(ln, tlsCfg)
-
-	// Start HTTP-01 challenge server on :80 if the main listener is not :80.
-	go func() {
-		httpSrv := &http.Server{
-			Handler:      m.HTTPHandler(nil),
-			ReadTimeout:  5 * time.Second,
-			WriteTimeout: 5 * time.Second,
-		}
-		httpLn, err := net.Listen("tcp", ":80")
-		if err != nil {
-			s.logger.Warn("miniapp: could not listen on :80 for ACME HTTP-01 challenge, using TLS-ALPN-01 only", "err", err)
-			return
-		}
-		s.logger.Info("miniapp: ACME HTTP-01 challenge server started", "listen", ":80")
-		go func() {
-			<-ctx.Done()
-			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			httpSrv.Shutdown(shutCtx)
-		}()
-		if err := httpSrv.Serve(httpLn); err != nil && err != http.ErrServerClosed {
-			s.logger.Warn("miniapp: ACME HTTP-01 server error", "err", err)
-		}
-	}()
-
-	go func() {
-		<-ctx.Done()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		srv.Shutdown(shutCtx)
-	}()
-
-	s.logger.Info("miniapp server started", "listen", s.listen, "domain", s.domain, "tls", true)
-	if err := srv.Serve(tlsLn); err != nil && err != http.ErrServerClosed {
-		return fmt.Errorf("miniapp: serve: %w", err)
-	}
-	return nil
+	return mux
 }
 
 // handlePeersRoute dispatches GET /api/peers/<name>/conf, PUT /api/peers/<name>, and DELETE /api/peers/<name>.
