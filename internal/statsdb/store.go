@@ -343,6 +343,7 @@ func (s *Store) migrateSchema() error {
 		{"routing_port_rules", "peers_json", `ALTER TABLE routing_port_rules ADD COLUMN peers_json TEXT NOT NULL DEFAULT '[]'`},
 		{"routing_protocol_rules", "peers_json", `ALTER TABLE routing_protocol_rules ADD COLUMN peers_json TEXT NOT NULL DEFAULT '[]'`},
 		{"daemon", "routing_enabled", `ALTER TABLE daemon ADD COLUMN routing_enabled INTEGER`},
+		{"daemon", "awg_config_json", `ALTER TABLE daemon ADD COLUMN awg_config_json TEXT`},
 	}
 	for _, m := range migrations {
 		var count int
@@ -652,6 +653,39 @@ func (s *Store) GetRoutingEnabled() (bool, bool) {
 		return false, false
 	}
 	return v.Int64 != 0, true
+}
+
+// SetAWGConfig persists the AmneziaWG configuration as JSON in the daemon row.
+func (s *Store) SetAWGConfig(cfg *config.AmneziaWGConfig) error {
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("statsdb: marshal awg config: %w", err)
+	}
+	_, err = s.db.Exec(
+		`INSERT INTO daemon (id, start_time_unix, awg_config_json) VALUES (1, 0, ?)
+		 ON CONFLICT(id) DO UPDATE SET awg_config_json = excluded.awg_config_json`,
+		string(data),
+	)
+	if err != nil {
+		return fmt.Errorf("statsdb: set awg_config_json: %w", err)
+	}
+	return nil
+}
+
+// GetAWGConfig returns the stored AmneziaWG configuration.
+// Returns (config, true) if stored, or (nil, false) if not set.
+func (s *Store) GetAWGConfig() (*config.AmneziaWGConfig, bool) {
+	var v sql.NullString
+	err := s.db.QueryRow(`SELECT awg_config_json FROM daemon WHERE id = 1`).Scan(&v)
+	if err != nil || !v.Valid || v.String == "" {
+		return nil, false
+	}
+	var cfg config.AmneziaWGConfig
+	if err := json.Unmarshal([]byte(v.String), &cfg); err != nil {
+		s.logger.Error("failed to unmarshal awg config from db", "err", err)
+		return nil, false
+	}
+	return &cfg, true
 }
 
 // IsSeeded returns true if the given table has been marked as seeded from config.

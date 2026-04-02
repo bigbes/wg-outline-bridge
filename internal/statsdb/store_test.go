@@ -322,6 +322,70 @@ func TestSecretCRUD(t *testing.T) {
 	}
 }
 
+func TestAWGConfigRoundTrip(t *testing.T) {
+	s := testStore(t)
+
+	// Initially not set.
+	_, ok := s.GetAWGConfig()
+	if ok {
+		t.Fatal("expected no AWG config initially")
+	}
+
+	cfg := &config.AmneziaWGConfig{
+		Jc:   5,
+		Jmin: 75,
+		Jmax: 750,
+		S1:   20,
+		S2:   25,
+		S3:   0,
+		S4:   0,
+		H1:   "1500000000",
+		H2:   "1600000000",
+		H3:   "1700000000",
+		H4:   "1800000000",
+		I1:   "<b 0xc700000001><rc 8><t><r 100>",
+		I2:   "",
+		I3:   "",
+		I4:   "",
+		I5:   "",
+	}
+
+	if err := s.SetAWGConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := s.GetAWGConfig()
+	if !ok {
+		t.Fatal("expected AWG config after set")
+	}
+
+	if got.Jc != cfg.Jc || got.Jmin != cfg.Jmin || got.Jmax != cfg.Jmax {
+		t.Errorf("junk params mismatch: got jc=%d jmin=%d jmax=%d", got.Jc, got.Jmin, got.Jmax)
+	}
+	if got.S1 != cfg.S1 || got.S2 != cfg.S2 {
+		t.Errorf("s params mismatch: got s1=%d s2=%d", got.S1, got.S2)
+	}
+	if got.H1 != cfg.H1 || got.H2 != cfg.H2 || got.H3 != cfg.H3 || got.H4 != cfg.H4 {
+		t.Errorf("h params mismatch")
+	}
+	if got.I1 != cfg.I1 {
+		t.Errorf("I1=%q, want %q", got.I1, cfg.I1)
+	}
+
+	// Overwrite with new config.
+	cfg2 := &config.AmneziaWGConfig{Jc: 99, I1: "updated"}
+	if err := s.SetAWGConfig(cfg2); err != nil {
+		t.Fatal(err)
+	}
+	got2, ok := s.GetAWGConfig()
+	if !ok {
+		t.Fatal("expected AWG config after overwrite")
+	}
+	if got2.Jc != 99 || got2.I1 != "updated" {
+		t.Errorf("overwrite failed: got jc=%d i1=%q", got2.Jc, got2.I1)
+	}
+}
+
 func TestImportPeers(t *testing.T) {
 	s := testStore(t)
 
